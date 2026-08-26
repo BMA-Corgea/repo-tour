@@ -32,3 +32,4 @@ Nothing is deleted; older knowledge is pointed at where it lies.
 | Anything pruned from CURRENT-WORK's recent-past window | this table's other rows, plus git history |
 | What has gone wrong before (and the rule each time taught) | [wiki/lessons.md](wiki/lessons.md) | Value-bearing lessons page; grown by retros, read by planners |
 | The pre-flight discipline for risky changes | [wiki/hardening-checklist.md](wiki/hardening-checklist.md) | Hardening checklist; consulted before touching load-bearing paths |
+- [ideas](wiki/ideas.md) — things considered but not built, with the reasoning kept.
