@@ -73,6 +73,12 @@ export interface SymbolRecord {
   endLine: number;
   /** part of the module's public surface (explicit `export`, or non-underscore at Python top level) */
   exported: boolean;
+  /**
+   * The author's own explanation, if they left one: a Python docstring, or the comment
+   * block immediately above a JS/TS declaration. This is the only source of "why" that
+   * costs no tokens, so it is read wherever it exists.
+   */
+  doc: string | null;
 }
 
 export interface ImportRecord {

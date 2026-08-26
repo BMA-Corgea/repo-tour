@@ -11,6 +11,11 @@ will be overwritten.
 - Exports: (none)
 - Imports: (none)
 
+## src/codetour.ts
+
+- Exports: buildCodeTour
+- Imports: (none)
+
 ## src/digest.ts
 
 - Exports: CACHE_DIR, SCHEMA_VERSION, digest
@@ -34,6 +39,11 @@ will be overwritten.
 ## src/rank.ts
 
 - Exports: MULTIPLIER, WEIGHTS, churnByFile, rank
+- Imports: (none)
+
+## src/repoview.ts
+
+- Exports: renderRepoView
 - Imports: (none)
 
 ## src/rollup.ts

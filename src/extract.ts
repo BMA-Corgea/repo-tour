@@ -67,6 +67,55 @@ function endLineOf(node: SyntaxNode): number {
   return node.endPosition.row + 1;
 }
 
+const QUOTE_RUN = /^("""|'''|"|')|("""|'''|"|')$/g;
+const DOC_LEAD = /^\s*(\*|\/\/+|#+)\s?/;
+const SECTION_HEAD = /^(@param|@returns?|@throws|@example|Args:|Returns:|Raises:|Yields:|:param|:return)/i;
+
+/** Trim a raw docstring / comment down to its first paragraph of real prose. */
+function cleanDoc(raw: string): string | null {
+  let s = raw.trim();
+  s = s.replace(/^(\/\*\*?|\/\/+|#+)/, '').replace(/\*\/$/, '');
+  s = s.replace(QUOTE_RUN, '');
+  const lines = s.split(/\r?\n/).map((l) => l.replace(DOC_LEAD, '').trim());
+  const out: string[] = [];
+  for (const l of lines) {
+    if (l === '' && out.length) break; // first paragraph only
+    if (l === '') continue;
+    if (SECTION_HEAD.test(l)) break;
+    out.push(l);
+  }
+  const text = out.join(' ').replace(/\s+/g, ' ').trim();
+  if (text.length < 3) return null;
+  return text.length > 400 ? `${text.slice(0, 397)}…` : text;
+}
+
+/** Python: the first string literal in a definition's body is its docstring. */
+function pythonDoc(node: SyntaxNode): string | null {
+  const body = node.childForFieldName('body');
+  if (!body) return null;
+  const first = body.children.find((c) => c && c.type !== 'comment');
+  if (!first || first.type !== 'expression_statement') return null;
+  const str = first.children.find((c) => c?.type === 'string');
+  return str ? cleanDoc(str.text) : null;
+}
+
+/** JS/TS: the comment block immediately above the declaration (or above its `export`). */
+function jsDoc(node: SyntaxNode): string | null {
+  let probe: SyntaxNode = node;
+  if (probe.parent && probe.parent.type === 'export_statement') probe = probe.parent;
+  let prev = probe.previousSibling;
+  while (prev && prev.type !== 'comment' && prev.text.trim() === '') prev = prev.previousSibling;
+  if (!prev || prev.type !== 'comment') return null;
+  // gather a run of consecutive `//` lines above it
+  const parts = [prev.text];
+  let up = prev.previousSibling;
+  while (up && up.type === 'comment' && up.text.startsWith('//')) {
+    parts.unshift(up.text);
+    up = up.previousSibling;
+  }
+  return cleanDoc(parts.join('\n'));
+}
+
 function countErrors(node: SyntaxNode): number {
   let n = 0;
   const stack: SyntaxNode[] = [node];
@@ -91,7 +140,8 @@ function pythonSymbols(root: SyntaxNode): SymbolRecord[] {
     if (!nameNode) return;
     const name = nameNode.text;
     out.push({
-      name, kind, line: lineOf(n), endLine: endLineOf(n), exported: !name.startsWith('_'),
+      name, kind, line: lineOf(n), endLine: endLineOf(n),
+      exported: !name.startsWith('_'), doc: pythonDoc(n),
     });
   };
 
@@ -121,6 +171,7 @@ function pythonSymbols(root: SyntaxNode): SymbolRecord[] {
           line: lineOf(node),
           endLine: endLineOf(node),
           exported: !target.text.startsWith('_'),
+          doc: null,
         });
       }
     }
@@ -181,7 +232,10 @@ function jsSymbols(root: SyntaxNode): SymbolRecord[] {
     if (kind) {
       const nameNode = node.childForFieldName('name');
       if (nameNode) {
-        out.push({ name: nameNode.text, kind, line: lineOf(node), endLine: endLineOf(node), exported });
+        out.push({
+          name: nameNode.text, kind, line: lineOf(node), endLine: endLineOf(node),
+          exported, doc: jsDoc(node),
+        });
       }
       if (kind === 'class') {
         const body = node.childForFieldName('body');
@@ -197,6 +251,7 @@ function jsSymbols(root: SyntaxNode): SymbolRecord[] {
               line: lineOf(member),
               endLine: endLineOf(member),
               exported: exported && !isPrivate,
+              doc: jsDoc(member),
             });
           }
         }
@@ -221,6 +276,7 @@ function jsSymbols(root: SyntaxNode): SymbolRecord[] {
           line: lineOf(node),
           endLine: endLineOf(node),
           exported,
+          doc: jsDoc(node),
         });
       }
     }

@@ -13,6 +13,8 @@ import path from 'node:path';
 import { digest, CACHE_DIR } from './digest.js';
 import { renderView } from './view.js';
 import { buildTourSteps } from './tour.js';
+import { buildCodeTour } from './codetour.js';
+import { renderRepoView } from './repoview.js';
 import type { RankedFile } from './types.js';
 
 interface Args {
@@ -69,17 +71,21 @@ function printRanked(ranked: RankedFile[], top: number): void {
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
-  if (args.command !== 'digest' && args.command !== 'tour') {
+  if (args.command !== 'digest' && args.command !== 'tour' && args.command !== 'inspect') {
     console.log('usage: repo-tour digest <path> [--top N] [--view FILE] [--max-rows N] [--no-write] [--json]');
-    console.log('       repo-tour tour <path> [--view FILE] [--max-rows N] [--no-write]');
+    console.log('       repo-tour tour <path> [--view FILE] [--no-write]        the repo page + a tour of the code');
+    console.log('       repo-tour inspect <path> [--view FILE] [--top N]        the digest quality view (scores, signals)');
     process.exit(args.command === 'help' ? 0 : 1);
   }
 
   const result = await digest(args.target, { write: args.write });
   const m = result.manifest;
+  const quiet = args.command === 'tour';
 
   // `tour` is `digest` plus a projection of it — never a separate artifact.
-  const steps = args.command === 'tour' ? buildTourSteps(result) : undefined;
+  const isTour = args.command === 'tour';
+  const codeTour = isTour ? buildCodeTour(result) : null;
+  const steps = args.command === 'inspect' ? buildTourSteps(result) : undefined;
 
   if (args.json) {
     console.log(JSON.stringify(m, null, 2));
@@ -141,10 +147,19 @@ async function main(): Promise<void> {
       : null;
   if (viewPath) {
     fs.mkdirSync(path.dirname(viewPath), { recursive: true });
-    fs.writeFileSync(viewPath, renderView(result, { maxRows: args.maxRows, tour: steps }));
+    fs.writeFileSync(
+      viewPath,
+      codeTour
+        ? renderRepoView(result, { steps: codeTour.steps, itinerary: codeTour.itinerary })
+        : renderView(result, { maxRows: args.maxRows, tour: steps }),
+    );
     const kb = Math.round(fs.statSync(viewPath).size / 1024);
     console.log(`\n  view               ${viewPath}  (${kb} KB, self-contained)`);
-    if (steps) console.log(`  tour               ${steps.length} steps, generated from the digest`);
+    if (codeTour) {
+      console.log(`  tour               ${codeTour.steps.length} stops through ${codeTour.itinerary.length} files:`);
+      for (const f of codeTour.itinerary) console.log(`                       ${f}`);
+    }
+    if (steps) console.log(`  overlay            ${steps.length} steps over the metrics view`);
   }
   console.log('');
 }

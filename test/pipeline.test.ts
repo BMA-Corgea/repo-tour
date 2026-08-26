@@ -19,6 +19,8 @@ import { renderView } from '../src/view.js';
 import { rollup } from '../src/rollup.js';
 import { planIncremental } from '../src/incremental.js';
 import { buildTourSteps } from '../src/tour.js';
+import { buildCodeTour } from '../src/codetour.js';
+import { renderRepoView } from '../src/repoview.js';
 
 let root: string;
 
@@ -69,6 +71,10 @@ beforeAll(() => {
       '',
       '',
       'def run(job):',
+      '    """Send a job through the shouter.',
+      '',
+      '    Args: job — the thing to shout.',
+      '    """',
       '    return shout(job)',
       '',
       '',
@@ -217,12 +223,15 @@ describe('criterion 4 — extraction is exact', () => {
 
     expect(core.parseErrors).toBe(0);
     expect(core.symbols).toEqual([
-      { name: 'MAX_RETRIES', kind: 'variable', line: 4, endLine: 4, exported: true },
-      { name: 'run', kind: 'function', line: 8, endLine: 9, exported: true },
-      { name: '_internal', kind: 'function', line: 12, endLine: 13, exported: false },
-      { name: 'Engine', kind: 'class', line: 16, endLine: 21, exported: true },
-      { name: 'start', kind: 'method', line: 17, endLine: 18, exported: true },
-      { name: '_stop', kind: 'method', line: 20, endLine: 21, exported: false },
+      { name: 'MAX_RETRIES', kind: 'variable', line: 4, endLine: 4, exported: true, doc: null },
+      // The docstring is read, and the `Args:` section is cut — a tour wants the sentence,
+      // not the parameter table.
+      { name: 'run', kind: 'function', line: 8, endLine: 13, exported: true,
+        doc: 'Send a job through the shouter.' },
+      { name: '_internal', kind: 'function', line: 16, endLine: 17, exported: false, doc: null },
+      { name: 'Engine', kind: 'class', line: 20, endLine: 25, exported: true, doc: null },
+      { name: 'start', kind: 'method', line: 21, endLine: 22, exported: true, doc: null },
+      { name: '_stop', kind: 'method', line: 24, endLine: 25, exported: false, doc: null },
     ]);
 
     expect(core.imports.map((i) => [i.raw, i.resolved])).toEqual([
@@ -238,14 +247,14 @@ describe('criterion 4 — extraction is exact', () => {
 
     expect(app.parseErrors).toBe(0);
     expect(app.symbols).toEqual([
-      { name: 'Options', kind: 'interface', line: 4, endLine: 4, exported: true },
-      { name: 'Name', kind: 'type', line: 5, endLine: 5, exported: true },
-      { name: 'greet', kind: 'function', line: 7, endLine: 9, exported: true },
-      { name: 'VERSION', kind: 'variable', line: 11, endLine: 11, exported: true },
-      { name: 'Server', kind: 'class', line: 13, endLine: 16, exported: true },
-      { name: 'listen', kind: 'method', line: 14, endLine: 14, exported: true },
-      { name: '_private', kind: 'method', line: 15, endLine: 15, exported: false },
-      { name: 'notExported', kind: 'function', line: 18, endLine: 18, exported: false },
+      { name: 'Options', kind: 'interface', line: 4, endLine: 4, exported: true, doc: null },
+      { name: 'Name', kind: 'type', line: 5, endLine: 5, exported: true, doc: null },
+      { name: 'greet', kind: 'function', line: 7, endLine: 9, exported: true, doc: null },
+      { name: 'VERSION', kind: 'variable', line: 11, endLine: 11, exported: true, doc: null },
+      { name: 'Server', kind: 'class', line: 13, endLine: 16, exported: true, doc: null },
+      { name: 'listen', kind: 'method', line: 14, endLine: 14, exported: true, doc: null },
+      { name: '_private', kind: 'method', line: 15, endLine: 15, exported: false, doc: null },
+      { name: 'notExported', kind: 'function', line: 18, endLine: 18, exported: false, doc: null },
     ]);
 
     // `./util.js` on the wire is `./util.ts` on disk; `express` leaves the tree.
@@ -534,5 +543,79 @@ describe('the tour is a projection of the digest, not a separate artifact', () =
     expect(html).toMatch(/Tour\.start/);
     expect((html.match(/(?:https?:)?\/\/[a-zA-Z0-9.-]+/g) ?? [])).toEqual([]);
     expect(html).not.toMatch(/<script[^>]+src=/i);
+  });
+});
+
+describe('the tour walks CODE, not metrics', () => {
+  it('anchors every step to a real file and a real line range', async () => {
+    const r = await digest(root, { write: false });
+    const plan = buildCodeTour(r);
+
+    expect(plan.steps.length).toBeGreaterThan(2);
+    const byPath = new Map(r.inventory.files.map((f) => [f.path, f] as const));
+
+    for (const s of plan.steps) {
+      const f = byPath.get(s.file);
+      expect(f, `step points at a file that is not in the tree: ${s.file}`).toBeDefined();
+      expect(s.startLine).toBeGreaterThanOrEqual(1);
+      expect(s.endLine).toBeGreaterThanOrEqual(s.startLine);
+      // never point past the end of the file
+      expect(s.endLine).toBeLessThanOrEqual(f!.loc + 1);
+      expect(plan.itinerary).toContain(s.file);
+    }
+  });
+
+  it('quotes the author when the author left a docstring', async () => {
+    // Its own tree: the shared fixture is mutated by the incremental tests above, and a
+    // test that depends on their leftovers is a test that fails for the wrong reason.
+    const own = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-doc-'));
+    try {
+      initRepo(own);
+      write(
+        path.join(own, 'pipeline.py'),
+        [
+          'def run(job):',
+          '    """Send a job through the shouter.',
+          '',
+          '    Args: job — ignored here.',
+          '    """',
+          '    return job',
+          '',
+        ].join('\n'),
+      );
+      commitAll(own, 'add pipeline');
+
+      const r = await digest(own, { write: false });
+      const plan = buildCodeTour(r);
+      const quoted = plan.steps.filter((s) => s.text.includes('The author says'));
+
+      expect(quoted.length).toBeGreaterThan(0);
+      // the sentence is kept, the Args: section is cut
+      expect(quoted[0]!.text).toContain('Send a job through the shouter.');
+      expect(quoted[0]!.text).not.toContain('Args:');
+    } finally {
+      fs.rmSync(own, { recursive: true, force: true });
+    }
+  });
+
+  it('says out loud that it cannot yet explain WHY', async () => {
+    const r = await digest(root, { write: false });
+    const plan = buildCodeTour(r);
+    const last = plan.steps[plan.steps.length - 1]!;
+    expect(last.text).toMatch(/not yet WHY|interpret stage/);
+  });
+
+  it('renders a self-contained repo page with the code actually in it', async () => {
+    const r = await digest(root, { write: false });
+    const plan = buildCodeTour(r);
+    const html = renderRepoView(r, { steps: plan.steps, itinerary: plan.itinerary });
+
+    // the real source text is embedded, not just its metrics
+    expect(html).toContain('def run(job)');
+    expect(html).toMatch(/window\.__STEPS__/);
+    expect((html.match(/(?:https?:)?\/\/[a-zA-Z0-9.-]+/g) ?? [])).toEqual([]);
+    expect(html).not.toMatch(/<script[^>]+src=/i);
+    // and the scoring rubric is NOT on the screen
+    expect(html).not.toMatch(/in-degree|churn 0\.45/);
   });
 });
