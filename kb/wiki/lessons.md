@@ -34,6 +34,32 @@ where the eye already is. Silent refusal reads as a dead button.**
 
 ---
 
+## Two safe features combined into a reload loop (T-4, 2026-08-26)
+
+Evan: **"when I click on a chapter to read through it pops me back to the beginning of the
+tour"** — and he guessed it was another build interfering. It was not. Nothing he did caused
+it, and nothing about chapters was wrong.
+
+Two changes made an hour apart, each correct alone:
+
+1. Live reload: the server's boot id is stamped into the page, which polls `/api/version`
+   and reloads when it differs — so an update lands without a restart.
+2. Persistence: rendered pages are cached to disk, so a build survives a restart.
+
+Together: a page built by one server run gets served by a LATER run, carrying the earlier
+run's boot id. The first poll disagrees, the page reloads, gets served from the same cache
+with the same stale id, and reloads again — **every two seconds, forever.** Clicks looked
+like they threw you back to stop 1 because the page really was restarting underneath.
+
+The fix is to read the baseline at LOAD rather than bake it in, which makes the page
+self-calibrating: it compares against the server it is actually talking to, cached or not.
+
+**The general shape: an identity baked into a cached artifact is a lie the moment the
+artifact outlives the thing it identifies.** Neither feature could show this in isolation,
+and neither test covered the pair. What found it was counting page loads while clicking.
+
+---
+
 ## "Not built yet" is a claim about the user's work, so it had better be true (T-4, 2026-08-26)
 
 Evan: **"it's showing as not built yet"** — for both repositories, right after they had been

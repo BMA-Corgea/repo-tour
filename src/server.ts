@@ -305,7 +305,7 @@ export class RepoTourServer {
     onLine('rendering…');
     const html = renderRepoView(result, {
       steps, itinerary: plan.itinerary, architecture: arch.subsystems.length > 1 ? arch : undefined,
-      servedBy: { homeUrl: '/', bootId: this.bootId },
+      servedBy: { homeUrl: '/' },
     });
 
     const rendered: Rendered = {

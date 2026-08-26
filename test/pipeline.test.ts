@@ -876,11 +876,16 @@ describe('a page the app served knows where it came from', () => {
     // Served by the app, both belong.
     const served = renderRepoView(r, {
       steps: plan.steps, itinerary: plan.itinerary,
-      servedBy: { homeUrl: '/', bootId: 'boot-xyz' },
+      servedBy: { homeUrl: '/' },
     });
     expect(served).toContain('All repositories');
     expect(served).toMatch(/api\/version/);
-    expect(served).toContain('boot-xyz');
+
+    // The baseline must be read at load, never baked in. Rendered pages are cached to disk,
+    // so a page built by one server run gets served by a later one — a baked-in id is stale
+    // immediately, disagrees on the first poll, and reloads the page every two seconds.
+    expect(served).toMatch(/mine === null/);
+    expect(served).not.toMatch(/var mine = "/);
   });
 
   it('reads the stylesheet per render, so editing a skin needs no restart', async () => {

@@ -31,7 +31,7 @@ export interface RepoViewOptions {
    * Two things follow: there is somewhere to go BACK to, and the page can notice when the
    * server it came from has restarted — which is what a static export can never do.
    */
-  servedBy?: { homeUrl: string; bootId: string };
+  servedBy?: { homeUrl: string };
 }
 
 interface EmbeddedFile {
@@ -50,26 +50,36 @@ function embedJson(value: unknown): string {
 }
 
 /**
- * Reload when the server that served this page has restarted.
+ * Reload when the server that served this page restarts WHILE IT IS OPEN.
  *
- * The app runs the tour renderer in-process, so a change to repo-tour's own code only
- * reaches you when the server restarts — and until now that meant you also had to know to
- * restart it, and then to refresh. The server restarts itself on a source change; this
- * notices the new boot id and reloads, so an update arrives without being asked for.
+ * The baseline is fetched on load rather than baked in at render time, and that is not a
+ * detail. Rendered pages are cached to disk, so a page built by one server run is later
+ * served by another — a baked-in id is stale the moment that happens, the very first poll
+ * disagrees, and the page reloads in a two-second loop. Every click then looks like it
+ * throws you back to the start of the tour, because the page really is restarting under you.
  *
- * It fails silently and often: while the server is down mid-restart every request errors.
- * That is expected, so a failed poll simply tries again rather than reporting anything.
+ * Reading the baseline at load makes the page self-calibrating: it compares against the
+ * server it is actually talking to, cached or not.
+ *
+ * The poll fails silently and often — while the server is down mid-restart every request
+ * errors — so a failure simply tries again.
  */
-function liveReloadScript(bootId: string): string {
+function liveReloadScript(): string {
   return `
 (function () {
-  var mine = ${JSON.stringify(bootId)};
-  setInterval(function () {
+  var mine = null;
+  function poll() {
     fetch('/api/version', { cache: 'no-store' })
       .then(function (r) { return r.json(); })
-      .then(function (v) { if (v.bootId && v.bootId !== mine) location.reload(); })
-      .catch(function () { /* the server is restarting; try again next tick */ });
-  }, 2000);
+      .then(function (v) {
+        if (!v || !v.bootId) return;
+        if (mine === null) { mine = v.bootId; return; }  // first answer sets the baseline
+        if (v.bootId !== mine) location.reload();
+      })
+      .catch(function () { /* restarting; try again next tick */ });
+  }
+  poll();
+  setInterval(poll, 2000);
 })();
 `;
 }
@@ -830,7 +840,7 @@ export function renderRepoView(result: DigestResult, opts: RepoViewOptions): str
 <style>${baseCss()}</style>
 <style>${alternateCss()}</style>
 <script>${skinScript()}</script>
-${opts.servedBy ? `<script>${liveReloadScript(opts.servedBy.bootId)}</script>` : ''}
+${opts.servedBy ? `<script>${liveReloadScript()}</script>` : ''}
 </head>
 <body>
 
