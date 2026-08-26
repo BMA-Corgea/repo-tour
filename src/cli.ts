@@ -10,6 +10,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { digest, CACHE_DIR } from './digest.js';
 import { renderView } from './view.js';
 import { buildTourSteps } from './tour.js';
@@ -142,7 +143,7 @@ async function main(): Promise<void> {
     // library: regenerate the index over every known tour and print its path
     const heads: Record<string, string | null> = {};
     for (const t of tours) heads[t.repoPath] = headOf(t.repoPath);
-    const libPath = path.join(path.dirname(new URL(import.meta.url).pathname), '..', '.cache', 'library.html');
+    const libPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.cache', 'library.html');
     fs.mkdirSync(path.dirname(libPath), { recursive: true });
     fs.writeFileSync(libPath, renderLibrary(tours, heads, Date.now()));
     console.log(libPath);
@@ -348,7 +349,7 @@ async function main(): Promise<void> {
       const all = listTours();
       const heads: Record<string, string | null> = {};
       for (const t of all) heads[t.repoPath] = headOf(t.repoPath);
-      const libPath = path.join(path.dirname(new URL(import.meta.url).pathname), '..', '.cache', 'library.html');
+      const libPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.cache', 'library.html');
       fs.mkdirSync(path.dirname(libPath), { recursive: true });
       fs.writeFileSync(libPath, renderLibrary(all, heads, Date.now()));
 

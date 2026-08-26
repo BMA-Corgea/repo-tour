@@ -842,3 +842,21 @@ describe('the tour can be started from where the reader is looking', () => {
     expect(html).toContain('class="buildstamp"');
   });
 });
+
+describe('paths with spaces in them', () => {
+  it('resolves module-relative paths without percent-encoding', async () => {
+    // `new URL(import.meta.url).pathname` leaves a space as %20, so on a machine where the
+    // project lives under "Coding Projects" every module-relative path pointed at a
+    // directory literally named "Coding%20Projects" — which fs then CREATED on the Desktop
+    // and quietly wrote the interpretation cache, the tour registry and the loaded-repo
+    // list into. Nothing failed loudly; it just went to the wrong place.
+    const { baseCss } = await import('../src/skins.js');
+    const { registryPath } = await import('../src/library.js');
+    const { defaultCacheDir } = await import('../src/interpret.js');
+
+    expect(baseCss().length).toBeGreaterThan(100);
+    for (const p of [registryPath(), defaultCacheDir()]) {
+      expect(p, `${p} is percent-encoded`).not.toMatch(/%[0-9A-Fa-f]{2}/);
+    }
+  });
+});

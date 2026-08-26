@@ -23,6 +23,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { CodeStep } from './codetour.js';
 import type { FileExtract, FileRecord } from './types.js';
 
@@ -198,7 +199,7 @@ export interface InterpretOptions {
 
 /** Where paid answers live. Content-keyed, so it is shared across every repo scanned. */
 export function defaultCacheDir(): string {
-  return path.join(path.dirname(new URL(import.meta.url).pathname), '..', '.cache', 'interpret');
+  return path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.cache', 'interpret');
 }
 
 export async function interpretStops(

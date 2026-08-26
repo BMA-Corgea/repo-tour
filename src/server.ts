@@ -23,12 +23,14 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { digest, CACHE_DIR } from './digest.js';
 import { buildCodeTour, buildArchitectureSteps } from './codetour.js';
 import { buildArchitecture, architectureBrief } from './architecture.js';
 import { interpretStops, applyMeanings, interpretArchitecture, DEFAULT_MODEL } from './interpret.js';
 import { renderRepoView } from './repoview.js';
+import { baseCss, alternateCss, skinPicker, skinScript } from './skins.js';
 
 export interface LoadedRepo {
   path: string;
@@ -120,7 +122,7 @@ export class RepoTourServer {
 
   constructor(private opts: ServerOptions = {}) {
     this.statePath = opts.statePath
-      ?? path.join(path.dirname(new URL(import.meta.url).pathname), '..', '.cache', 'loaded.json');
+      ?? path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.cache', 'loaded.json');
     this.model = opts.model ?? DEFAULT_MODEL;
     this.interpret = opts.interpret !== false;
     this.load();
@@ -347,20 +349,26 @@ export class RepoTourServer {
 
 // ---------------------------------------------------------------- pages
 
+/**
+ * The app's pages ride the SAME skin files as a generated tour — one contract, not two.
+ * base.css carries the tokens and the control layer; the rules below are only the shapes
+ * these three pages need on top of it.
+ */
 const SHELL_STYLE = `
-:root{--bg:#fff;--canvas:#f6f8fa;--ink:#1f2328;--muted:#59636e;--line:#d1d9e0;--accent:#0969da;--chip:#eaeef2;--ok:#1a7f37;--warn:#9a6700}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0d1117;--canvas:#010409;--ink:#e6edf3;--muted:#9198a1;--line:#3d444d;--accent:#4493f8;--chip:#212830;--ok:#3fb950;--warn:#e0b25f}}
-:root[data-theme="dark"]{--bg:#0d1117;--canvas:#010409;--ink:#e6edf3;--muted:#9198a1;--line:#3d444d;--accent:#4493f8;--chip:#212830;--ok:#3fb950;--warn:#e0b25f}
+${baseCss()}
+${alternateCss()}
+:root{--ok:#1a7f37}
+@media (prefers-color-scheme:dark){:root:not([data-theme]){--ok:#3fb950}}
+:root[data-theme="dark"]{--ok:#3fb950}
+:root[data-theme="gunmetal"]{--ok:#5fd39a}
+:root[data-theme="titanium"]{--ok:#1f6b45}
 *{box-sizing:border-box}
 body{margin:0;background:var(--canvas);color:var(--ink);font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Noto Sans,Helvetica,Arial,sans-serif}
 .wrap{max-width:900px;margin:0 auto;padding:44px 20px 80px}
 h1{font-size:22px;margin:0 0 4px;letter-spacing:-.01em}
 .sub{color:var(--muted);font-size:13px;margin-bottom:26px}
 .addbar{display:flex;gap:8px;margin-bottom:26px;flex-wrap:wrap}
-input[type=text]{flex:1;min-width:280px;font:inherit;font-size:13px;padding:8px 11px;border-radius:7px;border:1px solid var(--line);background:var(--bg);color:var(--ink)}
-.btn{font:inherit;font-size:13px;font-weight:500;padding:7px 15px;border-radius:7px;cursor:pointer;border:1px solid var(--line);background:var(--chip);color:var(--ink)}
-.btn.primary{background:#1f883d;border-color:#1f883d;color:#fff}
-.btn:hover{filter:brightness(1.06)}
+input[type=text]{flex:1;min-width:280px}
 .card{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin-bottom:10px}
 .card .top{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .card .nm{font-size:15px;font-weight:600}
@@ -376,14 +384,40 @@ input[type=text]{flex:1;min-width:280px;font:inherit;font-size:13px;padding:8px 
 code{background:var(--chip);padding:1px 6px;border-radius:4px;font-size:12px}
 footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--line);color:var(--muted);font-size:12px;line-height:1.7}
 a{color:var(--accent)}
+.nav{
+  position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:12px;
+  padding:10px 20px;background:var(--bg);border-bottom:1px solid var(--line)
+}
+.navhome{font-weight:600;text-decoration:none;font-size:14px}
+.nav .btn{text-decoration:none}
+.buildwrap{max-width:760px;margin:0 auto;padding:40px 20px}
+.elapsed{color:var(--muted);font-size:12px;margin-top:8px}
+.spin{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--accent);margin-right:8px;animation:pulse 1.2s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:.25}50%{opacity:1}}
 `;
+
+/**
+ * The same bar on every page the server renders.
+ *
+ * A build can take minutes. Leaving the progress page has to be a visible, obvious action
+ * at the TOP of the screen — not a link in a footer below the fold — because the whole
+ * point is that you are not trapped waiting for it.
+ */
+function navBar(here: 'home' | 'building'): string {
+  return `<div class="nav">
+  <a class="navhome" href="/">repo-tour</a>
+  ${here === 'building' ? '<a class="btn" href="/">\u2190 All repositories</a>' : ''}
+  <span style="flex:1"></span>
+  ${skinPicker()}
+</div>`;
+}
 
 function renderHome(): string {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>repo-tour</title><style>${SHELL_STYLE}</style></head>
-<body><div class="wrap">
+<title>repo-tour</title><style>${SHELL_STYLE}</style><script>${skinScript()}</script></head>
+<body>${navBar('home')}<div class="wrap">
 <h1>repo-tour</h1>
 <div class="sub">Load a repository and it stays loaded. Open its tour and refresh whenever you like — the page re-reads the repo, so what you see is the code as it is now.</div>
 
@@ -413,7 +447,8 @@ function card(r){
     '<div class="top"><span class="nm">' + esc(r.name) + '</span>' + state + meta + '</div>' +
     '<div class="pth">' + esc(r.path) + '</div>' +
     '<div class="row">' +
-      '<a class="btn primary" href="/r?path=' + encodeURIComponent(r.path) + '">Open tour</a>' +
+      '<a class="btn primary" href="/r?path=' + encodeURIComponent(r.path) + '">' +
+        (r.running ? 'Watch it build' : 'Open tour') + '</a>' +
       '<button class="btn" data-act="rebuild">Rebuild</button>' +
       '<span class="spacer"></span>' +
       '<button class="btn" data-act="remove">Remove</button>' +
@@ -474,24 +509,62 @@ setInterval(refresh, 4000);
 }
 
 function building(repoPath: string, lines: string[]): string {
+  const esc = (s: string): string => s.replace(/</g, '&lt;').replace(/"/g, '&quot;');
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>building — repo-tour</title><style>${SHELL_STYLE}</style>
-<script>setTimeout(function(){ location.reload(); }, 2500);</script></head>
-<body><div class="wrap">
-<h1>Reading ${path.basename(repoPath)}</h1>
-<div class="sub">This is not fast, and is not meant to be. The page will come back on its own.</div>
-<div class="log" id="log">${lines.map((l) => l.replace(/</g, '&lt;')).join('\n')}</div>
-<footer><a href="/">← all repositories</a></footer>
-</div></body></html>`;
+<title>building ${esc(path.basename(repoPath))} — repo-tour</title><style>${SHELL_STYLE}</style><script>${skinScript()}</script></head>
+<body>${navBar('building')}<div class="buildwrap">
+<h1><span class="spin"></span>Reading ${esc(path.basename(repoPath))}</h1>
+<div class="sub">
+  This is not fast, and is not meant to be. <b>You can leave this page</b> — the build keeps
+  running on the server, and it will be waiting whenever you come back. Closing the tab is
+  fine too.
+</div>
+<div class="log" id="log">${lines.map(esc).join('\n')}</div>
+<div class="elapsed" id="elapsed"></div>
+<footer>
+  <a href="/">← All repositories</a> — the list there shows progress for every repo that is building.
+</footer>
+</div>
+<script>
+// Poll rather than reload. A hard reload every couple of seconds can fire mid-click and
+// throw away a navigation the reader just started — the exact opposite of being free to
+// leave. This updates in place, and only navigates once the build is actually done.
+var path = ${JSON.stringify(repoPath)};
+var started = Date.now();
+var log = document.getElementById('log');
+var elapsed = document.getElementById('elapsed');
+
+setInterval(function () {
+  var s = Math.round((Date.now() - started) / 1000);
+  elapsed.textContent = s < 60 ? s + 's so far' : Math.floor(s / 60) + 'm ' + (s % 60) + 's so far';
+}, 1000);
+
+function tick() {
+  fetch('/api/job?path=' + encodeURIComponent(path), { cache: 'no-store' })
+    .then(function (r) { return r.json(); })
+    .then(function (j) {
+      if (j.lines && j.lines.length) log.textContent = j.lines.join('\\n');
+      if (j.state === 'done') { location.replace('/r?path=' + encodeURIComponent(path)); return; }
+      if (j.state === 'failed') {
+        log.textContent = (j.lines || []).join('\\n') + '\\n\\nThat build failed. Go back and try Rebuild.';
+        return;
+      }
+      setTimeout(tick, 1200);
+    })
+    .catch(function () { setTimeout(tick, 2500); });
+}
+tick();
+</script>
+</body></html>`;
 }
 
 function notFound(repoPath: string): string {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>not loaded — repo-tour</title>
-<style>${SHELL_STYLE}</style></head>
-<body><div class="wrap">
+<style>${SHELL_STYLE}</style><script>${skinScript()}</script></head>
+<body>${navBar('building')}<div class="wrap">
 <h1>That repository is not loaded</h1>
 <div class="sub"><code>${repoPath.replace(/</g, '&lt;')}</code> is not in the list.</div>
 <footer><a href="/">← load it from the home page</a></footer>

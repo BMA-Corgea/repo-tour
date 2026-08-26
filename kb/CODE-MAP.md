@@ -71,6 +71,11 @@ will be overwritten.
 - Exports: RepoTourServer, fingerprint
 - Imports: (none)
 
+## src/skins.ts
+
+- Exports: DEFAULT_SKIN, SKINS, alternateCss, baseCss, skinPicker, skinScript
+- Imports: (none)
+
 ## src/tour.ts
 
 - Exports: buildTourSteps

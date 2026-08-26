@@ -13,6 +13,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { CACHE_DIR } from './digest.js';
 
 export interface TourRecord {
@@ -37,7 +38,7 @@ export function toursDir(root: string): string {
 
 /** Registry of every tour made on this machine, so the library spans repositories. */
 export function registryPath(): string {
-  return path.join(path.dirname(new URL(import.meta.url).pathname), '..', '.cache', 'registry.json');
+  return path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.cache', 'registry.json');
 }
 
 function readJson<T>(file: string, fallback: T): T {

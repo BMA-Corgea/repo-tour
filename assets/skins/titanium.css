@@ -1,0 +1,71 @@
+/* ══════════════════════════════════════════════════════════════════════════════════════════
+   TITANIUM — warm light metal and a deep teal. The daylight answer to Gunmetal: the same
+   hardware, photographed in a bright room.
+
+   Scoped under `:root[data-theme="titanium"]`, so it is inert until chosen. Same two layers
+   as every alternate: redefine the tokens, then fix only the places the base assumed a cold
+   white ground.
+
+   THE INVERSION IS THE POINT. Gunmetal lifts panels off the ground with a light inner bevel.
+   On warm paper that reads as a smudge, so the bevel goes to a faint warm shadow instead and
+   nothing outside this file needs to know.
+   ══════════════════════════════════════════════════════════════════════════════════════════ */
+
+:root[data-theme="titanium"] {
+  /* ── ground: warm paper-grey. A cold white next to code reads as a screenshot. ────────── */
+  --canvas:     #eceae6;
+  --bg:         #faf9f6;
+  --chip:       #e6e2da;
+  --line:       #d3ccbf;
+
+  /* ── text: warm near-black, never #000 ───────────────────────────────────────────────── */
+  --ink:        #23201b;
+  --muted:      #6e6759;
+
+  --accent:     #0f6b6b;
+  --accent-soft:#dbeceb;
+
+  /* ── highlight: pale teal wash, so it reads as "the guide is here" not "warning" ─────── */
+  --hl:         #dff0ee;
+  --hl-line:    #0f6b6b;
+
+  /* ── syntax: warmed, mid-contrast; a light ground needs darker ink than a dark one ───── */
+  --kw:         #a3324a;
+  --str:        #1f5d3f;
+  --com:        #8a8172;
+  --num:        #7a4a12;
+  --fn:         #5a3ba8;
+  --dec:        #8a5a00;
+
+  /* ── controls: anodised faces, a hairline you can actually see ───────────────────────── */
+  --radius:            6px;
+  --btn-bg:            #f2efe9;
+  --btn-bg-hover:      #e9e5dc;
+  --btn-edge:          #c9c2b4;
+  --btn-edge-hover:    #ada494;
+  --btn-ink:           #23201b;
+  --btn-shadow:        0 1px 0 rgba(120,108,90,.10);
+  --btn-shadow-primary:0 1px 0 rgba(120,108,90,.18);
+
+  --accent-solid:       #0f6b6b;
+  --accent-solid-hover: #0c5757;
+  --accent-solid-edge:  #0c5757;
+  --accent-solid-ink:   #ffffff;
+
+  --field-bg:   #ffffff;
+  --field-edge: #c9c2b4;
+  --focus:      #0f6b6b;
+  --focus-ring: rgba(15,107,107,.22);
+}
+
+/* ── FIXUPS ─────────────────────────────────────────────────────────────────────────────── */
+
+:root[data-theme="titanium"] .tab.on { border-bottom-color: #b8722c; }
+:root[data-theme="titanium"] .stab.on { border-bottom-color: #b8722c; }
+
+/* On paper the snapshot strip wants to be slightly deeper than the panels, not lighter. */
+:root[data-theme="titanium"] .bar.snapshot { background: #e6e2da; }
+
+/* The base leans on a yellow highlight; here the band is teal, so the gutter needs to carry
+   the accent or the highlighted range loses its left edge. */
+:root[data-theme="titanium"] tr.hit td.gut { background: var(--hl); color: var(--accent); }

@@ -40,3 +40,11 @@
 {"ts":"2026-08-26T18:56:15.446Z","type":"session.started","model":"unrecorded","source":"payload-missing","payload_keys":["session_id","transcript_path","cwd","hook_event_name","source"]}
 {"ts":"2026-08-26T18:57:02.993Z","type":"session.started","model":"unrecorded","source":"payload-missing","payload_keys":["session_id","transcript_path","cwd","hook_event_name","source"]}
 {"ts":"2026-08-26T18:57:28.487Z","type":"session.started","model":"unrecorded","source":"payload-missing","payload_keys":["session_id","transcript_path","cwd","hook_event_name","source"]}
+{"ts":"2026-08-26T21:26:07.891Z","type":"session.started","model":"unrecorded","source":"payload-missing","payload_keys":["session_id","transcript_path","cwd","hook_event_name","source"]}
+{"ts":"2026-08-26T21:26:29.271Z","type":"session.started","model":"unrecorded","source":"payload-missing","payload_keys":["session_id","transcript_path","cwd","hook_event_name","source"]}
+{"ts":"2026-08-26T21:26:45.924Z","type":"session.started","model":"unrecorded","source":"payload-missing","payload_keys":["session_id","transcript_path","cwd","hook_event_name","source"]}
+{"ts":"2026-08-26T21:27:11.490Z","type":"session.started","model":"unrecorded","source":"payload-missing","payload_keys":["session_id","transcript_path","cwd","hook_event_name","source"]}
+{"ts":"2026-08-26T21:27:27.269Z","type":"session.started","model":"unrecorded","source":"payload-missing","payload_keys":["session_id","transcript_path","cwd","hook_event_name","source"]}
+{"ts":"2026-08-26T21:27:38.196Z","type":"session.started","model":"unrecorded","source":"payload-missing","payload_keys":["session_id","transcript_path","cwd","hook_event_name","source"]}
+{"ts":"2026-08-26T21:27:48.789Z","type":"session.started","model":"unrecorded","source":"payload-missing","payload_keys":["session_id","transcript_path","cwd","hook_event_name","source"]}
+{"ts":"2026-08-26T21:28:02.107Z","type":"session.started","model":"unrecorded","source":"payload-missing","payload_keys":["session_id","transcript_path","cwd","hook_event_name","source"]}

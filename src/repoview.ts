@@ -15,6 +15,7 @@ import path from 'node:path';
 import type { DigestResult } from './digest.js';
 import type { CodeStep } from './codetour.js';
 import type { Architecture } from './architecture.js';
+import { baseCss, alternateCss, skinPicker, skinScript } from './skins.js';
 
 export interface RepoViewOptions {
   steps: Array<CodeStep & { interpreted?: boolean }>;
@@ -129,233 +130,8 @@ function architectureSvg(arch: Architecture): string {
   return `<svg viewBox="0 0 ${W} ${H}" class="archsvg" role="img" aria-label="System diagram">${parts.join('')}</svg>`;
 }
 
-const STYLE = `
-:root {
-  --bg:#ffffff; --canvas:#f6f8fa; --ink:#1f2328; --muted:#59636e; --line:#d1d9e0;
-  --accent:#0969da; --hl:#fff8c5; --hl-line:#eed888; --chip:#eaeef2;
-  --kw:#cf222e; --str:#0a3069; --com:#59636e; --num:#0550ae; --fn:#8250df; --dec:#953800;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg:#0d1117; --canvas:#010409; --ink:#e6edf3; --muted:#9198a1; --line:#3d444d;
-    --accent:#4493f8; --hl:#3a2d0b; --hl-line:#9e7b0d; --chip:#212830;
-    --kw:#ff7b72; --str:#a5d6ff; --com:#9198a1; --num:#79c0ff; --fn:#d2a8ff; --dec:#ffa657;
-  }
-}
-:root[data-theme="dark"] {
-  --bg:#0d1117; --canvas:#010409; --ink:#e6edf3; --muted:#9198a1; --line:#3d444d;
-  --accent:#4493f8; --hl:#3a2d0b; --hl-line:#9e7b0d; --chip:#212830;
-  --kw:#ff7b72; --str:#a5d6ff; --com:#9198a1; --num:#79c0ff; --fn:#d2a8ff; --dec:#ffa657;
-}
-* { box-sizing:border-box; }
-html,body { height:100%; }
-body {
-  margin:0; background:var(--canvas); color:var(--ink);
-  font:14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Noto Sans, Helvetica, Arial, sans-serif;
-}
-.topbar {
-  background:var(--bg); border-bottom:1px solid var(--line); padding:14px 20px 0;
-  position:sticky; top:0; z-index:5;
-}
-.repoline { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
-/* The primary action belongs in the sticky header. Left in the scrolling bar below it,
-   the tour button disappeared under the header the moment you scrolled — you had to
-   scroll back up to start the thing the page exists for. */
-.repoline .grow { flex:1 1 auto; }
-.repoline .owner { color:var(--accent); font-size:19px; }
-.repoline .sep { color:var(--muted); font-size:19px; }
-.repoline .name { color:var(--accent); font-size:19px; font-weight:600; }
-.chip {
-  font-size:11px; padding:1px 8px; border-radius:999px; border:1px solid var(--line);
-  color:var(--muted); background:transparent;
-}
-.tabs { display:flex; gap:18px; margin-top:14px; }
-.tab { padding:8px 2px 10px; font-size:14px; color:var(--ink); border-bottom:2px solid transparent; }
-.tab.on { border-bottom-color:#fd8c73; font-weight:600; }
-.tab.off { color:var(--muted); }
-.layout {
-  display:grid; grid-template-columns:270px minmax(0,1fr) 400px; gap:16px;
-  padding:16px 20px 40px; align-items:start;
-}
-@media (max-width:1240px) { .layout { grid-template-columns:minmax(0,1fr) 380px; } .layout .files { display:none; } }
-@media (max-width:900px) {
-  .layout { grid-template-columns:minmax(0,1fr); }
-  .tree { max-height:220px; }
-  .layout .files { display:block; }
-}
-.panel { background:var(--bg); border:1px solid var(--line); border-radius:6px; overflow:hidden; }
-.panel > h3 {
-  margin:0; padding:9px 14px; font-size:13px; font-weight:600;
-  border-bottom:1px solid var(--line); background:var(--bg);
-}
-.tree { max-height:calc(100vh - 190px); overflow:auto; padding:6px 0; }
-.tree .row {
-  display:flex; align-items:center; gap:7px; padding:3px 12px; cursor:pointer;
-  font-size:13px; white-space:nowrap; color:var(--ink);
-}
-.tree .row:hover { background:var(--chip); }
-.tree .row.on { background:var(--chip); font-weight:600; }
-.tree .row.dim { color:var(--muted); cursor:default; }
-.tree .row.dim:hover { background:transparent; }
-.tree .ic { width:14px; text-align:center; color:var(--muted); flex:none; }
-.filehead {
-  display:flex; align-items:center; justify-content:space-between; gap:12px;
-  padding:9px 14px; border-bottom:1px solid var(--line); background:var(--bg); flex-wrap:wrap;
-}
-.crumb { font-size:14px; }
-.crumb b { font-weight:600; }
-.crumb .d { color:var(--accent); }
-.filemeta { color:var(--muted); font-size:12px; }
-.code { overflow:auto; max-height:calc(100vh - 210px); position:relative; background:var(--bg); }
-table.src { border-collapse:collapse; width:100%; font:12px/20px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
-table.src td { padding:0; vertical-align:top; }
-td.gut {
-  width:1%; min-width:52px; text-align:right; padding:0 12px 0 14px; color:var(--muted);
-  user-select:none; position:sticky; left:0; background:var(--bg); border-right:1px solid transparent;
-}
-td.ln { padding-right:20px; white-space:pre; }
-tr.hit td.gut { background:var(--hl); border-right-color:var(--hl-line); color:var(--ink); }
-tr.hit td.ln { background:var(--hl); }
-.k{color:var(--kw)} .s{color:var(--str)} .c{color:var(--com);font-style:italic}
-.n{color:var(--num)} .f{color:var(--fn)} .d{color:var(--dec)}
-.empty { padding:40px 16px; text-align:center; color:var(--muted); font-size:13px; }
-#range { position:absolute; pointer-events:none; left:0; right:0; z-index:1; }
-.bar { display:flex; gap:8px; align-items:center; padding:10px 20px; background:var(--bg); border-bottom:1px solid var(--line); flex-wrap:wrap; }
-.btn {
-  font:inherit; font-size:13px; font-weight:500; padding:5px 14px; border-radius:6px; cursor:pointer;
-  border:1px solid var(--line); background:var(--chip); color:var(--ink);
-}
-.btn.primary { background:#1f883d; border-color:#1f883d; color:#fff; }
-.btn:hover { filter:brightness(1.06); }
-.said { color:var(--muted); font-size:12px; }
-.bar.snapshot { padding:7px 20px; background:var(--canvas); }
-.bar.snapshot b { color:var(--ink); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
-.bar.snapshot code { background:var(--chip); padding:1px 6px; border-radius:4px; font-size:11px; }
+const STYLE = baseCss();
 
-/* The side column is DOCKED, not floating. An explanation worth reading needs a column,
-   not a tooltip — and a docked panel leaves the code fully visible beside it. */
-#side { position:sticky; top:96px; }
-.tabsrow { display:flex; border-bottom:1px solid var(--line); }
-.stab {
-  font:inherit; font-size:13px; font-weight:500; padding:10px 14px; cursor:pointer;
-  background:transparent; border:0; border-bottom:2px solid transparent; color:var(--muted);
-}
-.stab.on { color:var(--ink); font-weight:600; border-bottom-color:#fd8c73; }
-.stab .pill {
-  display:inline-block; min-width:18px; padding:0 5px; margin-left:5px; border-radius:9px;
-  background:var(--chip); color:var(--ink); font-size:11px; font-weight:600;
-}
-#guide, #notes { display:none; }
-#guide.on, #notes.on { display:block; }
-#guide .gidle { padding:18px; color:var(--muted); font-size:13px; line-height:1.6; }
-
-/* Chapters. Thirty-odd stops read as one flat list is a slog; this is the shape of the
-   tour, visible up front, so a reader can start where they care and skip what they don't. */
-.chaphead {
-  display:flex; align-items:baseline; gap:8px; width:100%; cursor:pointer;
-  background:transparent; border:0; padding:12px 16px; text-align:left;
-  border-bottom:1px solid var(--line); font:inherit; color:inherit;
-}
-.chaphead:hover { background:var(--chip); }
-.chaphead .cnum { font-size:11px; letter-spacing:0.06em; text-transform:uppercase; color:var(--muted); font-weight:600; }
-.chaphead .cname { flex:1; font-weight:600; font-size:14px; }
-.chaphead .caret { color:var(--muted); font-size:11px; }
-.toc { border-bottom:1px solid var(--line); max-height:min(46vh,420px); overflow:auto; }
-.toc.hide { display:none; }
-.toc button {
-  display:flex; gap:10px; align-items:baseline; width:100%; text-align:left;
-  background:transparent; border:0; padding:8px 16px; cursor:pointer; font:inherit; color:var(--ink);
-}
-.toc button:hover { background:var(--chip); }
-.toc button.on { background:var(--accent-soft, var(--chip)); box-shadow:inset 3px 0 0 var(--accent); }
-.toc button.done .t { color:var(--muted); }
-.toc .n { width:20px; color:var(--muted); font-size:11px; font-variant-numeric:tabular-nums; }
-.toc .t { flex:1; font-size:13px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
-.toc .s { color:var(--muted); font-size:11px; font-family:-apple-system,system-ui,sans-serif; }
-.toc .c { color:var(--muted); font-size:11px; }
-.tocnote { padding:10px 16px 12px; color:var(--muted); font-size:12px; line-height:1.6; }
-/* The tour has to be startable from the pane a reader is already looking at. The header
-   button is right, but it is at the far edge of a wide window; this one is under their eyes. */
-.bigstart { width:100%; padding:10px 14px; font-size:14px; }
-.buildstamp {
-  margin-top:14px; padding-top:10px; border-top:1px solid var(--line);
-  color:var(--muted); font-size:11px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-}
-#guide .gbody { padding:16px 18px 18px; }
-#guide .gstep { font-size:11px; letter-spacing:0.06em; text-transform:uppercase; color:var(--muted); font-weight:600; }
-#guide h2 {
-  margin:6px 0 4px; font-size:17px; font-weight:600; letter-spacing:-0.01em;
-  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-}
-#guide .gwhere { font-size:12px; color:var(--muted); margin-bottom:12px; }
-#guide .gtext { font-size:14px; line-height:1.65; white-space:pre-wrap; }
-#guide .gtext.plain { color:var(--muted); font-style:italic; }
-#guide .gnav { display:flex; gap:8px; align-items:center; margin-top:18px; padding-top:14px; border-top:1px solid var(--line); }
-#guide .gnav .spacer { flex:1; }
-#guide .gsrc { margin-top:12px; font-size:11px; color:var(--muted); }
-.progress { height:3px; background:var(--line); border-radius:2px; overflow:hidden; margin-top:10px; }
-.progress i { display:block; height:100%; background:var(--accent); transition:width .25s ease; }
-
-/* The system diagram. Rows are layers of the import graph: ways in at the top, the things
-   everything leans on at the bottom — the one thing a folder listing can never show. */
-#archpanel { display:none; }
-#archpanel.on { display:block; }
-.archwrap { padding:18px 16px; overflow:auto; max-height:calc(100vh - 210px); color:var(--muted); }
-.archsvg { width:100%; height:auto; display:block; }
-.archsvg .node rect { fill:var(--chip); stroke:var(--line); stroke-width:1.5; cursor:pointer; transition:opacity .2s, stroke .2s; }
-.archsvg .node:hover rect { stroke:var(--accent); }
-.archsvg .nlabel { fill:var(--ink); font:600 14px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
-.archsvg .nsub { fill:var(--muted); font:11px -apple-system,system-ui,sans-serif; }
-.archsvg .ecount { fill:var(--muted); font:10px -apple-system,system-ui,sans-serif; }
-.archsvg .edge { color:var(--muted); opacity:.55; }
-.archsvg.focused .node { opacity:.32; }
-.archsvg.focused .node.on { opacity:1; }
-.archsvg.focused .node.on rect { stroke:var(--accent); stroke-width:2.5; }
-.archsvg.focused .edge { opacity:.12; }
-.archsvg.focused .edge.on { opacity:1; color:var(--accent); }
-.archnote { font-size:12px; margin-top:12px; }
-
-/* Notes. Every note remembers the stop that provoked it — that provenance is the whole
-   point: a review comment that can say WHICH explanation prompted the question is a
-   different kind of comment from "looks good to me". */
-#notes .nbody { padding:14px 16px 16px; }
-.anchor {
-  font-size:12px; padding:8px 10px; border:1px solid var(--line); border-radius:6px;
-  background:var(--canvas); margin-bottom:10px; display:flex; gap:8px; align-items:baseline;
-}
-.anchor .a-what { flex:1; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:var(--ink); }
-.anchor .a-none { color:var(--muted); font-style:italic; font-family:inherit; }
-.anchor .a-from { color:var(--muted); }
-#ntext {
-  width:100%; min-height:88px; resize:vertical; font:inherit; font-size:13px; line-height:1.55;
-  padding:9px 11px; border-radius:6px; border:1px solid var(--line);
-  background:var(--bg); color:var(--ink);
-}
-.nrow { display:flex; gap:8px; align-items:center; margin-top:9px; flex-wrap:wrap; }
-.nrow .spacer { flex:1; }
-.nlist { margin-top:16px; border-top:1px solid var(--line); max-height:44vh; overflow:auto; }
-.note { padding:11px 0; border-bottom:1px solid var(--line); }
-.note:last-child { border-bottom:0; }
-.note .prov { font-size:11px; color:var(--muted); margin-bottom:5px; }
-.note .prov b { color:var(--accent); font-weight:600; cursor:pointer; }
-.note .prov b:hover { text-decoration:underline; }
-.note .staleflag { color:var(--warn); }
-.note .quote {
-  font:11px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:var(--muted);
-  border-left:2px solid var(--line); padding-left:8px; margin:0 0 6px; white-space:pre-wrap;
-  overflow:hidden; text-overflow:ellipsis;
-}
-.note .body { font-size:13px; line-height:1.55; white-space:pre-wrap; }
-.note .del { float:right; cursor:pointer; color:var(--muted); font-size:14px; line-height:1; border:0; background:none; }
-.note .del:hover { color:#cf222e; }
-.nempty { color:var(--muted); font-size:13px; line-height:1.6; padding:14px 0 4px; }
-
-/* Clicking a line number anchors a note to it; shift-click extends the range. */
-td.gut { cursor:pointer; }
-td.gut:hover { color:var(--accent); text-decoration:underline; }
-tr.sel td.gut { background:var(--accent); color:#fff; }
-tr.sel td.ln { background:color-mix(in srgb, var(--accent) 12%, transparent); }
-`;
 
 const HIGHLIGHTER = `
 var KW = {
@@ -1024,6 +800,8 @@ export function renderRepoView(result: DigestResult, opts: RepoViewOptions): str
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(repoName)} — repo-tour</title>
 <style>${STYLE}</style>
+<style>${alternateCss()}</style>
+<script>${skinScript()}</script>
 </head>
 <body>
 
@@ -1035,6 +813,7 @@ export function renderRepoView(result: DigestResult, opts: RepoViewOptions): str
     <span class="chip">${repo?.branch ? escapeHtml(repo.branch) : 'no branch'}</span>
     <span class="chip">${repo ? repo.commitCount.toLocaleString() : 0} commits</span>
     <span class="grow"></span>
+    ${skinPicker()}
     <button class="btn primary" id="start" type="button">▶ Take the tour</button>
   </div>
   <div class="tabs">
@@ -1102,7 +881,7 @@ export function renderRepoView(result: DigestResult, opts: RepoViewOptions): str
         <b id="chapcount">chapters</b> — start at the beginning with the button above, or pick
         any chapter below to start there. Browsing the tree yourself works too; the tour waits.
       </div>
-      <div id="idletoc"></div>
+      <div class="toc" id="idletoc"></div>
       <div class="buildstamp">build ${escapeHtml(generatedAt.slice(0, 16).replace('T', ' '))}</div>
     </div>
     <div class="gbody" id="gbody" style="display:none">

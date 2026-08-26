@@ -1,0 +1,78 @@
+/* ══════════════════════════════════════════════════════════════════════════════════════════
+   GUNMETAL — brushed graphite and one electric cyan. The house skin.
+
+   Every rule is scoped under `:root[data-theme="gunmetal"]`, so this file is inert until the
+   switcher sets that attribute. Two layers, in the order they matter:
+
+     1. TOKENS — the whole of the base's `:root`, redefined. Essentially all of the work is
+        here: every panel, bar, tile, ring and field is drawn from these variables, so
+        redefining them re-skins the entire page including anything added later.
+     2. FIXUPS — the short list of places the base assumed a lighter ground.
+
+   One cyan, used sparingly. A skin with three accents has no accent.
+   ══════════════════════════════════════════════════════════════════════════════════════════ */
+
+:root[data-theme="gunmetal"] {
+  /* ── ground and panels: graphite, lit from above ─────────────────────────────────────── */
+  --canvas:     #0b0e12;
+  --bg:         #14181e;
+  --chip:       #1e242c;
+  --line:       #2b323c;
+
+  /* ── text: never pure white on a dark ground; it buzzes ──────────────────────────────── */
+  --ink:        #dbe3ec;
+  --muted:      #8b96a5;
+
+  /* ── the one accent ──────────────────────────────────────────────────────────────────── */
+  --accent:     #4fd1e0;
+  --accent-soft:#10333a;
+
+  /* ── the highlighted lines of code: a cyan wash, not a yellow highlighter ────────────── */
+  --hl:         #14313a;
+  --hl-line:    #4fd1e0;
+
+  /* ── syntax: cool, low-saturation, with the accent reserved for definitions ──────────── */
+  --kw:         #f0879b;
+  --str:        #9fd6a0;
+  --com:        #6b7787;
+  --num:        #d9b26a;
+  --fn:         #4fd1e0;
+  --dec:        #d9a066;
+
+  /* ── controls ────────────────────────────────────────────────────────────────────────── */
+  --radius:            6px;
+  --btn-bg:            #1c222a;
+  --btn-bg-hover:      #252d37;
+  --btn-edge:          #333c48;
+  --btn-edge-hover:    #4b5766;
+  --btn-ink:           #dbe3ec;
+  --btn-shadow:        inset 0 1px 0 rgba(255,255,255,.04);
+  --btn-shadow-primary:inset 0 1px 0 rgba(255,255,255,.14);
+
+  /* the primary action is the accent itself, on near-black text — the loudest thing here */
+  --accent-solid:       #4fd1e0;
+  --accent-solid-hover: #6adde9;
+  --accent-solid-edge:  #4fd1e0;
+  --accent-solid-ink:   #06222a;
+
+  --field-bg:   #10151b;
+  --field-edge: #2b323c;
+  --focus:      #4fd1e0;
+  --focus-ring: rgba(79,209,224,.28);
+}
+
+/* ── FIXUPS ─────────────────────────────────────────────────────────────────────────────── */
+
+/* The base's active tab is GitHub's orange. Against graphite the accent is the only warm-
+   neutral that does not clash, and the tab is the one place the accent is allowed to be
+   purely decorative. */
+:root[data-theme="gunmetal"] .tab.on { border-bottom-color: var(--accent); }
+:root[data-theme="gunmetal"] .stab.on { border-bottom-color: var(--accent); }
+
+/* The snapshot bar sits between two dark surfaces; the base tints it with --canvas, which
+   here is darker than the panels and reads as a hole rather than a strip. */
+:root[data-theme="gunmetal"] .bar.snapshot { background: #0f1319; }
+
+/* A gutter that keeps the panel background loses the highlighted band's left edge, which is
+   the thing that tells you which lines the guide is talking about. */
+:root[data-theme="gunmetal"] tr.hit td.gut { background: var(--hl); color: var(--accent); }

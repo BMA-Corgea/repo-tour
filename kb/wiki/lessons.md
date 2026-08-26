@@ -34,6 +34,47 @@ where the eye already is. Silent refusal reads as a dead button.**
 
 ---
 
+## Styles are a swappable layer, not decoration (T-5, 2026-08-26)
+
+Evan: **"the buttons are ugly. Check out the way the GLP-Strong-App has styles that can be
+one shot. I want this repo set up like that as well."**
+
+GLP-Strong-App's contract, now ported: **a skin is ONE file whose rules are all scoped under
+`[data-theme="<name>"]`, plus ONE row in a registry.** Nothing else changes — the file is
+picked up, the option appears in the switcher, the choice applies before first paint and
+persists. The base file is special in exactly one way: it owns the bare `:root`, so it carries
+the tokens AND the component layer. That is what makes an alternate that redefines nothing but
+tokens re-skin the whole page, including anything added after that alternate was written.
+
+Two departures from GLP, both forced by this product:
+
+- **Every skin is inlined, not linked.** A generated tour must open from `file://` with no
+  network, so there is nowhere to link to. Alternates ship inert in the page.
+- **The app's own pages use the same files.** One contract, not two — the server's shell reads
+  `base.css` and the alternates exactly as the tour renderer does.
+
+The "ugly buttons" were also a genuine bug, not only taste: the chapter list rendered into
+`#idletoc`, while the styles were scoped to `.toc button`. Unstyled, they fell back to inline
+default buttons and wrapped into a hedge of pills. **Scoping a style to a class and then
+rendering the markup somewhere that lacks it produces no error and no warning — only a
+screenshot that looks wrong.**
+
+---
+
+## A module-relative path with a space in it silently wrote to the wrong place (T-5, 2026-08-26)
+
+`path.dirname(new URL(import.meta.url).pathname)` does NOT decode percent-encoding. This
+project lives under `Coding Projects`, so every module-relative path resolved to a directory
+literally named `Coding%20Projects` — and `fs` happily CREATED it on the Desktop. The
+interpretation cache (paid for with tokens), the tour registry and the loaded-repo list had
+all been living there. 120 files. Nothing failed; it just went somewhere nobody would look.
+
+Use `fileURLToPath(import.meta.url)`. `new URL('../x', import.meta.url)` passed straight to
+`fs` is also fine — it is only taking `.pathname` as a string that breaks. A test now asserts
+no resolved path contains a `%xx` escape.
+
+---
+
 ## The button was not buried — the PAGE was scrolled (T-4, 2026-08-26)
 
 Evan, twice: **"the tour button needs to be scrolled up to"**, then **"the green button is
