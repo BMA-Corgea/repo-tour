@@ -78,6 +78,43 @@ function hasAnyBuild(repoPath: string): boolean {
   } catch { return false; }
 }
 
+/**
+ * A build in flight, recorded on disk.
+ *
+ * The server restarts — on a code change, on a crash, on Ctrl-C — and an in-process build
+ * dies with it, leaving the card back at "no tour yet" as though nothing had happened. That
+ * is the worst possible presentation of it: minutes of work vanish and the only signal is a
+ * label that says you never started.
+ *
+ * The marker makes the attempt durable, so the next boot picks it up. Resuming is cheap
+ * because every finished stop is already cached by content hash — a resumed build re-does
+ * only what the killed one had not reached.
+ */
+function markerPath(repoPath: string): string {
+  return path.join(repoPath, CACHE_DIR, 'building.json');
+}
+
+function markBuilding(repoPath: string, lines: string[]): void {
+  try {
+    fs.mkdirSync(path.dirname(markerPath(repoPath)), { recursive: true });
+    fs.writeFileSync(markerPath(repoPath), JSON.stringify({ startedAt: new Date().toISOString(), lines }, null, 2));
+  } catch { /* a build that cannot record itself still runs */ }
+}
+
+function clearBuilding(repoPath: string): void {
+  try { fs.rmSync(markerPath(repoPath), { force: true }); } catch { /* nothing to clear */ }
+}
+
+/** A marker older than this is from a run nobody is waiting for any more. */
+const RESUME_WINDOW_MS = 6 * 60 * 60 * 1000;
+
+function wasBuilding(repoPath: string): boolean {
+  try {
+    const m = JSON.parse(fs.readFileSync(markerPath(repoPath), 'utf8')) as { startedAt: string };
+    return Date.now() - Date.parse(m.startedAt) < RESUME_WINDOW_MS;
+  } catch { return false; }
+}
+
 function readRendered(repoPath: string, fp: string): Rendered | null {
   const dir = renderedDir(repoPath);
   try {
@@ -220,6 +257,24 @@ export class RepoTourServer {
     this.model = opts.model ?? DEFAULT_MODEL;
     this.interpret = opts.interpret !== false;
     this.load();
+    this.resumeInterrupted();
+  }
+
+  /**
+   * Pick up builds that a previous run was in the middle of.
+   *
+   * Deliberately automatic: someone asked for this build, the process died under them, and
+   * making them ask again — with no way to know they had to — is how minutes of work get
+   * lost silently. A marker whose repo is already built at its current state is stale and is
+   * simply cleared.
+   */
+  private resumeInterrupted(): void {
+    for (const r of this.repos) {
+      if (!wasBuilding(r.path)) { clearBuilding(r.path); continue; }
+      if (this.lookup(r.path, fingerprint(r.path))) { clearBuilding(r.path); continue; }
+      const job = this.startJob(r.path);
+      job.lines.unshift('resuming a build the last run did not finish…');
+    }
   }
 
   private load(): void {
@@ -265,7 +320,9 @@ export class RepoTourServer {
     return cold;
   }
 
-  listRepos(): Array<LoadedRepo & { built: RenderedMeta | null; current: boolean; running: boolean }> {
+  listRepos(): Array<LoadedRepo & {
+    built: RenderedMeta | null; current: boolean; running: boolean; resumed: boolean;
+  }> {
     return this.repos.map((r) => {
       const fp = fingerprint(r.path);
       const built = this.lookup(r.path, fp) ?? this.cache.get(r.path) ?? null;
@@ -275,6 +332,7 @@ export class RepoTourServer {
         built: meta,
         current: meta !== null && meta.fingerprint === fp,
         running: this.jobs.get(r.path)?.state === 'running',
+        resumed: (this.jobs.get(r.path)?.lines[0] ?? '').startsWith('resuming'),
       };
     });
   }
@@ -345,12 +403,18 @@ export class RepoTourServer {
 
     const job: Job = { repo: repoPath, state: 'running', lines: [], startedAt: Date.now() };
     this.jobs.set(repoPath, job);
+    markBuilding(repoPath, job.lines);
 
-    void this.build(repoPath, (line) => { job.lines.push(line); })
-      .then(() => { job.state = 'done'; job.lines.push('ready'); })
+    void this.build(repoPath, (line) => {
+      job.lines.push(line);
+      // Kept current on disk so a resumed build can say where the last one got to.
+      markBuilding(repoPath, job.lines);
+    })
+      .then(() => { job.state = 'done'; job.lines.push('ready'); clearBuilding(repoPath); })
       .catch((e: unknown) => {
         job.state = 'failed';
         job.lines.push(e instanceof Error ? e.message : String(e));
+        clearBuilding(repoPath);
       });
 
     return job;
@@ -711,7 +775,7 @@ function ago(iso) {
 
 function card(r) {
   var dot, state;
-  if (r.running)      { dot = 'work'; state = 'building'; }
+  if (r.running)      { dot = 'work'; state = r.resumed ? 'resuming the build' : 'building'; }
   else if (!r.built)  { dot = 'idle'; state = 'no tour yet'; }
   else if (r.current) { dot = 'ok';   state = 'up to date'; }
   else                { dot = 'warn'; state = 'repo has changed'; }

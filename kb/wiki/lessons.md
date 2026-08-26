@@ -34,6 +34,33 @@ where the eye already is. Silent refusal reads as a dead button.**
 
 ---
 
+## An in-flight build must survive the process that started it (T-4, 2026-08-26)
+
+Evan: **"Does the repo tour building reset every time the app resets? I've tried building it
+so many times now."**
+
+Yes, and it was my doing twice over. `tsx watch` was added so he would get updates without
+restarting the app — and every commit I made restarted his server, killed the in-process
+build, and put the card back to "no tour yet". He was racing my commits all session without
+knowing it.
+
+Reproduced exactly: job `running`, save one file in `src/`, job `idle`, card "NO TOUR YET".
+
+**"No tour yet" is the worst possible presentation of a lost build.** Minutes of work vanish
+and the only signal says you never started — so there is nothing to retry, only something to
+begin again.
+
+A build now writes a marker to `<repo>/.repo-tour/building.json`, kept current as it goes, and
+a fresh server resumes any marker younger than six hours. Resuming is cheap because every
+finished stop is already cached by content hash, so each attempt keeps its ground. Verified by
+killing it twice mid-build: it resumed both times and finished at 29 stops.
+
+**The general point: adding a restart trigger to a system with long-running in-process work
+turns a convenience into a work-destroying loop.** The two features have to be designed
+together — one of them makes restarts frequent, so the other must make them survivable.
+
+---
+
 ## Two safe features combined into a reload loop (T-4, 2026-08-26)
 
 Evan: **"when I click on a chapter to read through it pops me back to the beginning of the

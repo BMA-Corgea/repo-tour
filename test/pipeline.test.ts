@@ -1039,3 +1039,59 @@ describe('the landing page', () => {
     }
   });
 });
+
+describe('a build survives the process dying', () => {
+  it('records that it is building, and a fresh server picks it up', async () => {
+    // The server restarts — on a code change, on a crash, on Ctrl-C — and an in-process
+    // build dies with it. Without a marker the card goes back to "no tour yet", which is the
+    // worst possible presentation: minutes of work gone, and the only signal says you never
+    // started. This cost Evan several attempts in a row while the watcher was restarting on
+    // every commit.
+    const { RepoTourServer } = await import('../src/server.js');
+    const own = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-resume-'));
+    try {
+      initRepo(own);
+      write(path.join(own, 'a.py'), 'def go(x):\n    """Do it."""\n    return x\n');
+      commitAll(own, 'init');
+
+      const first = new RepoTourServer({ statePath: path.join(own, 'state.json'), interpret: false });
+      first.addRepo(own);
+
+      // Simulate a build that was interrupted before it finished.
+      const marker = path.join(own, '.repo-tour', 'building.json');
+      fs.mkdirSync(path.dirname(marker), { recursive: true });
+      fs.writeFileSync(marker, JSON.stringify({ startedAt: new Date().toISOString(), lines: ['reading the tree…'] }));
+
+      const second = new RepoTourServer({ statePath: path.join(own, 'state.json'), interpret: false });
+      const seen = second.listRepos()[0]!;
+      expect(seen.running, 'a fresh server should resume the interrupted build').toBe(true);
+      expect(seen.resumed, 'and say so, rather than looking like a fresh start').toBe(true);
+    } finally {
+      fs.rmSync(own, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores a marker old enough that nobody is waiting for it', async () => {
+    const { RepoTourServer } = await import('../src/server.js');
+    const own = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-stale-'));
+    try {
+      initRepo(own);
+      write(path.join(own, 'a.py'), 'def go(x):\n    return x\n');
+      commitAll(own, 'init');
+
+      const first = new RepoTourServer({ statePath: path.join(own, 'state.json'), interpret: false });
+      first.addRepo(own);
+
+      const marker = path.join(own, '.repo-tour', 'building.json');
+      fs.mkdirSync(path.dirname(marker), { recursive: true });
+      const longAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      fs.writeFileSync(marker, JSON.stringify({ startedAt: longAgo, lines: [] }));
+
+      const second = new RepoTourServer({ statePath: path.join(own, 'state.json'), interpret: false });
+      expect(second.listRepos()[0]!.running, 'a day-old marker must not start work').toBe(false);
+      expect(fs.existsSync(marker), 'and should be cleared').toBe(false);
+    } finally {
+      fs.rmSync(own, { recursive: true, force: true });
+    }
+  });
+});
