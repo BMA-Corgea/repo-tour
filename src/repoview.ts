@@ -313,8 +313,12 @@ const TOUR_BOOTSTRAP = `
     steps: steps,
     finishLabel: 'Done',
   };
-  document.getElementById('start').addEventListener('click', function () { window.Tour.replay(cfg); });
-  window.Tour.start(cfg);
+
+  // The tour NEVER starts on its own. Someone opening a repository is usually here to
+  // look at something specific; being grabbed by a guide is an interruption, not a
+  // welcome. The page is fully browsable the moment it loads, and the tour waits.
+  var btn = document.getElementById('start');
+  btn.addEventListener('click', function () { window.Tour.replay(cfg); });
 })();
 `;
 
