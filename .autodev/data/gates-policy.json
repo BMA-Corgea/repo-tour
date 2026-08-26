@@ -1,0 +1,12 @@
+{
+  "shop": "repo-tour",
+  "gates": {
+    "spec_ready": "human",
+    "merge": "unattended",
+    "accept": "human",
+    "deploy": "unattended",
+    "sp_decide": "human",
+    "ex_decide": "human",
+    "compliance": "human"
+  }
+}

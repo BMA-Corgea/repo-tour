@@ -1,0 +1,116 @@
+#!/usr/bin/env node
+/**
+ * repo-tour CLI.
+ *
+ *   repo-tour digest <path> [--top N] [--no-write] [--json]
+ *
+ * Stages 1-3 only for now; the report says so out loud rather than implying a
+ * complete digest.
+ */
+
+import { digest } from './digest.js';
+import type { RankedFile } from './types.js';
+
+interface Args {
+  command: string;
+  target: string;
+  top: number;
+  write: boolean;
+  json: boolean;
+}
+
+function parseArgs(argv: string[]): Args {
+  const args: Args = { command: argv[0] ?? 'help', target: '.', top: 25, write: true, json: false };
+  const rest = argv.slice(1);
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i]!;
+    if (a === '--top') { args.top = Number(rest[++i] ?? 25); }
+    else if (a === '--no-write') { args.write = false; }
+    else if (a === '--json') { args.json = true; }
+    else if (!a.startsWith('-')) { args.target = a; }
+  }
+  return args;
+}
+
+function pad(s: string, n: number): string {
+  return s.length >= n ? s : s + ' '.repeat(n - s.length);
+}
+
+function padStart(s: string, n: number): string {
+  return s.length >= n ? s : ' '.repeat(n - s.length) + s;
+}
+
+function ms(n: number): string {
+  return n < 1000 ? `${n}ms` : `${(n / 1000).toFixed(2)}s`;
+}
+
+function printRanked(ranked: RankedFile[], top: number): void {
+  console.log(`\n  ${pad('#', 4)}${pad('score', 8)}${pad('churn', 7)}${pad('in', 5)}${pad('loc', 8)}${pad('class', 12)}path`);
+  console.log(`  ${'-'.repeat(78)}`);
+  ranked.slice(0, top).forEach((r, i) => {
+    console.log(
+      `  ${pad(String(i + 1), 4)}${pad(r.score.toFixed(3), 8)}${padStart(String(r.churn), 5)}  ` +
+      `${padStart(String(r.inDegree), 3)}  ${padStart(String(r.loc), 6)}  ${pad(r.classification, 12)}${r.path}`,
+    );
+  });
+}
+
+async function main(): Promise<void> {
+  const args = parseArgs(process.argv.slice(2));
+
+  if (args.command !== 'digest') {
+    console.log('usage: repo-tour digest <path> [--top N] [--no-write] [--json]');
+    process.exit(args.command === 'help' ? 0 : 1);
+  }
+
+  const result = await digest(args.target, { write: args.write });
+  const m = result.manifest;
+
+  if (args.json) {
+    console.log(JSON.stringify(m, null, 2));
+    return;
+  }
+
+  console.log(`\nrepo-tour digest — ${m.root}`);
+  console.log(`stages run: ${m.stagesRun.join(', ')}   not built yet: ${m.stagesNotBuilt.join(', ')}`);
+
+  console.log(`\nREPOSITORIES (${m.repos.length})`);
+  for (const repo of m.repos) {
+    const label = repo.root === '' ? '. (scan root)' : repo.root;
+    const head = repo.head ? repo.head.slice(0, 8) : 'no commits';
+    console.log(`  ${pad(label, 46)} ${padStart(String(repo.commitCount), 6)} commits  ${head}${repo.pointer ? '  (worktree/submodule)' : ''}`);
+  }
+
+  console.log(`\nINVENTORY`);
+  const cls = Object.entries(m.counts.byClassification).sort((a, b) => b[1] - a[1]);
+  console.log(`  ${m.counts.files} files`);
+  for (const [k, v] of cls) console.log(`    ${pad(k, 12)} ${padStart(String(v), 6)}`);
+
+  console.log(`\nEXTRACTION`);
+  console.log(`  parsed          ${padStart(String(m.counts.parsed), 6)} files`);
+  console.log(`  symbols         ${padStart(String(m.counts.symbols), 6)}`);
+  console.log(`  import edges    ${padStart(String(m.counts.edges), 6)}`);
+  const cov = m.graphCoverage;
+  const pct = cov.totalImports === 0 ? 0 : Math.round((cov.resolvedInternal / cov.totalImports) * 100);
+  console.log(`  coverage        ${padStart(String(pct), 6)}%  (${cov.resolvedInternal}/${cov.totalImports} imports resolved inside the tree, ${cov.leftTheTree} left it)`);
+  if (cov.filesWithParseErrors > 0) {
+    console.log(`  parse errors    ${padStart(String(cov.filesWithParseErrors), 6)} files had at least one`);
+  }
+  console.log(`  note: ${cov.note}`);
+
+  printRanked(result.ranked, args.top);
+
+  console.log(`\nCOST`);
+  console.log(`  files scanned      ${padStart(String(m.cost.filesScanned), 8)}`);
+  console.log(`  files interpreted  ${padStart(String(m.cost.filesInterpreted), 8)}   (stage 4 not built)`);
+  console.log(`  tokens fast        ${padStart(String(m.cost.tokens.fast), 8)}`);
+  console.log(`  tokens strong      ${padStart(String(m.cost.tokens.strong), 8)}`);
+  console.log(`  wall clock         ${padStart(ms(m.cost.wallMs), 8)}   (inventory ${ms(m.cost.inventoryMs)}, extract ${ms(m.cost.extractMs)}, rank ${ms(m.cost.rankMs)})`);
+  console.log(`  deep slice         ${padStart(String(m.counts.deepSlice), 8)} files would enter stage 4`);
+  console.log(`  sweep eligible     ${padStart(String(m.counts.sweepEligible), 8)} files scored above zero\n`);
+}
+
+main().catch((err: unknown) => {
+  console.error(err instanceof Error ? err.stack ?? err.message : String(err));
+  process.exit(1);
+});

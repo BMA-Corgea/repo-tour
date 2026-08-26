@@ -1,0 +1,25 @@
+{
+  "name": "repo-tour",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Digest a repository into a queryable, hierarchical understanding — then tour it.",
+  "bin": { "repo-tour": "./dist/cli.js" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/cli.ts",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "web-tree-sitter": "^0.25.10",
+    "tree-sitter-wasms": "^0.1.12"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

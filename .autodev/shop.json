@@ -1,0 +1,12 @@
+{
+  "shop": "repo-tour",
+  "operator": "human:evan",
+  "preset": "solo-builder-review",
+  "blueprint": "solo-builder-review",
+  "data_dir": ".autodev/data",
+  "settings": {
+    "lean": true
+  },
+  "created_at": "2026-08-26T03:37:10.321Z",
+  "created_by": "human:evan"
+}

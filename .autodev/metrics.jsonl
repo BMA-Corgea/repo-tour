@@ -1,0 +1,4 @@
+{"ts":"2026-08-26T04:22:43.272Z","kind":"stage.advanced","ticket":"T-1","from":"intake","to":"refine"}
+{"ts":"2026-08-26T04:36:51.876Z","kind":"stage.advanced","ticket":"T-1","from":"refine","to":"queue"}
+{"ts":"2026-08-26T17:39:04.510Z","kind":"stage.advanced","ticket":"T-1","from":"queue","to":"locate"}
+{"ts":"2026-08-26T17:39:31.252Z","kind":"stage.advanced","ticket":"T-1","from":"locate","to":"plan"}

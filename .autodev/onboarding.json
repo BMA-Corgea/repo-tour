@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "created_at": "2026-08-26T03:37:10.322Z",
+  "created_by": "human:evan",
+  "steps": {
+    "goal": {
+      "status": "done",
+      "title": "GOAL — what brought you here, what you want to do",
+      "by": "agent:pm",
+      "at": "2026-08-26T17:26:49.226Z",
+      "note": "Evan's words, captured 2026-08-26: build repo-tour — agent-generated guided tours of a repo and of PRs, with provenance-tagged notes feeding deeper code review, eventually wired into GONS.",
+      "history": [
+        {
+          "status": "done",
+          "by": "agent:pm",
+          "at": "2026-08-26T17:26:49.226Z",
+          "note": "Evan's words, captured 2026-08-26: build repo-tour — agent-generated guided tours of a repo and of PRs, with provenance-tagged notes feeding deeper code review, eventually wired into GONS."
+        }
+      ]
+    },
+    "setup": {
+      "status": "done",
+      "title": "SETUP — access + a starting preset (the necessary part; verified by check)",
+      "by": "agent:pm",
+      "at": "2026-08-26T17:26:49.182Z",
+      "note": "Shop repo-tour, operator human:evan, preset solo-builder-review. Full access PROVEN live by ops/verify-access.sh on 2026-08-26 (re-probed on resume). Monitoring sidecar installed:true running:true (systemd user unit). Doctor 18 pass / 1 warn (unused feature-regulated pipeline).",
+      "history": [
+        {
+          "status": "done",
+          "by": "agent:pm",
+          "at": "2026-08-26T17:26:49.182Z",
+          "note": "Shop repo-tour, operator human:evan, preset solo-builder-review. Full access PROVEN live by ops/verify-access.sh on 2026-08-26 (re-probed on resume). Monitoring sidecar installed:true running:true (systemd user unit). Doctor 18 pass / 1 warn (unused feature-regulated pipeline)."
+        }
+      ]
+    },
+    "about": {
+      "status": "pending",
+      "title": "ABOUT — who you are, your team, your company (optional)",
+      "by": null,
+      "at": null,
+      "note": null,
+      "history": []
+    },
+    "codebase": {
+      "status": "done",
+      "title": "CODEBASE — point me at your code so I can learn it (optional)",
+      "by": "agent:pm",
+      "at": "2026-08-26T17:26:49.270Z",
+      "note": "Greenfield. github.com/BMA-Corgea/repo-tour exists but is EMPTY. Decisions 2026-08-25: own pages not a GitHub overlay; speed explicitly NOT a constraint; deterministic/parser-based digestion (tree-sitter); repo-first for v1 not PR-first; first real target is GUTS. brain-scan on resume found only kb/ (already linked) — nothing to offer, nothing excluded. shop-tailor drafted zero files.",
+      "history": [
+        {
+          "status": "done",
+          "by": "agent:pm",
+          "at": "2026-08-26T17:26:49.270Z",
+          "note": "Greenfield. github.com/BMA-Corgea/repo-tour exists but is EMPTY. Decisions 2026-08-25: own pages not a GitHub overlay; speed explicitly NOT a constraint; deterministic/parser-based digestion (tree-sitter); repo-first for v1 not PR-first; first real target is GUTS. brain-scan on resume found only kb/ (already linked) — nothing to offer, nothing excluded. shop-tailor drafted zero files."
+        }
+      ]
+    }
+  },
+  "transcript": [
+    {
+      "ts": "2026-08-26T03:38:38.573Z",
+      "phase": "codebase",
+      "by": "human:evan",
+      "question": null,
+      "text": "Greenfield. GitHub repo github.com/BMA-Corgea/repo-tour exists but is EMPTY (no branches, description only). Product: take a repo, digest/understand it, and deliver a guided TOUR of it the same way the guided-tour skill tours an HTML UI (used for tutorials in GLP-Strong-App). Tour is played inside a GitHub-repo-page-lookalike UI. Side panel for notes, each note carrying metadata for WHICH TOUR STEP inspired it, so post-tour code review is better than LGTM. Chatbot during the tour answering questions, driven by Evan's Claude subscription. Must also work on PRs: explain before/after and WHY the change was made. Endgame: integrate into GONS so review can be deep when Evan wants to be involved in the code rather than dropped into a project cold."
+    },
+    {
+      "ts": "2026-08-26T03:38:38.615Z",
+      "phase": "goal",
+      "by": "human:evan",
+      "question": null,
+      "text": "Build repo-tour: agent-generated guided tours of a repo and of PRs, with provenance-tagged notes feeding deeper code review, eventually wired into GONS."
+    },
+    {
+      "ts": "2026-08-26T03:57:56.024Z",
+      "phase": "codebase",
+      "by": "human:evan",
+      "question": null,
+      "text": "DECISIONS 2026-08-25: (1) Own pages, NOT a GitHub overlay. (2) SPEED IS NOT A PRIORITY — Evan: 'I'd rather get up and walk around for a few minutes while you enable me to understand a repo I would have had no hope of understanding before.' Cold-start latency is explicitly NOT a design constraint; thoroughness wins. (3) Deterministic/parser-based digestion is the preferred approach (tree-sitter etc. extracts structure; models interpret it). (4) REPO-FIRST for v1, not PR-first. (5) First real target is GUTS — he wants to visualize the GONS/GOMS work to see where it started and where it's going, instead of continually changing it without a sense of direction. (6) Wants a single-page HTML artifact visualizing the digest as part of the proposal."
+    }
+  ]
+}
