@@ -16,6 +16,9 @@ import { extract } from '../src/extract.js';
 import { rank } from '../src/rank.js';
 import { digest } from '../src/digest.js';
 import { renderView } from '../src/view.js';
+import { rollup } from '../src/rollup.js';
+import { planIncremental } from '../src/incremental.js';
+import { buildTourSteps } from '../src/tour.js';
 
 let root: string;
 
@@ -360,7 +363,7 @@ describe('criterion 8 — inspectable by a human', () => {
   it('says out loud that the digest is partial rather than implying completeness', async () => {
     const result = await digest(root, { write: false });
     const html = renderView(result);
-    expect(html).toMatch(/This is a partial digest/);
+    expect(html).toMatch(/Nothing on this page was written by a model/);
     expect(html).toMatch(/4-interpret — not built/);
     expect(html).toMatch(/not the structure/);
   });
@@ -385,5 +388,131 @@ describe('criterion 8 — inspectable by a human', () => {
       expect(row).toHaveProperty('signals');
       expect(row).toHaveProperty('symbols');
     }
+  });
+});
+
+describe('criterion 5 — the rollup holds', () => {
+  it('gives every directory, subsystem and repo a digest built from its children', async () => {
+    const r = await digest(root, { write: false });
+    const paths = new Set(r.tiers.map((t) => t.path));
+
+    expect(paths.has('')).toBe(true);
+    expect(paths.has('src')).toBe(true);
+    expect(paths.has('services')).toBe(true);
+    expect(paths.has('services/inner')).toBe(true);
+
+    // A repo root is a 'repo'; a directory directly under one is a 'subsystem'.
+    expect(r.tiers.find((t) => t.path === '')!.kind).toBe('repo');
+    expect(r.tiers.find((t) => t.path === 'services/inner')!.kind).toBe('repo');
+    expect(r.tiers.find((t) => t.path === 'src')!.kind).toBe('subsystem');
+
+    // Every tier declares, in its own data, that it was built from children.
+    for (const t of r.tiers) expect(t.sourcedFrom).toBe('children');
+  });
+
+  it('rolls counts upward: a parent equals the sum of its children', async () => {
+    const r = await digest(root, { write: false });
+    const byPath = new Map(r.tiers.map((t) => [t.path, t] as const));
+    const rootTier = byPath.get('')!;
+
+    const sumOfChildren =
+      rootTier.childTiers.reduce((n, c) => n + byPath.get(c)!.fileCount, 0) +
+      rootTier.childFiles.length;
+    expect(rootTier.fileCount).toBe(sumOfChildren);
+    expect(rootTier.fileCount).toBe(r.inventory.files.length);
+  });
+
+  it('hashes a tier from its children only, so a tier is stale iff a child is', async () => {
+    const before = await digest(root, { write: false });
+    const beforeByPath = new Map(before.tiers.map((t) => [t.path, t.hash] as const));
+
+    write(path.join(root, 'src/helpers.py'), 'def shout(s):\n    return str(s).upper() + "?"\n');
+    commitAll(root, 'edit helpers again');
+
+    const after = await digest(root, { write: false });
+    const afterByPath = new Map(after.tiers.map((t) => [t.path, t.hash] as const));
+
+    // src changed, so src and the root are stale...
+    expect(afterByPath.get('src')).not.toBe(beforeByPath.get('src'));
+    expect(afterByPath.get('')).not.toBe(beforeByPath.get(''));
+    // ...but an untouched sibling subtree is byte-identical and can be reused.
+    expect(afterByPath.get('services/inner')).toBe(beforeByPath.get('services/inner'));
+  });
+});
+
+describe('criterion 6 — incremental works', () => {
+  it('reuses unchanged files and reports the count', async () => {
+    const first = await digest(root, { write: false });
+    const prior = first.inventory.files.map((f) => ({ path: f.path, sha256: f.sha256 }));
+
+    write(path.join(root, 'src/core.py'), 'import os\n\n\ndef run(job):\n    return job\n');
+    commitAll(root, 'rewrite core');
+    const second = await digest(root, { write: false });
+
+    const plan = planIncremental(prior, second.inventory.files, second.tiers);
+    expect(plan.counts.recomputed).toBe(1);
+    expect(plan.recompute).toEqual(['src/core.py']);
+    expect(plan.counts.reused).toBe(plan.counts.total - 1);
+    expect(plan.counts.reusePercent).toBeGreaterThan(90);
+  });
+
+  it('carries a renamed file across for free instead of recomputing it', async () => {
+    const first = await digest(root, { write: false });
+    const prior = first.inventory.files.map((f) => ({ path: f.path, sha256: f.sha256 }));
+
+    fs.renameSync(path.join(root, 'src/alpha.py'), path.join(root, 'src/renamed_alpha.py'));
+    commitAll(root, 'rename alpha');
+    const second = await digest(root, { write: false });
+
+    const plan = planIncremental(prior, second.inventory.files, second.tiers);
+    expect(plan.carried).toEqual([
+      { from: 'src/alpha.py', to: 'src/renamed_alpha.py', sha256: expect.any(String) },
+    ]);
+    expect(plan.recompute).toEqual([]);
+    expect(plan.deleted).toEqual([]);
+  });
+
+  it('drops a deleted file and marks its ancestors stale', async () => {
+    const first = await digest(root, { write: false });
+    const prior = first.inventory.files.map((f) => ({ path: f.path, sha256: f.sha256 }));
+
+    fs.rmSync(path.join(root, 'src/beta.py'));
+    commitAll(root, 'delete beta');
+    const second = await digest(root, { write: false });
+
+    const plan = planIncremental(prior, second.inventory.files, second.tiers);
+    expect(plan.deleted).toEqual(['src/beta.py']);
+    expect(plan.invalidatedTiers).toContain('src');
+    expect(plan.invalidatedTiers).toContain('');
+    expect(plan.invalidatedTiers).not.toContain('services/inner');
+  });
+});
+
+describe('the tour is a projection of the digest, not a separate artifact', () => {
+  it('generates steps whose claims are backed by digest numbers', async () => {
+    const r = await digest(root, { write: false });
+    const steps = buildTourSteps(r);
+
+    expect(steps.length).toBeGreaterThan(3);
+    for (const s of steps) {
+      expect(s.target).toBeTruthy();
+      expect(s.text.length).toBeGreaterThan(20);
+    }
+    // The opening step states the real file count.
+    expect(steps[0]!.text).toContain(r.inventory.files.length.toLocaleString());
+    // Any step pointing at a file row points at a file that actually exists.
+    for (const s of steps) {
+      if (!s.filterTo) continue;
+      expect(r.ranked.some((x) => x.path === s.filterTo)).toBe(true);
+    }
+  });
+
+  it('inlines the tour engine with no external requests', async () => {
+    const r = await digest(root, { write: false });
+    const html = renderView(r, { tour: buildTourSteps(r) });
+    expect(html).toMatch(/window\.__TOUR__/);
+    expect(html).toMatch(/Tour\.start/);
+    expect((html.match(/(?:https?:)?\/\/[a-zA-Z0-9.-]+/g) ?? [])).toEqual([]);
+    expect(html).not.toMatch(/<script[^>]+src=/i);
   });
 });

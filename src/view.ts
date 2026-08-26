@@ -10,13 +10,75 @@
  * Self-contained means self-contained: no CDN, no fonts, no fetch. One file, opens offline.
  */
 
+import fs from 'node:fs';
 import type { DigestResult } from './digest.js';
 import type { FileExtract, RankedFile } from './types.js';
+import type { TourStep } from './tour.js';
 
 export interface ViewOptions {
   /** how many ranked files to embed; the page states what it dropped */
   maxRows?: number;
+  /** when given, the guided tour engine is inlined and these steps are played */
+  tour?: TourStep[];
 }
+
+/** The tour engine ships in assets/ and is INLINED — the page must open with no network. */
+function readAsset(name: string): string {
+  return fs.readFileSync(new URL(`../assets/${name}`, import.meta.url), 'utf8');
+}
+
+const TOUR_BOOTSTRAP = `
+(function () {
+  var defs = window.__TOUR__ || [];
+  if (!defs.length || !window.Tour) return;
+
+  function filterTo(p) {
+    var q = document.getElementById('q');
+    if (!q) return;
+    q.value = p;
+    q.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  function rowFor(p) {
+    var rows = document.querySelectorAll('tr.f');
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].getAttribute('data-tour-path') === p) return rows[i];
+    }
+    return null;
+  }
+
+  var steps = defs.map(function (s) {
+    var step = { target: s.target, title: s.title, text: s.text, placement: s.placement };
+    if (s.filterTo || s.expand) {
+      step.beforeShow = function (api) {
+        if (s.filterTo) filterTo(s.filterTo);
+        return api.wait(80).then(function () {
+          if (!s.expand || !s.filterTo) return;
+          var row = rowFor(s.filterTo);
+          if (!row) return;
+          var nxt = row.nextElementSibling;
+          if (nxt && nxt.classList.contains('detail')) return; // already open
+          row.click();
+          return api.wait(60);
+        });
+      };
+    }
+    return step;
+  });
+
+  var cfg = {
+    storageKey: 'repo_tour_demo_done',
+    narrator: { name: 'repo-tour' },
+    steps: steps,
+    finishLabel: 'Done',
+    onFinish: function () { filterTo(''); },
+    onSkip: function () { filterTo(''); },
+  };
+
+  var replay = document.getElementById('replay');
+  if (replay) replay.addEventListener('click', function () { window.Tour.replay(cfg); });
+  window.Tour.start(cfg);
+})();
+`;
 
 interface Row extends RankedFile {
   language: string | null;
@@ -113,6 +175,11 @@ input[type=search], select {
   border: 1px solid var(--line); background: var(--panel); color: var(--ink);
 }
 input[type=search] { min-width: 240px; }
+.replay {
+  margin-top: 14px; font: inherit; font-size: 12px; padding: 6px 12px; cursor: pointer;
+  border-radius: 7px; border: 1px solid var(--line); background: var(--accent-soft); color: var(--accent);
+}
+.replay:hover { border-color: var(--accent); }
 footer { margin-top: 34px; color: var(--muted); font-size: 12px; border-top: 1px solid var(--line); padding-top: 14px; }
 `;
 
@@ -171,7 +238,7 @@ const SCRIPT = `
     });
     count.textContent = shown.length + ' of ' + rows.length + ' embedded files';
     tbody.innerHTML = shown.map(function (r, i) {
-      return '<tr class="f" data-i="' + i + '">' +
+      return '<tr class="f" data-i="' + i + '" data-tour-path="' + esc(r.path) + '">' +
         '<td class="num">' + (i + 1) + '</td>' +
         '<td class="num">' + meter(r.score) + r.score.toFixed(3) + '</td>' +
         '<td class="num">' + r.churn + '</td>' +
@@ -252,6 +319,15 @@ export function renderView(result: DigestResult, opts: ViewOptions = {}): string
     .map((c) => `<option value="${escapeHtml(c)}">${c === 'all' ? 'all classifications' : escapeHtml(c)}</option>`)
     .join('');
 
+  const tourSteps = opts.tour ?? [];
+  const tourCss = tourSteps.length ? `<style>${readAsset('tour.css')}</style>` : '';
+  const tourJs = tourSteps.length
+    ? `<script>window.__TOUR__ = ${embedJson(tourSteps)};</script>\n<script>${readAsset('tour.js')}</script>\n<script>${TOUR_BOOTSTRAP}</script>`
+    : '';
+  const replayBtn = tourSteps.length
+    ? '<button id="replay" class="replay" type="button">Replay the tour</button>'
+    : '';
+
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -259,26 +335,28 @@ export function renderView(result: DigestResult, opts: ViewOptions = {}): string
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>repo-tour digest — ${escapeHtml(m.root.split('/').pop() ?? m.root)}</title>
 <style>${STYLE}</style>
+${tourCss}
 </head>
 <body>
 <div class="wrap">
 
-<header>
+<header id="hdr">
   <h1>repo-tour digest</h1>
   <div class="root">${escapeHtml(m.root)}</div>
   <div class="stages">
     ${m.stagesRun.map((s) => `<span class="chip">${escapeHtml(s)}</span>`).join('')}
     ${m.stagesNotBuilt.map((s) => `<span class="chip off">${escapeHtml(s)} — not built</span>`).join('')}
   </div>
+  ${replayBtn}
 </header>
 
 <div class="note">
-  <strong>This is a partial digest.</strong> Stages 1–3 are deterministic and complete;
-  stage 4 (interpret) and stage 5 (roll up) are not built, so nothing on this page was
-  written by a model. Every number here was read off a parser or off git.
+  <strong>Nothing on this page was written by a model.</strong> Stages 1, 2, 3 and 5 are
+  deterministic and complete; stage 4 — interpret, the only stage that spends tokens — is
+  not built. Every number here was read off a parser or off git.
 </div>
 
-<div class="grid">
+<div class="grid" id="cards">
   <div class="card"><h3>Repositories</h3><div class="big">${m.repos.length}</div>
     <div class="sub">discovered structurally, at any depth</div></div>
   <div class="card"><h3>Files</h3><div class="big">${m.counts.files.toLocaleString()}</div>
@@ -290,7 +368,7 @@ export function renderView(result: DigestResult, opts: ViewOptions = {}): string
 </div>
 
 <h2>Import graph coverage</h2>
-<div class="note">
+<div class="note" id="coverage">
   <strong>${covPct}%</strong> — ${cov.resolvedInternal.toLocaleString()} of
   ${cov.totalImports.toLocaleString()} imports resolved to a real file inside the tree;
   ${cov.leftTheTree.toLocaleString()} left it.
@@ -299,19 +377,19 @@ export function renderView(result: DigestResult, opts: ViewOptions = {}): string
 </div>
 
 <h2>Repositories</h2>
-<div class="scroll"><table>
+<div class="scroll" id="repos"><table>
   <thead><tr><th>Root</th><th class="num">Commits</th><th>HEAD</th><th>Branch</th><th></th></tr></thead>
   <tbody>${repoRows}</tbody>
 </table></div>
 
 <h2>Classification</h2>
-<div class="scroll"><table>
+<div class="scroll" id="classification"><table>
   <thead><tr><th>Class</th><th class="num">Files</th><th class="num">Share</th></tr></thead>
   <tbody>${classRows}</tbody>
 </table></div>
 
 <h2>Ranked files</h2>
-<div class="controls">
+<div class="controls" id="controls">
   <input type="search" id="q" placeholder="filter by path…" aria-label="filter by path">
   <select id="cls" aria-label="filter by classification">${optionTags}</select>
   <span class="sub" id="count"></span>
@@ -344,6 +422,7 @@ ${dropped > 0 ? `<div class="note">Showing the top ${rows.length.toLocaleString(
 </div>
 <script>window.__DIGEST__ = ${embedJson({ rows })};</script>
 <script>${SCRIPT}</script>
+${tourJs}
 </body>
 </html>`;
 }

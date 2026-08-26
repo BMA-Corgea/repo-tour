@@ -12,6 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { digest, CACHE_DIR } from './digest.js';
 import { renderView } from './view.js';
+import { buildTourSteps } from './tour.js';
 import type { RankedFile } from './types.js';
 
 interface Args {
@@ -68,13 +69,17 @@ function printRanked(ranked: RankedFile[], top: number): void {
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
-  if (args.command !== 'digest') {
+  if (args.command !== 'digest' && args.command !== 'tour') {
     console.log('usage: repo-tour digest <path> [--top N] [--view FILE] [--max-rows N] [--no-write] [--json]');
+    console.log('       repo-tour tour <path> [--view FILE] [--max-rows N] [--no-write]');
     process.exit(args.command === 'help' ? 0 : 1);
   }
 
   const result = await digest(args.target, { write: args.write });
   const m = result.manifest;
+
+  // `tour` is `digest` plus a projection of it — never a separate artifact.
+  const steps = args.command === 'tour' ? buildTourSteps(result) : undefined;
 
   if (args.json) {
     console.log(JSON.stringify(m, null, 2));
@@ -118,6 +123,15 @@ async function main(): Promise<void> {
   console.log(`  wall clock         ${padStart(ms(m.cost.wallMs), 8)}   (inventory ${ms(m.cost.inventoryMs)}, extract ${ms(m.cost.extractMs)}, rank ${ms(m.cost.rankMs)})`);
   console.log(`  deep slice         ${padStart(String(m.counts.deepSlice), 8)} files would enter stage 4`);
   console.log(`  sweep eligible     ${padStart(String(m.counts.sweepEligible), 8)} files scored above zero`);
+  console.log(`  tiers rolled up    ${padStart(String(m.counts.tiers), 8)}   (rollup ${ms(m.cost.rollupMs)})`);
+  if (m.incremental) {
+    const inc = m.incremental;
+    console.log(`\nINCREMENTAL (vs. the digest already on disk)`);
+    console.log(`  reused             ${padStart(String(inc.reused), 8)}   ${inc.reusePercent}% of the tree cost nothing`);
+    console.log(`  recomputed         ${padStart(String(inc.recomputed), 8)}`);
+    console.log(`  carried (renamed)  ${padStart(String(inc.carried), 8)}`);
+    console.log(`  added / deleted    ${padStart(inc.added + ' / ' + inc.deleted, 8)}`);
+  }
 
   // Criterion 8: a self-contained HTML view the human can open and browse.
   const viewPath = args.view !== null && args.view !== ''
@@ -127,9 +141,10 @@ async function main(): Promise<void> {
       : null;
   if (viewPath) {
     fs.mkdirSync(path.dirname(viewPath), { recursive: true });
-    fs.writeFileSync(viewPath, renderView(result, { maxRows: args.maxRows }));
+    fs.writeFileSync(viewPath, renderView(result, { maxRows: args.maxRows, tour: steps }));
     const kb = Math.round(fs.statSync(viewPath).size / 1024);
     console.log(`\n  view               ${viewPath}  (${kb} KB, self-contained)`);
+    if (steps) console.log(`  tour               ${steps.length} steps, generated from the digest`);
   }
   console.log('');
 }

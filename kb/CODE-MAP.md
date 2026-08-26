@@ -21,6 +21,11 @@ will be overwritten.
 - Exports: extract, initParsers
 - Imports: (none)
 
+## src/incremental.ts
+
+- Exports: planIncremental
+- Imports: (none)
+
 ## src/inventory.ts
 
 - Exports: PARSEABLE, inventory
@@ -29,6 +34,16 @@ will be overwritten.
 ## src/rank.ts
 
 - Exports: MULTIPLIER, WEIGHTS, churnByFile, rank
+- Imports: (none)
+
+## src/rollup.ts
+
+- Exports: rollup
+- Imports: (none)
+
+## src/tour.ts
+
+- Exports: buildTourSteps
 - Imports: (none)
 
 ## src/types.ts

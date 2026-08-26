@@ -1,9 +1,10 @@
 /**
- * The digest driver — stages 1 through 3.
+ * The digest driver — every free stage.
  *
- * Stage 4 (interpret) and stage 5 (roll up) are not built yet. This deliberately runs
- * the free, exact stages to completion first so their output can be judged before a
- * single token is spent: ordering IS the cost-control mechanism (spec §3).
+ * Stages 1, 2, 3 and 5 all run here. Stage 4 (interpret) is the ONLY stage that spends
+ * tokens, and it is deliberately last and deliberately unbuilt: every cheap, exact stage
+ * runs first and narrows the field, so the expensive one only ever reads what survived.
+ * Ordering IS the cost-control mechanism (spec §3).
  */
 
 import fs from 'node:fs';
@@ -11,6 +12,8 @@ import path from 'node:path';
 import { inventory, type InventoryOptions } from './inventory.js';
 import { extract } from './extract.js';
 import { rank, type RankOptions } from './rank.js';
+import { rollup, type TierDigest } from './rollup.js';
+import { planIncremental, type IncrementalPlan, type PriorFile } from './incremental.js';
 import type { FileExtract, FileRecord, ImportGraph, Inventory, RankedFile, RepoRef } from './types.js';
 
 export const SCHEMA_VERSION = 1;
@@ -31,6 +34,7 @@ export interface DigestManifest {
     edges: number;
     deepSlice: number;
     sweepEligible: number;
+    tiers: number;
   };
   /**
    * Criterion 7: a run that spends tokens silently fails. Stages 1-3 spend none, and
@@ -44,7 +48,10 @@ export interface DigestManifest {
     filesScanned: number;
     filesInterpreted: number;
     tokens: { fast: number; strong: number };
+    rollupMs: number;
   };
+  /** criterion 6: what this run reused instead of recomputing. null on a cold run. */
+  incremental: IncrementalPlan['counts'] | null;
   /** Criterion 10 in spirit: the graph states its own coverage rather than implying completeness. */
   graphCoverage: ImportGraph['coverage'] & { note: string };
   skipped: Array<{ path: string; reason: string }>;
@@ -57,6 +64,8 @@ export interface DigestResult {
   graph: ImportGraph;
   ranked: RankedFile[];
   deepSlice: string[];
+  tiers: TierDigest[];
+  plan: IncrementalPlan | null;
 }
 
 export interface DigestOptions extends InventoryOptions, RankOptions {
@@ -87,6 +96,21 @@ export async function digest(rootInput: string, opts: DigestOptions = {}): Promi
   const { ranked, deepSlice, sweepCount } = rank(root, inv.files, inv.repos, graph, opts);
   const rankMs = Date.now() - t2;
 
+  const t3 = Date.now();
+  const { tiers } = rollup(inv.files, ranked, extracts, inv.repos.map((r) => r.root));
+  const rollupMs = Date.now() - t3;
+
+  // Criterion 6: if a prior digest is on disk, say what this run did NOT have to redo.
+  const outDirResolved = opts.outDir ?? path.join(root, CACHE_DIR);
+  let plan: IncrementalPlan | null = null;
+  try {
+    const priorRaw = fs.readFileSync(path.join(outDirResolved, 'inventory.json'), 'utf8');
+    const prior = JSON.parse(priorRaw) as PriorFile[];
+    plan = planIncremental(prior, inv.files, tiers);
+  } catch {
+    plan = null; // cold run — nothing to compare against, which is not an error
+  }
+
   const symbolCount = extracts.reduce((n, e) => n + e.symbols.length, 0);
 
   const manifest: DigestManifest = {
@@ -94,8 +118,8 @@ export async function digest(rootInput: string, opts: DigestOptions = {}): Promi
     root,
     generatedAt: new Date().toISOString(),
     repos: inv.repos,
-    stagesRun: ['1-inventory', '2-rank', '3-extract'],
-    stagesNotBuilt: ['4-interpret', '5-rollup'],
+    stagesRun: ['1-inventory', '2-rank', '3-extract', '5-rollup'],
+    stagesNotBuilt: ['4-interpret'],
     counts: {
       files: inv.files.length,
       byClassification: tally(inv.files),
@@ -104,6 +128,7 @@ export async function digest(rootInput: string, opts: DigestOptions = {}): Promi
       edges: graph.edges.length,
       deepSlice: deepSlice.length,
       sweepEligible: sweepCount,
+      tiers: tiers.length,
     },
     cost: {
       wallMs: Date.now() - started,
@@ -113,7 +138,9 @@ export async function digest(rootInput: string, opts: DigestOptions = {}): Promi
       filesScanned: inv.files.length,
       filesInterpreted: 0,
       tokens: { fast: 0, strong: 0 },
+      rollupMs,
     },
+    incremental: plan?.counts ?? null,
     graphCoverage: {
       ...graph.coverage,
       note:
@@ -124,13 +151,24 @@ export async function digest(rootInput: string, opts: DigestOptions = {}): Promi
   };
 
   if (opts.write !== false) {
-    const outDir = opts.outDir ?? path.join(root, CACHE_DIR);
+    const outDir = outDirResolved;
     const filesDir = path.join(outDir, 'files');
+    const tiersDir = path.join(outDir, 'tiers');
     fs.mkdirSync(filesDir, { recursive: true });
+    fs.mkdirSync(tiersDir, { recursive: true });
 
     fs.writeFileSync(path.join(outDir, 'digest.json'), JSON.stringify(manifest, null, 2));
     fs.writeFileSync(path.join(outDir, 'graph.json'), JSON.stringify(graph, null, 2));
     fs.writeFileSync(path.join(outDir, 'ranked.json'), JSON.stringify(ranked, null, 2));
+    // The path->hash index the NEXT run diffs against (criterion 6).
+    fs.writeFileSync(
+      path.join(outDir, 'inventory.json'),
+      JSON.stringify(inv.files.map((f) => ({ path: f.path, sha256: f.sha256 }))),
+    );
+    for (const tier of tiers) {
+      const name = (tier.path === '' ? '__root__' : tier.path.replace(/\//g, '__')) + '.json';
+      fs.writeFileSync(path.join(tiersDir, name), JSON.stringify(tier, null, 2));
+    }
 
     // Keyed by CONTENT hash, not path: a rename with no edit costs nothing, and a revert
     // re-uses the digest it had before (spec §4).
@@ -146,5 +184,5 @@ export async function digest(rootInput: string, opts: DigestOptions = {}): Promi
     }
   }
 
-  return { manifest, inventory: inv, extracts, graph, ranked, deepSlice };
+  return { manifest, inventory: inv, extracts, graph, ranked, deepSlice, tiers, plan };
 }
