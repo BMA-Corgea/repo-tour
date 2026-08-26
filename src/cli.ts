@@ -124,12 +124,30 @@ async function main(): Promise<void> {
         ? { llm: { ...(args.provider ? { provider: args.provider } : {}), model: args.model } }
         : {}),
     });
-    const { port } = await server.listen();
+    const { port, close } = await server.listen();
     const url = `http://127.0.0.1:${port}`;
     console.log(`\n  repo-tour is running at ${url}`);
     console.log(`  Load a repository there; it stays loaded, and refreshing a tour re-reads it.`);
     console.log(`\n  Ctrl-C to stop.\n`);
-    return new Promise<void>(() => { /* run until interrupted */ });
+
+    // Shut down when asked, and promptly.
+    //
+    // Under `tsx watch` the app restarts on every source change, so this runs constantly. A
+    // process that ignores the signal gets force-killed after five seconds and nothing comes
+    // back listening — which reads as the app being broken rather than as a slow stop.
+    let stopping = false;
+    const stop = (signal: string): void => {
+      if (stopping) { process.exit(0); }   // a second Ctrl-C means now
+      stopping = true;
+      console.log(`\n  ${signal} — stopping.`);
+      void close().then(() => process.exit(0));
+      // The last resort, so a wedged handle cannot outlive the request to stop.
+      setTimeout(() => process.exit(0), 2500).unref();
+    };
+    process.on('SIGINT', () => stop('SIGINT'));
+    process.on('SIGTERM', () => stop('SIGTERM'));
+
+    return new Promise<void>(() => { /* the listening socket keeps this alive */ });
   }
 
   // ---- verbs that read the library rather than a repository

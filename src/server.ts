@@ -31,7 +31,7 @@ import { buildArchitecture, architectureBrief } from './architecture.js';
 import { interpretStops, applyMeanings, interpretArchitecture, DEFAULT_MODEL } from './interpret.js';
 import { renderRepoView } from './repoview.js';
 import { baseCss, alternateCss, skinPicker, skinScript } from './skins.js';
-import { surveyProviders, resolveChoice, providerById, type LlmChoice } from './llm.js';
+import { surveyProviders, resolveChoice, providerById, killLlmChildren, type LlmChoice } from './llm.js';
 
 export interface LoadedRepo {
   path: string;
@@ -679,15 +679,47 @@ export class RepoTourServer {
     }
   };
 
-  listen(): Promise<{ port: number; close: () => void }> {
+  /**
+   * Start listening, and be able to STOP.
+   *
+   * Stopping cleanly is not a nicety here: the app restarts itself on every source change,
+   * so a process that will not exit means the supervisor force-kills it and nothing comes
+   * back listening — which looks exactly like the app breaking. Two things hold it open and
+   * both are tracked:
+   *
+   *   · KEEP-ALIVE SOCKETS. `server.close()` stops accepting new connections and then waits
+   *     for existing ones to finish. The pages poll every two seconds over keep-alive, so
+   *     "existing" means "forever". They have to be destroyed, not waited on.
+   *   · IN-FLIGHT MODEL CALLS. An interpretation can run for minutes; those children are
+   *     killed, and the build resumes from its marker on the next boot.
+   */
+  listen(): Promise<{ port: number; close: () => Promise<void> }> {
     const port = this.opts.port ?? 7788;
     const server = http.createServer((req, res) => { void this.handler(req, res); });
+    const sockets = new Set<import('node:net').Socket>();
+    server.on('connection', (s) => {
+      sockets.add(s);
+      s.on('close', () => sockets.delete(s));
+    });
+
+    const close = (): Promise<void> => new Promise((done) => {
+      killLlmChildren();
+      server.close(() => done());
+      for (const s of sockets) s.destroy();
+      sockets.clear();
+      // A socket that will not die must not hold the whole app hostage.
+      setTimeout(done, 1500).unref();
+    });
+
     return new Promise((resolve, reject) => {
       server.on('error', reject);
       // Loopback only. This serves the contents of your repositories; it has no business
       // listening on anything reachable from outside this machine.
+      // Report the port actually bound, not the one asked for: port 0 means "anything
+      // free", and answering 0 tells the caller nothing it can connect to.
       server.listen(port, '127.0.0.1', () => {
-        resolve({ port, close: () => server.close() });
+        const addr = server.address();
+        resolve({ port: typeof addr === 'object' && addr ? addr.port : port, close });
       });
     });
   }

@@ -58,7 +58,7 @@ will be overwritten.
 
 ## src/llm.ts
 
-- Exports: DEFAULT_PROVIDER, PROVIDERS, providerById, resolveBin, resolveChoice, runLlm, surveyProviders
+- Exports: DEFAULT_PROVIDER, PROVIDERS, killLlmChildren, providerById, resolveBin, resolveChoice, runLlm, surveyProviders
 - Imports: (none)
 
 ## src/rank.ts

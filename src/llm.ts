@@ -100,22 +100,46 @@ export function resolveBin(name: string, envVar: string): string | null {
 
 interface RunResult { code: number | null; stdout: string; stderr: string }
 
+/**
+ * Every LLM child this process has spawned and not yet reaped.
+ *
+ * An interpretation call can run for minutes. When the server is asked to stop — which now
+ * happens on every source change, because it restarts itself — those children keep the
+ * process alive past the shutdown signal, the supervisor gives up waiting and force-kills,
+ * and nothing comes back listening. Holding the handles is what makes a clean stop possible.
+ */
+const liveChildren = new Set<import('node:child_process').ChildProcess>();
+
+/** Stop every in-flight model call. A killed build resumes from its marker on the next boot. */
+export function killLlmChildren(): void {
+  for (const child of liveChildren) {
+    try { child.kill('SIGKILL'); } catch { /* already gone */ }
+  }
+  liveChildren.clear();
+}
+
 function runProcess(
   bin: string, args: string[], input: string, cwd: string, timeoutMs: number,
 ): Promise<RunResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(bin, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+    liveChildren.add(child);
     let stdout = '';
     let stderr = '';
     const timer = setTimeout(() => {
+      liveChildren.delete(child);
       child.kill('SIGKILL');
       reject(new Error(`timed out after ${Math.round(timeoutMs / 1000)}s`));
     }, timeoutMs);
 
     child.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
     child.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
-    child.on('error', (e) => { clearTimeout(timer); reject(e); });
-    child.on('close', (code) => { clearTimeout(timer); resolve({ code, stdout, stderr }); });
+    child.on('error', (e) => { clearTimeout(timer); liveChildren.delete(child); reject(e); });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      liveChildren.delete(child);
+      resolve({ code, stdout, stderr });
+    });
 
     // stdin, never argv: a prompt carrying a few hundred lines of source blows past the
     // shell's argument limit on a large file.

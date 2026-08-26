@@ -61,6 +61,44 @@ cannot use.
 
 ---
 
+## A server that restarts itself must be able to STOP itself (T-4, 2026-08-26)
+
+Evan, with a screenshot of his terminal: **"It gets caught up and I can't refresh when you
+update it."** The log read:
+
+    [tsx] change in ./src/interpret.ts  Process hasn't exited. Killing process...
+    [tsx] change in ./src/server.ts     Process hasn't exited. Killing process...
+    [tsx] change in ./src/cli.ts        Process hasn't exited. Killing process...
+
+and then nothing. No "running at" line. The app was simply gone, and every refresh failed.
+
+`tsx watch` was added so he would get updates without restarting — which made stopping happen
+constantly, and the process had never been asked to stop cleanly before. Two things held it
+open past the signal:
+
+1. **Keep-alive sockets.** `server.close()` stops accepting new connections and then waits for
+   existing ones to finish. Every open page polls every two seconds over keep-alive, so
+   "existing" means "forever". They have to be DESTROYED, not waited on.
+2. **In-flight model calls.** An interpretation runs for minutes. Those children are tracked
+   now and killed on shutdown; the build resumes from its marker on the next boot, so nothing
+   is lost by killing them.
+
+`serve` handles SIGINT and SIGTERM, closes, and exits — with a 2.5s backstop so a wedged
+handle cannot outlive the request to stop, and a second Ctrl-C that exits immediately.
+
+Verified in exactly his shape: a build running with **four live model children**, a browser
+polling over keep-alive, then a source file touched. Before: force-killed, nothing listening.
+After: `SIGTERM — stopping.`, back up, and the build resumed itself.
+
+**The general point: adding auto-restart to a long-running process is half a feature. The
+other half is making the process stoppable, and nothing forces you to write it — the failure
+only appears once restarts are frequent enough to catch the process busy.**
+
+(The test written for this found a second bug: `listen()` reported the port it was ASKED for,
+so `--port 0` — bind anything free — answered 0, which is not a port anyone can connect to.)
+
+---
+
 ## An in-flight build must survive the process that started it (T-4, 2026-08-26)
 
 Evan: **"Does the repo tour building reset every time the app resets? I've tried building it

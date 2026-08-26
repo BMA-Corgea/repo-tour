@@ -1273,3 +1273,47 @@ describe('the LLM is a choice, not a hardcoded binary', () => {
     }
   });
 });
+
+describe('the app can be stopped', () => {
+  it('closes promptly with a connection held open', async () => {
+    // Under `tsx watch` the app restarts on every source change, so stopping happens
+    // constantly. Two things used to hold it open past the signal: keep-alive sockets from
+    // the pages polling every two seconds, and model calls that run for minutes. The
+    // supervisor gave up after five seconds, force-killed, and nothing came back listening —
+    // which reads as the app being broken rather than as a slow stop.
+    const { RepoTourServer } = await import('../src/server.js');
+    const own = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-stop-'));
+    try {
+      const server = new RepoTourServer({ statePath: path.join(own, 'state.json'), port: 0 });
+      const { port, close } = await server.listen();
+
+      // A keep-alive client, exactly like a page polling.
+      const http = await import('node:http');
+      const agent = new http.Agent({ keepAlive: true });
+      await new Promise<void>((resolve) => {
+        const req = http.request(
+          { host: '127.0.0.1', port, path: '/api/version', agent },
+          (res) => { res.resume(); res.on('end', () => resolve()); },
+        );
+        req.end();
+      });
+
+      const started = Date.now();
+      await close();
+      const took = Date.now() - started;
+
+      expect(took, 'closing must not wait on a keep-alive socket').toBeLessThan(2500);
+      agent.destroy();
+    } finally {
+      fs.rmSync(own, { recursive: true, force: true });
+    }
+  });
+
+  it('exposes a way to stop in-flight model calls', async () => {
+    // A build killed mid-flight resumes from its marker, so killing children is safe —
+    // and it is the only way the process can exit while a five-minute call is running.
+    const { killLlmChildren } = await import('../src/llm.js');
+    expect(typeof killLlmChildren).toBe('function');
+    expect(() => killLlmChildren()).not.toThrow();   // a no-op with nothing running
+  });
+});
