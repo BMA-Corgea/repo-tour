@@ -685,7 +685,10 @@ describe('the notes panel carries provenance', () => {
     // A static page cannot know it has gone stale, so it must at least be honest about
     // being static — refreshing it will never pick up new code.
     expect(html).toMatch(/A snapshot of/);
-    expect(html).toMatch(/Refreshing this page will never pick up new code/);
+    // It must be clear that a file cannot gain FEATURES either, not just code — that was
+    // the actual confusion: refreshing an old export and wondering where chapters were.
+    expect(html).toMatch(/new chapters/);
+    expect(html).toMatch(/start\.sh/);
   });
 
   it('every piece of client script is valid JavaScript', async () => {
@@ -778,5 +781,32 @@ describe('the tour is organised in chapters', () => {
     expect(html).toContain('id="chaphead"');  // and reachable during it
     expect(html).toContain('id="gskip"');     // a chapter can be skipped
     expect(html).toMatch(/Next chapter/);
+  });
+});
+
+describe('the rendered page is well-formed enough to drive', () => {
+  it('has no duplicate element ids', async () => {
+    // Moving the tour button into the sticky header left the old one behind, so the page
+    // shipped two #start buttons — the second one dead. Every selector in the client
+    // script assumes ids are unique; this is cheap to check and impossible to eyeball.
+    const r = await digest(root, { write: false });
+    const plan = buildCodeTour(r);
+    const html = renderRepoView(r, { steps: plan.steps, itinerary: plan.itinerary });
+
+    const ids = [...html.matchAll(/\sid="([^"]+)"/g)].map((m) => m[1]!);
+    const seen = new Set<string>();
+    const dupes = ids.filter((id) => (seen.has(id) ? true : (seen.add(id), false)));
+    expect(dupes, `duplicate ids: ${[...new Set(dupes)].join(', ')}`).toEqual([]);
+  });
+
+  it('wires every id the client script reaches for', async () => {
+    const r = await digest(root, { write: false });
+    const plan = buildCodeTour(r);
+    const html = renderRepoView(r, { steps: plan.steps, itinerary: plan.itinerary });
+
+    const wanted = [...html.matchAll(/getElementById\('([^']+)'\)/g)].map((m) => m[1]!);
+    for (const id of new Set(wanted)) {
+      expect(html.includes(`id="${id}"`), `script reaches for #${id}, which the markup never renders`).toBe(true);
+    }
   });
 });

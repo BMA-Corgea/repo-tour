@@ -158,6 +158,10 @@ body {
   position:sticky; top:0; z-index:5;
 }
 .repoline { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+/* The primary action belongs in the sticky header. Left in the scrolling bar below it,
+   the tour button disappeared under the header the moment you scrolled — you had to
+   scroll back up to start the thing the page exists for. */
+.repoline .grow { flex:1 1 auto; }
 .repoline .owner { color:var(--accent); font-size:19px; }
 .repoline .sep { color:var(--muted); font-size:19px; }
 .repoline .name { color:var(--accent); font-size:19px; font-weight:600; }
@@ -525,6 +529,17 @@ const APP = `
   window.__repo = {
     open: open, mark: mark, clearSel: clearSel,
     current: function () { return current; },
+    visibleLines: function () {
+      var rows = codeEl.querySelectorAll('tr[id^="L"]');
+      if (!rows.length) return { from: 1, to: 1 };
+      var top = codeEl.scrollTop, bottom = top + codeEl.clientHeight;
+      var first = null, last = null;
+      for (var i = 0; i < rows.length; i++) {
+        var y = rows[i].offsetTop;
+        if (y >= top && y <= bottom) { if (first === null) first = i + 1; last = i + 1; }
+      }
+      return { from: first || 1, to: last || Math.min(rows.length, 40) };
+    },
     lineText: function (file, from, to) {
       var f = byPath[file];
       if (!f) return '';
@@ -561,6 +576,25 @@ const NOTES = `
 
   var anchor = null;
 
+  /**
+   * What a note would attach to right now, if the reader has not picked lines themselves.
+   *
+   * Requiring a line click first made Save silently do nothing — you typed a thought, hit
+   * the button, and the only feedback was a small grey hint. A note about "this file" is a
+   * perfectly good note; the anchor should default to something true rather than nothing.
+   */
+  function implicitAnchor() {
+    var t = window.__tour && window.__tour.step();
+    if (t && t.file) {
+      return { file: t.file, startLine: t.startLine, endLine: t.endLine,
+               stopIndex: window.__tour.index(), stopTitle: t.title, explanation: t.text };
+    }
+    var f = window.__repo && window.__repo.current();
+    if (!f) return null;
+    var vis = window.__repo.visibleLines();
+    return { file: f, startLine: vis.from, endLine: vis.to, stopIndex: -1, stopTitle: null, explanation: null };
+  }
+
   function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
   function showAnchor() {
@@ -568,7 +602,10 @@ const NOTES = `
       el.what.textContent = 'nothing selected';
       el.what.classList.add('a-none');
       el.from.textContent = '';
-      el.hint.textContent = 'click a line number to anchor';
+      var implied = implicitAnchor();
+      el.hint.textContent = implied
+        ? 'a note will attach to ' + implied.file.split('/').pop() + ' unless you pick lines'
+        : 'open a file, or click a line number, to anchor a note';
       return;
     }
     el.what.classList.remove('a-none');
@@ -631,10 +668,17 @@ const NOTES = `
     } catch (e) {}
   }
 
+  document.getElementById('nhere').addEventListener('click', function () {
+    var a = implicitAnchor();
+    if (!a) { el.hint.textContent = 'open a file first'; return; }
+    anchor = a; showAnchor(); el.text.focus();
+  });
+
   el.save.addEventListener('click', function () {
     var body = el.text.value.trim();
-    if (!body) { el.text.focus(); return; }
-    if (!anchor) { el.hint.textContent = 'anchor it first \\u2014 click a line number'; return; }
+    if (!body) { el.text.focus(); el.hint.textContent = 'write something first'; return; }
+    if (!anchor) anchor = implicitAnchor();
+    if (!anchor) { el.hint.textContent = 'open a file first, then this can attach to something'; return; }
     notes.push({
       id: String(notes.length + 1) + '-' + anchor.startLine,
       file: anchor.file, startLine: anchor.startLine, endLine: anchor.endLine,
@@ -645,6 +689,10 @@ const NOTES = `
       body: body
     });
     el.text.value = '';
+    anchor = null;
+    window.__repo.clearSel();
+    showAnchor();
+    el.hint.textContent = 'saved';
     persist(); render(); refreshDownloads();
   });
 
@@ -670,6 +718,16 @@ const NOTES = `
   });
 
   window.__notes = {
+    /**
+     * The tour moved, so an anchor from wherever you were before no longer describes what
+     * you are looking at. Dropping it means a note taken mid-tour records the STOP — which
+     * is the whole point of the provenance — instead of silently reusing a stale pick.
+     */
+    followStop: function () {
+      anchor = null;
+      if (window.__repo) window.__repo.clearSel();
+      showAnchor();
+    },
     anchorFromSelection: function (file, from, to) {
       anchor = { file: file, startLine: from, endLine: to, stopIndex: -1, stopTitle: null, explanation: null };
       showAnchor();
@@ -711,6 +769,7 @@ const TOUR_BOOTSTRAP = `
   tabs.guide.addEventListener('click', function () { window.openPane('guide'); });
   tabs.notes.addEventListener('click', function () { window.openPane('notes'); });
 
+  window.__tour = { step: function () { return null; }, index: function () { return -1; } };
   if (!defs.length || !btn) return;
 
   var el = {
@@ -763,6 +822,7 @@ const TOUR_BOOTSTRAP = `
       codePanel.style.display = '';
       window.__repo.open(s.file, { from: s.startLine, to: s.endLine });
     }
+    if (window.__notes && window.__notes.followStop) window.__notes.followStop();
     var ci = chapterAt(n);
     var ch = chapters[ci];
     head.style.display = '';
@@ -860,6 +920,8 @@ const TOUR_BOOTSTRAP = `
     i = -1;
   }
 
+  window.__tour = { step: function () { return i >= 0 ? defs[i] : null; }, index: function () { return i; } };
+
   btn.addEventListener('click', start);
   document.getElementById('gnote').addEventListener('click', function () {
     window.__notes.anchorFromStop(defs[i], i);
@@ -951,6 +1013,8 @@ export function renderRepoView(result: DigestResult, opts: RepoViewOptions): str
     <span class="name">${escapeHtml(repoName)}</span>
     <span class="chip">${repo?.branch ? escapeHtml(repo.branch) : 'no branch'}</span>
     <span class="chip">${repo ? repo.commitCount.toLocaleString() : 0} commits</span>
+    <span class="grow"></span>
+    <button class="btn primary" id="start" type="button">▶ Take the tour</button>
   </div>
   <div class="tabs">
     <span class="tab on">Code</span>
@@ -961,7 +1025,6 @@ export function renderRepoView(result: DigestResult, opts: RepoViewOptions): str
 </div>
 
 <div class="bar">
-  <button id="start" class="btn primary" type="button">▶ Take the tour</button>
   <span class="said">${archStops > 0
     ? `${opts.steps.length} stops — ${archStops} on how the system fits together, then ${opts.steps.length - archStops} through the ${opts.itinerary.length} files that carry it.`
     : `${opts.steps.length} stops through ${opts.itinerary.length} ${opts.itinerary.length === 1 ? 'file' : 'files'} — the ones that actually carry this repo.`}</span>
@@ -971,8 +1034,9 @@ export function renderRepoView(result: DigestResult, opts: RepoViewOptions): str
 <div class="bar snapshot">
   <span class="said">
     A snapshot of <b>${repo?.head ? escapeHtml(repo.head.slice(0, 10)) : 'an uncommitted tree'}</b>${repo?.branch ? ` on ${escapeHtml(repo.branch)}` : ''},
-    taken ${escapeHtml(generatedAt.slice(0, 16).replace('T', ' '))}. Refreshing this page will never pick up new code —
-    it does not look at the repository again. Re-run <code>repo-tour tour</code> for a fresh one.
+    taken ${escapeHtml(generatedAt.slice(0, 16).replace('T', ' '))}. This file is frozen — refreshing it will never show new code,
+    new chapters, or anything else, because it does not look at the repository again and its features are baked in.
+    Re-run <code>repo-tour tour</code> for a new file, or <code>./start.sh</code> to run the app, where a refresh really does re-read the repo.
   </span>
 </div>
 
@@ -1042,6 +1106,9 @@ export function renderRepoView(result: DigestResult, opts: RepoViewOptions): str
       <div class="anchor">
         <span class="a-what a-none" id="a-what">nothing selected</span>
         <span class="a-from" id="a-from"></span>
+      </div>
+      <div class="nrow" style="margin:0 0 9px">
+        <button class="btn" id="nhere" type="button">Anchor to what I'm looking at</button>
       </div>
       <textarea id="ntext" placeholder="What did this make you think? A question, a doubt, something to check in review…"></textarea>
       <div class="nrow">

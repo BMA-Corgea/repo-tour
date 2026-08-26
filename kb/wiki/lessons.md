@@ -10,6 +10,43 @@ One entry per lesson, newest first, each citing the ticket or incident it came f
 
 ---
 
+## A control that silently declines is a broken control (T-3, 2026-08-26)
+
+Evan: **"the button for note taking doesn't do anything."** He was right, and the cause was
+a rule I had written on purpose: Save refused unless lines had already been clicked, and
+said so only by changing a small grey hint line nobody looks at. You typed a thought, hit
+the button, and nothing visible happened.
+
+The rule itself was wrong, not just its feedback. **A note about "this file" is a perfectly
+good note.** Save now anchors to what you are actually looking at — the current tour stop
+if a tour is running, otherwise the visible lines of the open file — so the button always
+does something true. There is an explicit *Anchor to what I'm looking at* control for when
+you want to see the anchor before writing, and the hint says up front what a note would
+attach to.
+
+One follow-on that only showed up under test: an anchor picked while browsing survived into
+the tour, so a note taken at stop 12 recorded "while browsing". The anchor now follows the
+tour — moving to a stop drops a stale pick — because the provenance is the entire point of
+the feature.
+
+**The general rule: if a control can refuse, it must either not be enabled or must say so
+where the eye already is. Silent refusal reads as a dead button.**
+
+---
+
+## Put the primary action in the sticky header (T-4, 2026-08-26)
+
+"Take the tour" sat in a bar under the sticky page header. Scroll at all and it slid
+underneath — the button that starts the thing the page exists for required scrolling back
+up to find. Measured: at 400px of scroll it sat at y=18 with the header occupying 0–99.
+
+It now lives in the sticky header itself, verified at 0, 400, 1200 and 4000px of scroll.
+Moving it also left the old one behind, so the page briefly shipped two `#start` buttons
+with the second one dead — now caught by a test asserting no duplicate ids, plus one
+asserting every id the client script reaches for is actually rendered.
+
+---
+
 ## A generated file cannot be refreshed — the product had to become an app (T-4, 2026-08-26)
 
 Evan: **"does my full refresh doesn't work for updating? ... essentially I need an app that
