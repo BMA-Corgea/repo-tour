@@ -40,6 +40,12 @@ export interface CodeStep {
    * to emphasise, or null for the whole-system view.
    */
   architecture?: { part: string | null };
+  /**
+   * The chapter this stop belongs to. A tour of thirty-odd stops read as one flat list is
+   * a slog you endure rather than a thing you navigate — chapters let a reader see the
+   * shape up front, start where they care, and skip what they do not.
+   */
+  chapter?: { key: string; title: string; subtitle: string };
 }
 
 function n(x: number): string {
@@ -260,8 +266,18 @@ export function buildCodeTour(result: DigestResult, opts: CodeTourOptions = {}):
         ? `Everything it imports comes from outside this repo — ${plural(ex.imports.length, 'external dependency', 'external dependencies')}.`
         : 'It imports nothing.';
 
+    const dir = path.posix.dirname(filePath);
+    const chapter = {
+      key: filePath,
+      title: path.basename(filePath),
+      subtitle: role === 'entry' ? 'where to start reading'
+        : role === 'hub' ? 'what the rest leans on'
+        : dir === '.' ? 'in the repository root' : `in ${dir}`,
+    };
+
     steps.push({
       file: filePath, startLine: 1, endLine: openingEnd,
+      chapter,
       title: path.basename(filePath),
       text: `${roleLine} ${importLine}`,
     });
@@ -281,6 +297,7 @@ export function buildCodeTour(result: DigestResult, opts: CodeTourOptions = {}):
       sections.forEach((sec, idx) => {
         steps.push({
           file: filePath, startLine: sec.start, endLine: sec.end,
+          chapter,
           title: sections.length > 1 ? `${d.title} (${idx + 1}/${sections.length})` : d.title,
           text: d.text,
         });
@@ -299,6 +316,7 @@ export function buildCodeTour(result: DigestResult, opts: CodeTourOptions = {}):
     endLine: Math.min(3, Math.max(fileByPath.get(entry.path)?.loc ?? 3, 1)),
     title: `That is the spine of ${repoName}`,
     synthetic: true,
+    chapter: { key: '@end', title: 'Where that leaves you', subtitle: 'the whole tour' },
     text:
       `${plural(itinerary.length, 'file')}, ${plural(publicCount, 'public symbol')}, out of ` +
       `${n(m.counts.files)} files in the tree. These are the ones churn, imports and structure ` +
@@ -327,9 +345,12 @@ export function buildArchitectureSteps(arch: Architecture, repoName: string, tot
     : `No imports cross between them — they either stand alone, or talk over something the ` +
       `import graph cannot see, like HTTP or a shared database.`;
 
+  const systemChapter = { key: '@system', title: 'How it fits together', subtitle: 'the whole system' };
+
   steps.push({
     file: '', startLine: 0, endLine: 0, synthetic: true,
     architecture: { part: null },
+    chapter: systemChapter,
     title: repoName,
     text:
       `Before any code: this is the shape of the system. ${plural(arch.subsystems.length, 'part')} ` +
@@ -357,6 +378,7 @@ export function buildArchitectureSteps(arch: Architecture, repoName: string, tot
     steps.push({
       file: '', startLine: 0, endLine: 0, synthetic: true,
       architecture: { part: sub.path },
+      chapter: systemChapter,
       title: sub.path,
       text:
         `${plural(sub.fileCount, 'code file')}, ${n(sub.loc)} lines, ${plural(sub.publicSymbols, 'public symbol')}` +

@@ -19,7 +19,8 @@ import { renderView } from '../src/view.js';
 import { rollup } from '../src/rollup.js';
 import { planIncremental } from '../src/incremental.js';
 import { buildTourSteps } from '../src/tour.js';
-import { buildCodeTour } from '../src/codetour.js';
+import { buildCodeTour, buildArchitectureSteps } from '../src/codetour.js';
+import { buildArchitecture } from '../src/architecture.js';
 import { renderRepoView } from '../src/repoview.js';
 import { fingerprint } from '../src/server.js';
 
@@ -721,5 +722,61 @@ describe('the app refreshes on real change, not on its own output', () => {
 
     fs.rmSync(path.join(root, 'src/newly_added.py'));
     fs.rmSync(path.join(root, '.repo-tour'), { recursive: true, force: true });
+  });
+});
+
+describe('the tour is organised in chapters', () => {
+  it('gives every stop a chapter, and keeps each chapter contiguous', async () => {
+    const r = await digest(root, { write: false });
+    const arch = buildArchitecture(r);
+    const plan = buildCodeTour(r);
+    const steps = [
+      ...buildArchitectureSteps(arch, 'fixture', r.inventory.files.length),
+      ...plan.steps,
+    ];
+
+    for (const s of steps) expect(s.chapter, `no chapter on "${s.title}"`).toBeDefined();
+
+    // A key must never come back after another key has started: chapters are ranges, and
+    // a table of contents built from a non-contiguous list would list one twice.
+    const seen = new Set<string>();
+    let last = '';
+    for (const s of steps) {
+      const key = s.chapter!.key;
+      if (key !== last) {
+        expect(seen.has(key), `chapter "${key}" resumes after another`).toBe(false);
+        seen.add(key);
+        last = key;
+      }
+    }
+  });
+
+  it('makes the system one chapter and each file its own', async () => {
+    const r = await digest(root, { write: false });
+    const arch = buildArchitecture(r);
+    const plan = buildCodeTour(r);
+
+    const archSteps = buildArchitectureSteps(arch, 'fixture', r.inventory.files.length);
+    if (archSteps.length) {
+      expect(new Set(archSteps.map((s) => s.chapter!.key)).size).toBe(1);
+    }
+    for (const file of plan.itinerary) {
+      const mine = plan.steps.filter((s) => s.file === file && !s.synthetic);
+      expect(new Set(mine.map((s) => s.chapter!.key))).toEqual(new Set([file]));
+    }
+    // The closing stop is its own chapter, not tacked onto the last file's.
+    const closing = plan.steps[plan.steps.length - 1]!;
+    expect(closing.chapter!.key).toBe('@end');
+  });
+
+  it('renders a table of contents you can start from', async () => {
+    const r = await digest(root, { write: false });
+    const plan = buildCodeTour(r);
+    const html = renderRepoView(r, { steps: plan.steps, itinerary: plan.itinerary });
+
+    expect(html).toContain('id="idletoc"');   // pickable before the tour starts
+    expect(html).toContain('id="chaphead"');  // and reachable during it
+    expect(html).toContain('id="gskip"');     // a chapter can be skipped
+    expect(html).toMatch(/Next chapter/);
   });
 });

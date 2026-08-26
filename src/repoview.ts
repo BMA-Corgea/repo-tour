@@ -243,7 +243,33 @@ tr.hit td.ln { background:var(--hl); }
 }
 #guide, #notes { display:none; }
 #guide.on, #notes.on { display:block; }
-#guide .gidle { padding:20px 18px; color:var(--muted); font-size:13px; line-height:1.6; }
+#guide .gidle { padding:18px; color:var(--muted); font-size:13px; line-height:1.6; }
+
+/* Chapters. Thirty-odd stops read as one flat list is a slog; this is the shape of the
+   tour, visible up front, so a reader can start where they care and skip what they don't. */
+.chaphead {
+  display:flex; align-items:baseline; gap:8px; width:100%; cursor:pointer;
+  background:transparent; border:0; padding:12px 16px; text-align:left;
+  border-bottom:1px solid var(--line); font:inherit; color:inherit;
+}
+.chaphead:hover { background:var(--chip); }
+.chaphead .cnum { font-size:11px; letter-spacing:0.06em; text-transform:uppercase; color:var(--muted); font-weight:600; }
+.chaphead .cname { flex:1; font-weight:600; font-size:14px; }
+.chaphead .caret { color:var(--muted); font-size:11px; }
+.toc { border-bottom:1px solid var(--line); max-height:min(46vh,420px); overflow:auto; }
+.toc.hide { display:none; }
+.toc button {
+  display:flex; gap:10px; align-items:baseline; width:100%; text-align:left;
+  background:transparent; border:0; padding:8px 16px; cursor:pointer; font:inherit; color:var(--ink);
+}
+.toc button:hover { background:var(--chip); }
+.toc button.on { background:var(--accent-soft, var(--chip)); box-shadow:inset 3px 0 0 var(--accent); }
+.toc button.done .t { color:var(--muted); }
+.toc .n { width:20px; color:var(--muted); font-size:11px; font-variant-numeric:tabular-nums; }
+.toc .t { flex:1; font-size:13px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+.toc .s { color:var(--muted); font-size:11px; font-family:-apple-system,system-ui,sans-serif; }
+.toc .c { color:var(--muted); font-size:11px; }
+.tocnote { padding:10px 16px 12px; color:var(--muted); font-size:12px; line-height:1.6; }
 #guide .gbody { padding:16px 18px 18px; }
 #guide .gstep { font-size:11px; letter-spacing:0.06em; text-transform:uppercase; color:var(--muted); font-weight:600; }
 #guide h2 {
@@ -692,7 +718,7 @@ const TOUR_BOOTSTRAP = `
     where: document.getElementById('gwhere'), text: document.getElementById('gtext'),
     bar: document.getElementById('gbar'), src: document.getElementById('gsrc'),
     back: document.getElementById('gback'), next: document.getElementById('gnext'),
-    end: document.getElementById('gend')
+    end: document.getElementById('gend'), skip: document.getElementById('gskip')
   };
   var i = -1;
 
@@ -737,7 +763,14 @@ const TOUR_BOOTSTRAP = `
       codePanel.style.display = '';
       window.__repo.open(s.file, { from: s.startLine, to: s.endLine });
     }
-    el.step.textContent = 'Stop ' + (n + 1) + ' of ' + defs.length;
+    var ci = chapterAt(n);
+    var ch = chapters[ci];
+    head.style.display = '';
+    document.getElementById('cnum').textContent = 'Ch ' + (ci + 1) + '/' + chapters.length;
+    document.getElementById('cname').textContent = ch.title;
+    toc.innerHTML = tocHtml(ci);
+    el.step.textContent = 'Stop ' + (n - ch.from + 1) + ' of ' + (ch.to - ch.from + 1) +
+      '  \u00b7  ' + (n + 1) + '/' + defs.length + ' overall';
     el.title.textContent = s.title;
     el.where.textContent = s.architecture
       ? (s.architecture.part ? 'a part of the system' : 'the system as a whole')
@@ -749,25 +782,78 @@ const TOUR_BOOTSTRAP = `
       : 'Structural facts only \u2014 this stop was not interpreted.';
     el.bar.style.width = Math.round(((n + 1) / defs.length) * 100) + '%';
     el.back.disabled = n === 0;
-    el.next.textContent = n === defs.length - 1 ? 'Finish' : 'Next';
+    el.next.textContent = n === defs.length - 1 ? 'Finish' : (n === ch.to ? 'Next chapter' : 'Next');
+    el.skip.style.display = ci === chapters.length - 1 ? 'none' : '';
   }
 
   var idle = document.getElementById('gidle');
   var body = document.getElementById('gbody');
 
-  function start() {
+  // ---- chapters: consecutive stops sharing a chapter key
+  var chapters = [];
+  defs.forEach(function (s, n) {
+    var ch = s.chapter || { key: '@flat', title: 'The tour', subtitle: '' };
+    var last = chapters[chapters.length - 1];
+    if (!last || last.key !== ch.key) chapters.push({ key: ch.key, title: ch.title, subtitle: ch.subtitle, from: n, to: n });
+    else last.to = n;
+  });
+  function chapterAt(n) {
+    for (var c = 0; c < chapters.length; c++) if (n >= chapters[c].from && n <= chapters[c].to) return c;
+    return 0;
+  }
+
+  var head = document.getElementById('chaphead');
+  var toc = document.getElementById('toc');
+  var caret = document.getElementById('caret');
+
+  function tocHtml(current) {
+    return chapters.map(function (c, ci) {
+      var count = c.to - c.from + 1;
+      var cls = ci === current ? 'on' : (current > -1 && ci < current ? 'done' : '');
+      return '<button type="button" data-ch="' + ci + '" class="' + cls + '">' +
+        '<span class="n">' + (ci + 1) + '</span>' +
+        '<span class="t">' + esc(c.title) + (c.subtitle ? ' <span class="s">' + esc(c.subtitle) + '</span>' : '') + '</span>' +
+        '<span class="c">' + count + '</span>' +
+      '</button>';
+    }).join('');
+  }
+  function esc(x) { return String(x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  document.getElementById('chapcount').textContent = chapters.length + ' chapters';
+  document.getElementById('idletoc').innerHTML = tocHtml(-1);
+  document.getElementById('idletoc').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-ch]');
+    if (b) startAt(chapters[Number(b.getAttribute('data-ch'))].from);
+  });
+
+  head.addEventListener('click', function () {
+    var hidden = toc.classList.toggle('hide');
+    caret.textContent = hidden ? '\u25be' : '\u25b4';
+  });
+  toc.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-ch]');
+    if (!b) return;
+    toc.classList.add('hide');
+    caret.textContent = '\u25be';
+    show(chapters[Number(b.getAttribute('data-ch'))].from);
+  });
+
+  function startAt(n) {
     layout.classList.add('touring');
     idle.style.display = 'none';
     body.style.display = '';
     window.openPane('guide');
-    show(0);
+    show(n);
   }
+  function start() { startAt(0); }
   function stop() {
     layout.classList.remove('touring');
     idle.style.display = '';
     body.style.display = 'none';
     archPanel.classList.remove('on');
     codePanel.style.display = '';
+    head.style.display = 'none';
+    toc.classList.add('hide');
     focusPart(null);
     var hits = document.querySelectorAll('tr.hit');
     for (var k = 0; k < hits.length; k++) hits[k].classList.remove('hit');
@@ -781,6 +867,10 @@ const TOUR_BOOTSTRAP = `
   el.next.addEventListener('click', function () { i === defs.length - 1 ? stop() : show(i + 1); });
   el.back.addEventListener('click', function () { show(i - 1); });
   el.end.addEventListener('click', stop);
+  el.skip.addEventListener('click', function () {
+    var next = chapters[chapterAt(i) + 1];
+    if (next) show(next.from); else stop();
+  });
   document.addEventListener('keydown', function (e) {
     if (i < 0) return;
     if (e.key === 'ArrowRight') { e.preventDefault(); i === defs.length - 1 ? stop() : show(i + 1); }
@@ -915,9 +1005,19 @@ export function renderRepoView(result: DigestResult, opts: RepoViewOptions): str
     </div>
 
   <div id="guide" class="on">
+    <button class="chaphead" id="chaphead" type="button" style="display:none">
+      <span class="cnum" id="cnum"></span>
+      <span class="cname" id="cname"></span>
+      <span class="caret" id="caret">▾</span>
+    </button>
+    <div class="toc hide" id="toc"></div>
     <div class="gidle" id="gidle">
-      Press <b>Take the tour</b> to be walked through this repository — the system first,
-      then the code. Or browse the tree yourself; the tour will wait.
+      <div class="tocnote" style="padding:0 0 10px">
+        This tour comes in <b id="chapcount">chapters</b>. Press <b>Take the tour</b> to start
+        at the beginning, or pick a chapter below to start there. Browsing the tree yourself
+        works too; the tour will wait.
+      </div>
+      <div id="idletoc"></div>
     </div>
     <div class="gbody" id="gbody" style="display:none">
       <div class="gstep" id="gstep"></div>
@@ -928,6 +1028,7 @@ export function renderRepoView(result: DigestResult, opts: RepoViewOptions): str
       <div class="gnav">
         <button class="btn" id="gback" type="button">Back</button>
         <button class="btn primary" id="gnext" type="button">Next</button>
+        <button class="btn" id="gskip" type="button">Skip chapter</button>
         <span class="spacer"></span>
         <button class="btn" id="gend" type="button">End tour</button>
       </div>
