@@ -274,6 +274,13 @@ tr.hit td.ln { background:var(--hl); }
 .toc .s { color:var(--muted); font-size:11px; font-family:-apple-system,system-ui,sans-serif; }
 .toc .c { color:var(--muted); font-size:11px; }
 .tocnote { padding:10px 16px 12px; color:var(--muted); font-size:12px; line-height:1.6; }
+/* The tour has to be startable from the pane a reader is already looking at. The header
+   button is right, but it is at the far edge of a wide window; this one is under their eyes. */
+.bigstart { width:100%; padding:10px 14px; font-size:14px; }
+.buildstamp {
+  margin-top:14px; padding-top:10px; border-top:1px solid var(--line);
+  color:var(--muted); font-size:11px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
 #guide .gbody { padding:16px 18px 18px; }
 #guide .gstep { font-size:11px; letter-spacing:0.06em; text-transform:uppercase; color:var(--muted); font-weight:600; }
 #guide h2 {
@@ -935,6 +942,8 @@ const TOUR_BOOTSTRAP = `
   window.__tour = { step: function () { return i >= 0 ? defs[i] : null; }, index: function () { return i; } };
 
   btn.addEventListener('click', start);
+  var bigBtn = document.getElementById('startbig');
+  if (bigBtn) bigBtn.addEventListener('click', start);
   document.getElementById('gnote').addEventListener('click', function () {
     window.__notes.anchorFromStop(defs[i], i);
   });
@@ -1088,12 +1097,13 @@ export function renderRepoView(result: DigestResult, opts: RepoViewOptions): str
     </button>
     <div class="toc hide" id="toc"></div>
     <div class="gidle" id="gidle">
-      <div class="tocnote" style="padding:0 0 10px">
-        This tour comes in <b id="chapcount">chapters</b>. Press <b>Take the tour</b> to start
-        at the beginning, or pick a chapter below to start there. Browsing the tree yourself
-        works too; the tour will wait.
+      <button class="btn primary bigstart" id="startbig" type="button">▶ Take the tour</button>
+      <div class="tocnote" style="padding:10px 0">
+        <b id="chapcount">chapters</b> — start at the beginning with the button above, or pick
+        any chapter below to start there. Browsing the tree yourself works too; the tour waits.
       </div>
       <div id="idletoc"></div>
+      <div class="buildstamp">build ${escapeHtml(generatedAt.slice(0, 16).replace('T', ' '))}</div>
     </div>
     <div class="gbody" id="gbody" style="display:none">
       <div class="gstep" id="gstep"></div>

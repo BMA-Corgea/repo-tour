@@ -826,3 +826,19 @@ describe('the page never scrolls itself', () => {
     expect(scripts).not.toMatch(/scrollIntoView\s*\(/);
   });
 });
+
+describe('the tour can be started from where the reader is looking', () => {
+  it('offers a start button inside the always-visible guide pane, not only in the header', async () => {
+    // The header button sits at the far edge of a wide window. The guide pane is the thing
+    // a reader is actually looking at when they wonder how to begin, so the tour has to be
+    // startable from there too.
+    const r = await digest(root, { write: false });
+    const plan = buildCodeTour(r);
+    const html = renderRepoView(r, { steps: plan.steps, itinerary: plan.itinerary });
+
+    expect(html).toContain('id="startbig"');
+    expect(html).toMatch(/bigBtn\.addEventListener\('click', start\)/);
+    // and a visible build stamp, so which build is open is never in question
+    expect(html).toContain('class="buildstamp"');
+  });
+});
