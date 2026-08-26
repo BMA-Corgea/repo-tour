@@ -10,6 +10,26 @@ One entry per lesson, newest first, each citing the ticket or incident it came f
 
 ---
 
+## The digest must never digest its own cache (T-1, 2026-08-26)
+
+Found by running the tool twice on its own repository during the `verify` stage — not by
+any unit test, because a unit test never runs the tool twice against a root it just wrote
+to.
+
+Run 1 writes `.repo-tour/`. Run 2 then walks that directory and inventories ~100 cache
+files as brand-new additions. The damage is not cosmetic: the incremental plan reports
+fake additions, the reuse percentage is computed against a denominator the tool invented
+(79 of 181 files → "44% reused" when the honest answer was 100%), and every parent tier is
+marked stale by files that are the tool's own output.
+
+`.repo-tour` is now in `NEVER_DESCEND`, and a regression test runs the digest twice and
+asserts 100% reuse with zero additions.
+
+**The general lesson:** any tool that writes into the tree it reads must exclude its own
+output, and the bug is invisible to a single run. Verify by running twice.
+
+---
+
 ## The import graph does NOT underdeliver on GUTS the way we assumed (T-1, 2026-08-26)
 
 The T-1 spec and handoff both carry a warning that GUTS produces "124 edges across ~1M

@@ -10,7 +10,7 @@ here and found via the reference table below.
 <!-- What is in motion right now: one line per active ticket/effort —
      what, why, where it stands, what is next. Never pruned while live. -->
 
-- **T-1** (feature) — The digest engine. Stages 1–3 BUILT and passing on branch
+- **T-1** (feature) — The digest engine: deterministic extraction with rollup and incremental re-dige… — verify
   `T-1-digest-engine` (4 commits, 19 tests green). Sitting at **auto-review**, deliberately
   not advanced: acceptance criteria 5 (rollup) and 6 (incremental driver) are still
   unbuilt, so the ticket must not drift toward `accept`. **Next:** build stage 5 (rollup)

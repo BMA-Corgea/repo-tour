@@ -12,11 +12,19 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Classification, FileRecord, Inventory, RepoRef } from './types.js';
 
-/** Directories never worth descending into. Their *presence* is still recorded as a signal. */
+/**
+ * Directories never worth descending into. Their *presence* is still recorded as a signal.
+ *
+ * `.repo-tour` is in here for a reason found by running the tool twice on its own repo:
+ * the first run writes the cache, and the second run then inventories its own output as
+ * ~100 brand-new files. A digest that digests its own cache reports fake churn, fake
+ * additions, and a reuse percentage computed against a denominator it invented.
+ */
 const NEVER_DESCEND = new Set([
   'node_modules', '.venv', 'venv', '__pycache__', '.mypy_cache', '.pytest_cache',
   '.ruff_cache', '.tox', '.next', '.nuxt', '.svelte-kit', '.turbo', '.parcel-cache',
   '.gradle', '.idea', '.vscode-test', 'site-packages', '.terraform',
+  '.repo-tour',
 ]);
 
 const LANGUAGE_BY_EXT: Record<string, string> = {

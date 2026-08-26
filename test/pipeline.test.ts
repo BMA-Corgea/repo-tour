@@ -472,6 +472,26 @@ describe('criterion 6 — incremental works', () => {
     expect(plan.deleted).toEqual([]);
   });
 
+  it('does not digest its own cache — a second run with no edits reuses everything', async () => {
+    // Found by running the tool twice on its own repo: run 1 writes .repo-tour/, and
+    // run 2 then inventoried ~100 cache files as brand-new additions.
+    const cache = path.join(root, '.repo-tour');
+    fs.rmSync(cache, { recursive: true, force: true });
+
+    const first = await digest(root, { write: true });
+    expect(fs.existsSync(cache)).toBe(true);
+
+    const second = await digest(root, { write: true });
+    expect(second.inventory.files.length).toBe(first.inventory.files.length);
+    expect(second.inventory.files.some((f) => f.path.startsWith('.repo-tour/'))).toBe(false);
+    expect(second.plan).not.toBeNull();
+    expect(second.plan!.counts.added).toBe(0);
+    expect(second.plan!.counts.recomputed).toBe(0);
+    expect(second.plan!.counts.reusePercent).toBe(100);
+
+    fs.rmSync(cache, { recursive: true, force: true });
+  });
+
   it('drops a deleted file and marks its ancestors stale', async () => {
     const first = await digest(root, { write: false });
     const prior = first.inventory.files.map((f) => ({ path: f.path, sha256: f.sha256 }));
