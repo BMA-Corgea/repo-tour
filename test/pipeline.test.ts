@@ -15,6 +15,7 @@ import { inventory } from '../src/inventory.js';
 import { extract } from '../src/extract.js';
 import { rank } from '../src/rank.js';
 import { digest } from '../src/digest.js';
+import { renderView } from '../src/view.js';
 
 let root: string;
 
@@ -340,5 +341,49 @@ describe('criterion 7 — cost is reported, not hidden', () => {
     const { manifest } = await digest(root, { write: false });
     expect(manifest.graphCoverage.totalImports).toBeGreaterThan(0);
     expect(manifest.graphCoverage.note).toMatch(/not the structure/);
+  });
+});
+
+describe('criterion 8 — inspectable by a human', () => {
+  it('renders a genuinely self-contained page: no external requests at all', async () => {
+    const result = await digest(root, { write: false });
+    const html = renderView(result);
+
+    // Any absolute URL means the page needs the network to render correctly.
+    const external = html.match(/(?:https?:)?\/\/[a-zA-Z0-9.-]+/g) ?? [];
+    expect(external).toEqual([]);
+    expect(html).not.toMatch(/<link[^>]+href=/i);
+    expect(html).not.toMatch(/<script[^>]+src=/i);
+    expect(html).not.toMatch(/fetch\(|XMLHttpRequest|WebSocket/);
+  });
+
+  it('says out loud that the digest is partial rather than implying completeness', async () => {
+    const result = await digest(root, { write: false });
+    const html = renderView(result);
+    expect(html).toMatch(/This is a partial digest/);
+    expect(html).toMatch(/4-interpret — not built/);
+    expect(html).toMatch(/not the structure/);
+  });
+
+  it('never truncates silently — a capped table says what it dropped', async () => {
+    const result = await digest(root, { write: false });
+    const capped = renderView(result, { maxRows: 3 });
+    const dropped = result.ranked.length - 3;
+    expect(capped).toMatch(/rows are not[\s\S]*?embedded/);
+    expect(capped).toContain(dropped.toLocaleString());
+  });
+
+  it('embeds every ranked row with the components that produced its score', async () => {
+    const result = await digest(root, { write: false });
+    const html = renderView(result);
+    const payload = /window\.__DIGEST__ = (\{[\s\S]*?\});/.exec(html);
+    expect(payload).not.toBeNull();
+    const data = JSON.parse(payload![1]!) as { rows: Array<Record<string, unknown>> };
+    expect(data.rows.length).toBeGreaterThan(0);
+    for (const row of data.rows) {
+      expect(row).toHaveProperty('components');
+      expect(row).toHaveProperty('signals');
+      expect(row).toHaveProperty('symbols');
+    }
   });
 });

@@ -8,7 +8,10 @@
  * complete digest.
  */
 
-import { digest } from './digest.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { digest, CACHE_DIR } from './digest.js';
+import { renderView } from './view.js';
 import type { RankedFile } from './types.js';
 
 interface Args {
@@ -17,16 +20,23 @@ interface Args {
   top: number;
   write: boolean;
   json: boolean;
+  view: string | null;
+  maxRows: number;
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { command: argv[0] ?? 'help', target: '.', top: 25, write: true, json: false };
+  const args: Args = {
+    command: argv[0] ?? 'help', target: '.', top: 25, write: true, json: false,
+    view: null, maxRows: 750,
+  };
   const rest = argv.slice(1);
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i]!;
     if (a === '--top') { args.top = Number(rest[++i] ?? 25); }
     else if (a === '--no-write') { args.write = false; }
     else if (a === '--json') { args.json = true; }
+    else if (a === '--view') { args.view = rest[++i] ?? ''; }
+    else if (a === '--max-rows') { args.maxRows = Number(rest[++i] ?? 750); }
     else if (!a.startsWith('-')) { args.target = a; }
   }
   return args;
@@ -59,7 +69,7 @@ async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
   if (args.command !== 'digest') {
-    console.log('usage: repo-tour digest <path> [--top N] [--no-write] [--json]');
+    console.log('usage: repo-tour digest <path> [--top N] [--view FILE] [--max-rows N] [--no-write] [--json]');
     process.exit(args.command === 'help' ? 0 : 1);
   }
 
@@ -107,7 +117,21 @@ async function main(): Promise<void> {
   console.log(`  tokens strong      ${padStart(String(m.cost.tokens.strong), 8)}`);
   console.log(`  wall clock         ${padStart(ms(m.cost.wallMs), 8)}   (inventory ${ms(m.cost.inventoryMs)}, extract ${ms(m.cost.extractMs)}, rank ${ms(m.cost.rankMs)})`);
   console.log(`  deep slice         ${padStart(String(m.counts.deepSlice), 8)} files would enter stage 4`);
-  console.log(`  sweep eligible     ${padStart(String(m.counts.sweepEligible), 8)} files scored above zero\n`);
+  console.log(`  sweep eligible     ${padStart(String(m.counts.sweepEligible), 8)} files scored above zero`);
+
+  // Criterion 8: a self-contained HTML view the human can open and browse.
+  const viewPath = args.view !== null && args.view !== ''
+    ? path.resolve(args.view)
+    : args.write
+      ? path.join(path.resolve(args.target), CACHE_DIR, 'view.html')
+      : null;
+  if (viewPath) {
+    fs.mkdirSync(path.dirname(viewPath), { recursive: true });
+    fs.writeFileSync(viewPath, renderView(result, { maxRows: args.maxRows }));
+    const kb = Math.round(fs.statSync(viewPath).size / 1024);
+    console.log(`\n  view               ${viewPath}  (${kb} KB, self-contained)`);
+  }
+  console.log('');
 }
 
 main().catch((err: unknown) => {

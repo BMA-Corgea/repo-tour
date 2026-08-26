@@ -9,7 +9,7 @@ here and found via the reference table below.
 
 <!-- What is in motion right now: one line per active ticket/effort —
      what, why, where it stands, what is next. Never pruned while live. -->
-- **T-1** (feature) — The digest engine: deterministic extraction with rollup and incremental re-dige… — auto-review
+- **T-1** (feature) — The digest engine: deterministic extraction with rollup and incremental re-dige… — gate
 
 
 ## Waiting on

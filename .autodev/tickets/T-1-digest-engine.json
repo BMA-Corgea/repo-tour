@@ -3,8 +3,8 @@
   "slug": "digest-engine",
   "type": "feature",
   "title": "The digest engine: deterministic extraction with rollup and incremental re-digest",
-  "stage": "auto-review",
-  "status": "in_review",
+  "stage": "build",
+  "status": "building",
   "spec": "",
   "pipeline_version": "feature@v1",
   "modifiers": [],
@@ -23,11 +23,11 @@
     "monitor"
   ],
   "passport": [
-    "2026-08-26 advanced refine → queue · refine on unrecorded",
-    "2026-08-26 advanced queue → locate · queue on claude-opus-5[1m]",
     "2026-08-26 advanced locate → plan · locate on claude-opus-5[1m]",
     "2026-08-26 advanced plan → build · plan on claude-opus-5[1m]",
-    "2026-08-26 advanced build → auto-review · build on claude-opus-5[1m]"
+    "2026-08-26 advanced build → auto-review · build on claude-opus-5[1m]",
+    "2026-08-26 advanced auto-review → gate · auto-review on claude-opus-5[1m]",
+    "2026-08-26 moved gate → build by agent:coder, attempt 1 · why: T-1 is not done: acceptance criteria 5 (rollup), 6 (incremental driver) and 8 (self-contained HTML view) are unbuilt, per .autodev/reports/T-1-plan.md. Criterion 8 is how the human judges digest quality, so the ticket must not approach the accept gate without it. Movement backward is free; the merge gate is not being cleared on partial work. · leaving: The merge decision. · next: Implement the plan: code + tests on the ticket branch."
   ],
   "assignees": {},
   "links": {},
@@ -43,7 +43,7 @@
   "overrides": {},
   "loop": {
     "validator_passed": false,
-    "attempts": 0
+    "attempts": 1
   },
   "history": [
     {
@@ -81,6 +81,18 @@
       "to": "auto-review",
       "by": "agent:coder",
       "at": "2026-08-26T17:41:23.718Z"
+    },
+    {
+      "from": "auto-review",
+      "to": "gate",
+      "by": "agent:reviewer",
+      "at": "2026-08-26T17:43:04.877Z"
+    },
+    {
+      "from": "gate",
+      "to": "build",
+      "by": "agent:coder:T-1 is not done: acceptance criteria 5 (rollup), 6 (incremental driver) and 8 (self-contained HTML view) are unbuilt, per .autodev/reports/T-1-plan.md. Criterion 8 is how the human judges digest quality, so the ticket must not approach the accept gate without it. Movement backward is free; the merge gate is not being cleared on partial work.",
+      "at": "2026-08-26T17:43:41.487Z"
     }
   ],
   "receipts": {
@@ -131,6 +143,21 @@
       "by": "agent:coder",
       "at": "2026-08-26T17:41:23.717Z",
       "model": "claude-opus-5[1m]"
+    },
+    "auto-review": {
+      "evidence": "commit a03d92a4f58e9ebe54fd763bf0ee651c19e583da on T-1-digest-engine — preflight GREEN: tsc --noEmit clean, tsc build emits 6 modules to dist/, vitest 15/15 pass, secrets scan clean, npm audit --omit=dev reports 0 production vulnerabilities. Review findings: (1) unbounded whole-file reads in inventory() — FIXED in this commit via chunked hashing, re-verified identical on GUTS; (2) 5 npm audit findings in vite/esbuild — WAIVED, dev-only transitive deps under vitest, never shipped. Generalizing findings recorded in kb/wiki/lessons.md.",
+      "kind": "other",
+      "fingerprint": "commit a03d92a4f58e9ebe54fd763bf0ee651c19e583da on T-1-digest-engine — preflight GREEN: tsc --noEmit clean, tsc build emits 6 modules to dist/, vitest 15/15 pass, secrets scan clean, npm audit --omit=dev reports 0 production vulnerabilities. Review findings: (1) unbounded whole-file reads in inventory() — FIXED in this commit via chunked hashing, re-verified identical on GUTS; (2) 5 npm audit findings in vite/esbuild — WAIVED, dev-only transitive deps under vitest, never shipped. Generalizing findings recorded in kb/wiki/lessons.md.",
+      "by": "agent:reviewer",
+      "at": "2026-08-26T17:43:04.876Z",
+      "model": "claude-opus-5[1m]"
+    }
+  },
+  "bounces": {
+    "gate": {
+      "attempts": 1,
+      "no_progress_streak": 1,
+      "last_digest": null
     }
   }
 }
