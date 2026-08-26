@@ -13,9 +13,10 @@ import path from 'node:path';
 import { digest, CACHE_DIR } from './digest.js';
 import { renderView } from './view.js';
 import { buildTourSteps } from './tour.js';
-import { buildCodeTour } from './codetour.js';
+import { buildCodeTour, buildArchitectureSteps } from './codetour.js';
+import { buildArchitecture, architectureBrief } from './architecture.js';
 import { renderRepoView } from './repoview.js';
-import { interpretStops, applyMeanings, DEFAULT_MODEL } from './interpret.js';
+import { interpretStops, applyMeanings, interpretArchitecture, DEFAULT_MODEL } from './interpret.js';
 import type { RankedFile } from './types.js';
 
 interface Args {
@@ -92,19 +93,61 @@ async function main(): Promise<void> {
   const codeTour = isTour ? buildCodeTour(result) : null;
 
   // Stage 4 — the only stage that spends tokens, and it only ever sees the itinerary.
-  let tourSteps = codeTour?.steps ?? [];
+  let tourSteps: Array<(typeof codeTour extends null ? never : NonNullable<typeof codeTour>['steps'][number]) & { interpreted?: boolean }> = [];
   let interpretCost: Awaited<ReturnType<typeof interpretStops>>['cost'] | null = null;
+  const arch = isTour ? buildArchitecture(result) : null;
+
   if (codeTour) {
+    const opts = {
+      model: args.model,
+      cachedOnly: !args.interpret,
+      onProgress: (msg: string) => console.log(`  ${msg}`),
+    };
+
+    // The system first, then the code. Both go through stage 4; the architecture call sees
+    // only the parts and the flow between them, never a file's contents.
+    const archSteps = arch
+      ? buildArchitectureSteps(arch, path.basename(m.root) || m.root, result.inventory.files.length)
+      : [];
+
+    if (arch && archSteps.length) {
+      const brief = architectureBrief(arch, path.basename(m.root) || m.root, result.inventory.files.length);
+      const { meaning, cost } = await interpretArchitecture(m.root, brief, opts);
+      if (meaning) {
+        arch.overview = meaning.overview;
+        for (const sub of arch.subsystems) sub.purpose = meaning.purposes[sub.path] ?? null;
+        for (const step of archSteps) {
+          const part = step.architecture?.part ?? null;
+          const text = part === null ? meaning.overview : meaning.purposes[part];
+          if (text) {
+            // Keep the hard numbers, lead with the explanation.
+            (step as { text: string; interpreted?: boolean }).text = `${text}\n\n${step.text}`;
+            (step as { interpreted?: boolean }).interpreted = true;
+          }
+        }
+      }
+      interpretCost = cost;
+    }
+
     const interp = await interpretStops(
-      m.root, codeTour.steps, result.inventory.files, result.extracts, result.graph.edges,
-      {
-        model: args.model,
-        cachedOnly: !args.interpret,
-        onProgress: (msg) => console.log(`  ${msg}`),
-      },
+      m.root, codeTour.steps, result.inventory.files, result.extracts, result.graph.edges, opts,
     );
-    interpretCost = interp.cost;
-    tourSteps = applyMeanings(codeTour.steps, result.inventory.files, interp.meanings);
+    if (interpretCost) {
+      interpretCost = {
+        ...interp.cost,
+        calls: interpretCost.calls + interp.cost.calls,
+        cachedStops: interpretCost.cachedStops + interp.cost.cachedStops,
+        interpretedStops: interpretCost.interpretedStops + interp.cost.interpretedStops,
+        inputTokens: interpretCost.inputTokens + interp.cost.inputTokens,
+        outputTokens: interpretCost.outputTokens + interp.cost.outputTokens,
+        usd: interpretCost.usd + interp.cost.usd,
+        failures: [...interpretCost.failures, ...interp.cost.failures],
+      };
+    } else {
+      interpretCost = interp.cost;
+    }
+
+    tourSteps = [...archSteps, ...applyMeanings(codeTour.steps, result.inventory.files, interp.meanings)];
   }
   const steps = args.command === 'inspect' ? buildTourSteps(result) : undefined;
 
@@ -180,13 +223,19 @@ async function main(): Promise<void> {
     fs.writeFileSync(
       viewPath,
       codeTour
-        ? renderRepoView(result, { steps: tourSteps, itinerary: codeTour.itinerary })
+        ? renderRepoView(result, {
+            steps: tourSteps,
+            itinerary: codeTour.itinerary,
+            architecture: arch ?? undefined,
+          })
         : renderView(result, { maxRows: args.maxRows, tour: steps }),
     );
     const kb = Math.round(fs.statSync(viewPath).size / 1024);
     console.log(`\n  view               ${viewPath}  (${kb} KB, self-contained)`);
     if (codeTour) {
-      console.log(`  tour               ${codeTour.steps.length} stops through ${codeTour.itinerary.length} files:`);
+      const archCount = tourSteps.filter((s) => s.architecture).length;
+      console.log(`  tour               ${tourSteps.length} stops — ${archCount} on the system, ${codeTour.steps.length} through ${codeTour.itinerary.length} files:`);
+      if (arch) for (const sub of arch.subsystems) console.log(`                       [part] ${sub.path}`);
       for (const f of codeTour.itinerary) console.log(`                       ${f}`);
     }
     if (steps) console.log(`  overlay            ${steps.length} steps over the metrics view`);

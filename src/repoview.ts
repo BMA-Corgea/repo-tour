@@ -14,9 +14,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { DigestResult } from './digest.js';
 import type { CodeStep } from './codetour.js';
+import type { Architecture } from './architecture.js';
 
 export interface RepoViewOptions {
   steps: Array<CodeStep & { interpreted?: boolean }>;
+  /** when present, the tour opens with the system diagram */
+  architecture?: Architecture;
   itinerary: string[];
   /** cap on embedded file count and total bytes, so the page stays one openable file */
   maxFiles?: number;
@@ -40,6 +43,90 @@ function embedJson(value: unknown): string {
 
 function readAsset(name: string): string {
   return fs.readFileSync(new URL(`../assets/${name}`, import.meta.url), 'utf8');
+}
+
+
+/**
+ * The system diagram.
+ *
+ * Rows are layers of the import graph: the pieces nothing imports sit at the top (the ways
+ * in), the pieces everything leans on sit at the bottom. That is the one thing a folder
+ * listing can never show you, so it is the thing the picture is built around.
+ *
+ * Drawn as inline SVG with a viewBox, so it scales to the pane and needs no library.
+ */
+function architectureSvg(arch: Architecture): string {
+  if (arch.subsystems.length < 2) return '';
+  const W = 1000;
+  const ROW = 132;
+  const BOX_H = 74;
+  const byPath = new Map(arch.subsystems.map((s) => [s.path, s] as const));
+
+  const pos = new Map<string, { x: number; y: number; w: number }>();
+  arch.layers.forEach((row, li) => {
+    const n = row.length;
+    const gap = 22;
+    const w = Math.max(120, Math.min(230, (W - 60 - gap * (n - 1)) / n));
+    const total = n * w + gap * (n - 1);
+    let x = (W - total) / 2;
+    for (const p of row) {
+      pos.set(p, { x, y: 30 + li * ROW, w });
+      x += w + gap;
+    }
+  });
+
+  const H = 30 + arch.layers.length * ROW;
+  const parts: string[] = [];
+
+  parts.push(
+    `<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">` +
+    `<path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>`,
+  );
+
+  // edges first, so boxes sit on top of them
+  for (const e of arch.edges) {
+    const a = pos.get(e.from);
+    const b = pos.get(e.to);
+    if (!a || !b) continue;
+    const ax = a.x + a.w / 2;
+    const bx = b.x + b.w / 2;
+    const sameRow = a.y === b.y;
+    const ay = sameRow ? a.y + BOX_H / 2 : a.y + BOX_H;
+    const by = sameRow ? b.y + BOX_H / 2 : b.y;
+    const midY = sameRow ? ay - 46 : (ay + by) / 2;
+    // A straight vertical line between two boxes in the same column passes behind every
+    // box between them and reads as an arrow going *through* things. Bow it out sideways.
+    const column = Math.abs(ax - bx) < 4;
+    const bow = column ? Math.max(a.w, b.w) / 2 + 34 : 0;
+    const d = sameRow
+      ? `M ${ax} ${ay} C ${ax - 40} ${midY}, ${bx + 40} ${midY}, ${bx} ${by}`
+      : `M ${ax} ${ay} C ${ax + bow} ${midY}, ${bx + bow} ${midY}, ${bx} ${by}`;
+    const weight = Math.min(4, 1 + Math.log2(e.count));
+    parts.push(
+      `<g class="edge" data-from="${escapeHtml(e.from)}" data-to="${escapeHtml(e.to)}">` +
+      `<path d="${d}" fill="none" stroke="currentColor" stroke-width="${weight.toFixed(1)}" marker-end="url(#ah)"/>` +
+      `<text x="${((ax + bx) / 2 + bow * 0.75).toFixed(0)}" y="${(midY - 4).toFixed(0)}" text-anchor="middle" class="ecount">${e.count}</text>` +
+      `</g>`,
+    );
+  }
+
+  for (const [p, box] of pos) {
+    const s = byPath.get(p)!;
+    const label = p.split('/').slice(-1)[0] || p;
+    const sub = `${s.fileCount} files · ${s.loc.toLocaleString()} loc`;
+    parts.push(
+      `<g class="node" data-part="${escapeHtml(p)}">` +
+      `<rect x="${box.x.toFixed(0)}" y="${box.y}" width="${box.w.toFixed(0)}" height="${BOX_H}" rx="8"/>` +
+      `<text x="${(box.x + box.w / 2).toFixed(0)}" y="${box.y + 28}" text-anchor="middle" class="nlabel">${escapeHtml(label)}</text>` +
+      `<text x="${(box.x + box.w / 2).toFixed(0)}" y="${box.y + 47}" text-anchor="middle" class="nsub">${escapeHtml(sub)}</text>` +
+      (s.kind === 'repo'
+        ? `<text x="${(box.x + box.w / 2).toFixed(0)}" y="${box.y + 63}" text-anchor="middle" class="nsub">own repo</text>`
+        : '') +
+      `</g>`,
+    );
+  }
+
+  return `<svg viewBox="0 0 ${W} ${H}" class="archsvg" role="img" aria-label="System diagram">${parts.join('')}</svg>`;
 }
 
 const STYLE = `
@@ -157,6 +244,25 @@ tr.hit td.ln { background:var(--hl); }
 #guide .gsrc { margin-top:12px; font-size:11px; color:var(--muted); }
 .progress { height:3px; background:var(--line); border-radius:2px; overflow:hidden; margin-top:10px; }
 .progress i { display:block; height:100%; background:var(--accent); transition:width .25s ease; }
+
+/* The system diagram. Rows are layers of the import graph: ways in at the top, the things
+   everything leans on at the bottom — the one thing a folder listing can never show. */
+#archpanel { display:none; }
+#archpanel.on { display:block; }
+.archwrap { padding:18px 16px; overflow:auto; max-height:calc(100vh - 210px); color:var(--muted); }
+.archsvg { width:100%; height:auto; display:block; }
+.archsvg .node rect { fill:var(--chip); stroke:var(--line); stroke-width:1.5; cursor:pointer; transition:opacity .2s, stroke .2s; }
+.archsvg .node:hover rect { stroke:var(--accent); }
+.archsvg .nlabel { fill:var(--ink); font:600 14px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+.archsvg .nsub { fill:var(--muted); font:11px -apple-system,system-ui,sans-serif; }
+.archsvg .ecount { fill:var(--muted); font:10px -apple-system,system-ui,sans-serif; }
+.archsvg .edge { color:var(--muted); opacity:.55; }
+.archsvg.focused .node { opacity:.32; }
+.archsvg.focused .node.on { opacity:1; }
+.archsvg.focused .node.on rect { stroke:var(--accent); stroke-width:2.5; }
+.archsvg.focused .edge { opacity:.12; }
+.archsvg.focused .edge.on { opacity:1; color:var(--accent); }
+.archnote { font-size:12px; margin-top:12px; }
 `;
 
 const HIGHLIGHTER = `
@@ -333,18 +439,56 @@ const TOUR_BOOTSTRAP = `
   };
   var i = -1;
 
+  var codePanel = document.getElementById('codepanel');
+  var archPanel = document.getElementById('archpanel');
+  var svg = document.querySelector('.archsvg');
+
+  function focusPart(part) {
+    if (!svg) return;
+    var nodes = svg.querySelectorAll('.node');
+    var edges = svg.querySelectorAll('.edge');
+    svg.classList.toggle('focused', !!part);
+    for (var a = 0; a < nodes.length; a++) {
+      nodes[a].classList.toggle('on', nodes[a].getAttribute('data-part') === part);
+    }
+    for (var b = 0; b < edges.length; b++) {
+      var e = edges[b];
+      e.classList.toggle('on', !!part && (e.getAttribute('data-from') === part || e.getAttribute('data-to') === part));
+    }
+  }
+
+  // Clicking a box on the diagram drops you into that part's most-weighted file.
+  if (svg) {
+    svg.addEventListener('click', function (ev) {
+      var g = ev.target.closest('.node');
+      if (!g) return;
+      var f = (window.__TOPFILE__ || {})[g.getAttribute('data-part')];
+      if (f) { archPanel.classList.remove('on'); codePanel.style.display = ''; window.__repo.open(f); }
+    });
+  }
+
   function show(n) {
     if (n < 0 || n >= defs.length) return;
     i = n;
     var s = defs[n];
-    window.__repo.open(s.file, { from: s.startLine, to: s.endLine });
+    if (s.architecture) {
+      archPanel.classList.add('on');
+      codePanel.style.display = 'none';
+      focusPart(s.architecture.part);
+    } else {
+      archPanel.classList.remove('on');
+      codePanel.style.display = '';
+      window.__repo.open(s.file, { from: s.startLine, to: s.endLine });
+    }
     el.step.textContent = 'Stop ' + (n + 1) + ' of ' + defs.length;
     el.title.textContent = s.title;
-    el.where.textContent = s.file + '  ·  lines ' + s.startLine + '\u2013' + s.endLine;
+    el.where.textContent = s.architecture
+      ? (s.architecture.part ? 'a part of the system' : 'the system as a whole')
+      : s.file + '  ·  lines ' + s.startLine + '\u2013' + s.endLine;
     el.text.textContent = s.text;
     el.text.classList.toggle('plain', !s.interpreted);
     el.src.textContent = s.interpreted
-      ? 'Written by reading these lines.'
+      ? (s.architecture ? 'Written by reading the parts and how they import each other.' : 'Written by reading these lines.')
       : 'Structural facts only \u2014 this stop was not interpreted.';
     el.bar.style.width = Math.round(((n + 1) / defs.length) * 100) + '%';
     el.back.disabled = n === 0;
@@ -354,6 +498,9 @@ const TOUR_BOOTSTRAP = `
   function start() { layout.classList.add('touring'); show(0); }
   function stop() {
     layout.classList.remove('touring');
+    archPanel.classList.remove('on');
+    codePanel.style.display = '';
+    focusPart(null);
     var hits = document.querySelectorAll('tr.hit');
     for (var k = 0; k < hits.length; k++) hits[k].classList.remove('hit');
     i = -1;
@@ -415,7 +562,13 @@ export function renderRepoView(result: DigestResult, opts: RepoViewOptions): str
   }
 
   const repo = m.repos.find((r) => r.root === '');
-  const start = opts.steps[0]?.file ?? embedded[0]?.path ?? '';
+  const start = opts.steps.find((s) => s.file)?.file ?? embedded[0]?.path ?? '';
+  const archSvg = opts.architecture ? architectureSvg(opts.architecture) : '';
+  const archStops = opts.steps.filter((s) => s.architecture).length;
+  const topFileOf: Record<string, string> = {};
+  for (const sub of opts.architecture?.subsystems ?? []) {
+    if (sub.topFiles[0]) topFileOf[sub.path] = sub.topFiles[0].path;
+  }
   const shown = embedded.length;
   const total = result.inventory.files.length;
 
@@ -447,7 +600,9 @@ export function renderRepoView(result: DigestResult, opts: RepoViewOptions): str
 
 <div class="bar">
   <button id="start" class="btn primary" type="button">▶ Take the tour</button>
-  <span class="said">${opts.steps.length} stops through ${opts.itinerary.length} ${opts.itinerary.length === 1 ? 'file' : 'files'} — the ones that actually carry this repo.</span>
+  <span class="said">${archStops > 0
+    ? `${opts.steps.length} stops — ${archStops} on how the system fits together, then ${opts.steps.length - archStops} through the ${opts.itinerary.length} files that carry it.`
+    : `${opts.steps.length} stops through ${opts.itinerary.length} ${opts.itinerary.length === 1 ? 'file' : 'files'} — the ones that actually carry this repo.`}</span>
   <span class="said">·</span>
   <span class="said">${shown.toLocaleString()} of ${total.toLocaleString()} files browsable here; generated, vendored and binary content is left out.</span>
 </div>
@@ -457,12 +612,21 @@ export function renderRepoView(result: DigestResult, opts: RepoViewOptions): str
     <h3>Files</h3>
     <div class="tree" id="tree"></div>
   </div>
-  <div class="panel">
+  <div>
+  <div class="panel" id="codepanel">
     <div class="filehead">
       <span class="crumb" id="crumb"></span>
       <span class="filemeta" id="filemeta"></span>
     </div>
     <div class="code" id="code"><div class="empty">Pick a file.</div></div>
+  </div>
+  <div class="panel" id="archpanel">
+    <h3>How this system fits together</h3>
+    <div class="archwrap">
+      ${archSvg}
+      <div class="archnote">Rows run from the parts nothing imports, at the top, down to the ones everything leans on. Arrow labels count the imports crossing each boundary. Click any box to open its most-weighted file.</div>
+    </div>
+  </div>
   </div>
 
   <div class="panel" id="guide">
@@ -486,6 +650,7 @@ export function renderRepoView(result: DigestResult, opts: RepoViewOptions): str
 
 <script>window.__REPO__ = ${embedJson({ files: embedded, start })};</script>
 <script>window.__STEPS__ = ${embedJson(opts.steps)};</script>
+<script>window.__TOPFILE__ = ${embedJson(topFileOf)};</script>
 <script>${HIGHLIGHTER}</script>
 <script>${APP}</script>
 <script>${TOUR_BOOTSTRAP}</script>

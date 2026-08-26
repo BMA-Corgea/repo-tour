@@ -6,6 +6,11 @@ verifies against reality; BUILD regenerates it at close-out.
 Regenerate with `node scripts/code-map.mjs`. Do not hand-edit; changes
 will be overwritten.
 
+## src/architecture.ts
+
+- Exports: architectureBrief, buildArchitecture
+- Imports: (none)
+
 ## src/cli.ts
 
 - Exports: (none)
@@ -13,7 +18,7 @@ will be overwritten.
 
 ## src/codetour.ts
 
-- Exports: buildCodeTour
+- Exports: buildArchitectureSteps, buildCodeTour
 - Imports: (none)
 
 ## src/digest.ts
@@ -33,7 +38,7 @@ will be overwritten.
 
 ## src/interpret.ts
 
-- Exports: DEFAULT_MODEL, PROMPT_VERSION, applyMeanings, defaultCacheDir, interpretStops, stopKey
+- Exports: DEFAULT_MODEL, PROMPT_VERSION, applyMeanings, defaultCacheDir, interpretArchitecture, interpretStops, stopKey
 - Imports: (none)
 
 ## src/inventory.ts

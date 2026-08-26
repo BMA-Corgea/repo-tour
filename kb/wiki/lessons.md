@@ -10,6 +10,32 @@ One entry per lesson, newest first, each citing the ticket or incident it came f
 
 ---
 
+## A tour made only of files teaches you files (T-1, 2026-08-26)
+
+The tour walked eight files well and left you knowing eight files. It could not tell you
+what the system WAS, because "how the pieces talk" is not visible from inside any one of
+them — and stage 5 had been rolling up directory and repo tiers since T-1 with nothing
+reading them.
+
+The architecture layer (`src/architecture.ts`) closes that. Three findings from building it:
+
+1. **Nested repositories are the best possible subsystem boundary.** A repo boundary is an
+   explicit statement by the authors that these things are separate. GUTS is eight repos and
+   no directory heuristic beats saying so.
+2. **Size a part by what it OWNS, never by its whole subtree.** Sizing from the recursive
+   tier made containers look like parts: autoSQL collapsed to `demo`/`spikes`/`ops`, hiding
+   the four real components inside `demo`, and GUTS listed its own scan root as a peer of
+   its children with 1.8M lines. Ownership by longest path prefix lets `demo` and
+   `demo/server` both be parts, with every file landing in exactly one.
+3. **A part with no edges is not an entry point.** The layering put unconnected parts in the
+   top row, which reads as "these are the ways in". They get their own row now, and the
+   narration says plainly that nothing imports them in either direction.
+
+The picture is layered by peeling the import graph — ways in at the top, foundations at the
+bottom — because that ordering is the one thing a folder listing can never show.
+
+---
+
 ## Stage 4 is the product, and there is no template that substitutes for it (T-1, 2026-08-26)
 
 Shown a tour stop on `main` that read *"A function at line 71. 95 lines. It is private to

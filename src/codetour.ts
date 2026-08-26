@@ -18,6 +18,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { DigestResult } from './digest.js';
+import type { Architecture } from './architecture.js';
 import type { RankedFile, SymbolRecord } from './types.js';
 
 export interface CodeStep {
@@ -34,6 +35,11 @@ export interface CodeStep {
    * of three import statements.
    */
   synthetic?: boolean;
+  /**
+   * An architecture stop shows the system diagram instead of a file. `part` is the piece
+   * to emphasise, or null for the whole-system view.
+   */
+  architecture?: { part: string | null };
 }
 
 function n(x: number): string {
@@ -302,4 +308,63 @@ export function buildCodeTour(result: DigestResult, opts: CodeTourOptions = {}):
   });
 
   return { steps, itinerary };
+}
+
+/**
+ * The stops that come BEFORE any code: the system, then each part of it.
+ *
+ * A tour made only of files teaches you files. This is the altitude the rollup was built
+ * for — enter at the system, understand the pieces and which way work flows, and only then
+ * descend into a function.
+ */
+export function buildArchitectureSteps(arch: Architecture, repoName: string, totalFiles: number): CodeStep[] {
+  if (arch.subsystems.length < 2) return [];
+  const steps: CodeStep[] = [];
+
+  const crossing = arch.edges.reduce((t, e) => t + e.count, 0);
+  const flow = arch.edges.length
+    ? `${plural(crossing, 'import')} cross between them, so the pieces are genuinely wired together.`
+    : `No imports cross between them — they either stand alone, or talk over something the ` +
+      `import graph cannot see, like HTTP or a shared database.`;
+
+  steps.push({
+    file: '', startLine: 0, endLine: 0, synthetic: true,
+    architecture: { part: null },
+    title: repoName,
+    text:
+      `Before any code: this is the shape of the system. ${plural(arch.subsystems.length, 'part')} ` +
+      `carry ${n(totalFiles)} files. ${flow} ` +
+      `Rows run from the pieces nothing imports — the ways in — down to the ones everything ` +
+      `leans on.` +
+      (arch.unconnected.length
+        ? ` ${plural(arch.unconnected.length, 'part')} (${arch.unconnected.map((p) => p.split('/').pop()).join(', ')}) ` +
+          `sit on their own row because no import touches them in either direction — not entry ` +
+          `points, just unconnected.`
+        : '') +
+      (arch.unassignedFiles > 0
+        ? ` ${n(arch.unassignedFiles)} files sit outside these parts and are still browsable on the left.`
+        : ''),
+  });
+
+  for (const sub of arch.subsystems) {
+    const into = arch.edges.filter((e) => e.to === sub.path);
+    const outOf = arch.edges.filter((e) => e.from === sub.path);
+    const rel = [
+      into.length ? `imported by ${into.map((e) => e.from.split('/').pop()).join(', ')}` : '',
+      outOf.length ? `imports ${outOf.map((e) => e.to.split('/').pop()).join(', ')}` : '',
+    ].filter(Boolean).join('; ');
+
+    steps.push({
+      file: '', startLine: 0, endLine: 0, synthetic: true,
+      architecture: { part: sub.path },
+      title: sub.path,
+      text:
+        `${plural(sub.fileCount, 'code file')}, ${n(sub.loc)} lines, ${plural(sub.publicSymbols, 'public symbol')}` +
+        `${sub.kind === 'repo' ? ', and its own git repository' : ''}. ` +
+        (rel ? `It is ${rel}. ` : 'Nothing in the import graph connects it to the other parts. ') +
+        (sub.topFiles.length ? `The files carrying most of its weight: ${sub.topFiles.map((f) => f.path.split('/').pop()).join(', ')}.` : ''),
+    });
+  }
+
+  return steps;
 }

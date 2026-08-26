@@ -331,3 +331,111 @@ export function applyMeanings(
     return { ...s, text: clamp(`${m.what}${why}`, 1400), interpreted: true };
   });
 }
+
+// ---------------------------------------------------------------- architecture
+
+export interface ArchitectureMeaning {
+  /** the system as a whole: what it is, how a request or a job moves through it */
+  overview: string;
+  /** part path -> what that part is for */
+  purposes: Record<string, string>;
+}
+
+const ARCH_SYSTEM = [
+  'You are explaining the SHAPE of an unfamiliar system to a developer who has never seen it.',
+  'You are given its parts, their sizes, their most-weighted files, and the import flow between them.',
+  '',
+  'Rules:',
+  '- Explain the SYSTEM, not the folder listing. What does this thing do, what are the pieces',
+  '  for, and how does work move through them? Name the direction of flow if the imports show one.',
+  '- The part names and file names are real evidence — use them.',
+  '- Where the import graph shows nothing between parts, say plainly that they may talk over',
+  '  something imports cannot see (HTTP, a queue, a shared database) rather than asserting',
+  '  they are independent.',
+  '- Plain prose, no markdown, no bullets, no headings.',
+  '- "overview": 100-160 words. Each "purpose": 25-50 words, one or two sentences.',
+  '- Never invent history or motivation you were not shown.',
+  '',
+  'Reply with ONLY this JSON shape and nothing else:',
+  '{"overview":"...","parts":[{"path":"exact path as given","purpose":"..."}]}',
+].join('\n');
+
+/** Interpret the system's shape. One call, cached on the brief's own hash. */
+export async function interpretArchitecture(
+  root: string,
+  brief: string,
+  opts: InterpretOptions = {},
+): Promise<{ meaning: ArchitectureMeaning | null; cost: InterpretCost }> {
+  const model = opts.model ?? DEFAULT_MODEL;
+  const cacheDir = opts.cacheDir ?? defaultCacheDir();
+  fs.mkdirSync(cacheDir, { recursive: true });
+
+  const cost: InterpretCost = {
+    calls: 0, cachedStops: 0, interpretedStops: 0,
+    inputTokens: 0, outputTokens: 0, usd: 0, model, failures: [],
+  };
+
+  const key = createHash('sha256').update(`arch:${PROMPT_VERSION}:${brief}`).digest('hex').slice(0, 32);
+  const cachePath = path.join(cacheDir, `${key}.json`);
+  if (fs.existsSync(cachePath)) {
+    try {
+      cost.cachedStops = 1;
+      return { meaning: JSON.parse(fs.readFileSync(cachePath, 'utf8')) as ArchitectureMeaning, cost };
+    } catch { /* re-earn it */ }
+  }
+  if (opts.cachedOnly) return { meaning: null, cost };
+
+  opts.onProgress?.('interpreting the system as a whole…');
+
+  let stdout: string;
+  try {
+    stdout = await runClaude(
+      ['-p', '--model', model, '--output-format', 'json', '--allowedTools', ''],
+      `${brief}\n\n${ARCH_SYSTEM}`, root,
+    );
+  } catch (e) {
+    cost.failures.push(`architecture: ${(e as Error).message.slice(0, 160)}`);
+    return { meaning: null, cost };
+  }
+  cost.calls = 1;
+
+  let envelope: { result?: string; usage?: { input_tokens?: number; output_tokens?: number }; total_cost_usd?: number };
+  try { envelope = JSON.parse(stdout) as typeof envelope; }
+  catch { cost.failures.push('architecture: could not parse the CLI envelope'); return { meaning: null, cost }; }
+
+  cost.inputTokens = envelope.usage?.input_tokens ?? 0;
+  cost.outputTokens = envelope.usage?.output_tokens ?? 0;
+  cost.usd = envelope.total_cost_usd ?? 0;
+
+  const raw = envelope.result ?? '';
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(raw);
+  const body = fenced ? fenced[1]! : raw;
+  const start = body.indexOf('{');
+  const end = body.lastIndexOf('}');
+  if (start === -1 || end === -1) {
+    cost.failures.push('architecture: the reply was not the JSON that was asked for');
+    return { meaning: null, cost };
+  }
+
+  try {
+    const parsed = JSON.parse(body.slice(start, end + 1)) as {
+      overview?: string;
+      parts?: Array<{ path?: string; purpose?: string }>;
+    };
+    const purposes: Record<string, string> = {};
+    for (const part of parsed.parts ?? []) {
+      if (typeof part.path === 'string' && typeof part.purpose === 'string') purposes[part.path] = part.purpose.trim();
+    }
+    const meaning: ArchitectureMeaning = { overview: (parsed.overview ?? '').trim(), purposes };
+    if (!meaning.overview) {
+      cost.failures.push('architecture: the reply had no overview');
+      return { meaning: null, cost };
+    }
+    cost.interpretedStops = 1 + Object.keys(purposes).length;
+    try { fs.writeFileSync(cachePath, JSON.stringify(meaning, null, 2)); } catch { /* costs money next time, never correctness */ }
+    return { meaning, cost };
+  } catch {
+    cost.failures.push('architecture: the JSON did not parse');
+    return { meaning: null, cost };
+  }
+}
