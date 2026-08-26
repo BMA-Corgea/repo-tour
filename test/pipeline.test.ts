@@ -634,8 +634,10 @@ describe('the tour walks CODE, not metrics', () => {
     expect(html).toContain('def run(job)');
     expect(html).toMatch(/window\.__STEPS__/);
     // The tour must never start on its own — it waits for the button.
-    expect(html).toMatch(/id="start"/);
+    expect(html).toMatch(/id="startbig"/);
     expect(html).toMatch(/btn\.addEventListener\('click', start\)/);
+    // And there is exactly ONE start control: the one in the pane you are reading.
+    expect((html.match(/▶ Take the tour/g) ?? []).length).toBe(1);
     expect(html).not.toMatch(/start\(\);\s*\}\)\(\);/);
     // The guide is a docked panel, not a floating coachmark bubble.
     expect(html).toMatch(/id="guide"/);
@@ -837,7 +839,7 @@ describe('the tour can be started from where the reader is looking', () => {
     const html = renderRepoView(r, { steps: plan.steps, itinerary: plan.itinerary });
 
     expect(html).toContain('id="startbig"');
-    expect(html).toMatch(/bigBtn\.addEventListener\('click', start\)/);
+    expect(html).toMatch(/btn\.addEventListener\('click', start\)/);
     // and a visible build stamp, so which build is open is never in question
     expect(html).toContain('class="buildstamp"');
   });

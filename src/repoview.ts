@@ -549,7 +549,7 @@ const TOUR_BOOTSTRAP = `
 (function () {
   var defs = window.__STEPS__ || [];
   var layout = document.querySelector('.layout');
-  var btn = document.getElementById('start');
+  var btn = document.getElementById('startbig');
   if (!layout) return;
 
   // --- tabs (available whether or not a tour is running)
@@ -718,8 +718,6 @@ const TOUR_BOOTSTRAP = `
   window.__tour = { step: function () { return i >= 0 ? defs[i] : null; }, index: function () { return i; } };
 
   btn.addEventListener('click', start);
-  var bigBtn = document.getElementById('startbig');
-  if (bigBtn) bigBtn.addEventListener('click', start);
   document.getElementById('gnote').addEventListener('click', function () {
     window.__notes.anchorFromStop(defs[i], i);
   });
@@ -814,7 +812,6 @@ export function renderRepoView(result: DigestResult, opts: RepoViewOptions): str
     <span class="chip">${repo ? repo.commitCount.toLocaleString() : 0} commits</span>
     <span class="grow"></span>
     ${skinPicker()}
-    <button class="btn primary" id="start" type="button">▶ Take the tour</button>
   </div>
   <div class="tabs">
     <span class="tab on">Code</span>
