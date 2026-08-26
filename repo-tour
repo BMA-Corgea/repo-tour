@@ -1,0 +1,193 @@
+#!/usr/bin/env bash
+#
+# repo-tour — top-level control script.
+#
+# Point it at a repository and it walks you through it: digest the tree, then open a
+# guided tour of what it found.
+#
+#   ./repo-tour tour   [path] [--flags]   digest a repo and open its guided tour (default)
+#   ./repo-tour digest [path] [--flags]   digest a repo and open the plain browsable view
+#   ./repo-tour open   [path]             re-open the last view WITHOUT re-digesting
+#   ./repo-tour doctor                    check node, deps and parser grammars
+#   ./repo-tour build                     compile src/ to dist/
+#   ./repo-tour test                      run the acceptance suite
+#
+# `path` defaults to the current directory. With no path and an interactive terminal,
+# `tour` and `digest` ask which repo you mean, so a double-click is a complete flow.
+#
+# There is no daemon and nothing to stop. A digest writes a `.repo-tour/` cache INTO the
+# repo it scanned — that cache is what makes a re-digest cost only the diff. Pass
+# `--no-write` to leave the target untouched, and `--view <file>` to put the page
+# somewhere else.
+
+set -uo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# ── colours (fall back to plain when not a tty) ─────────────────────────────
+if [ -t 1 ]; then
+  C_G=$'\e[32m'; C_R=$'\e[31m'; C_Y=$'\e[33m'; C_DIM=$'\e[2m'; C_B=$'\e[1m'; C_0=$'\e[0m'
+else
+  C_G=; C_R=; C_Y=; C_DIM=; C_B=; C_0=
+fi
+
+_say()  { printf '%s\n' "$*"; }
+_ok()   { printf '%s✓%s %s\n' "$C_G" "$C_0" "$*"; }
+_warn() { printf '%s!%s %s\n' "$C_Y" "$C_0" "$*"; }
+_die()  { printf '%s✗%s %s\n' "$C_R" "$C_0" "$*" >&2; exit 1; }
+
+_hyperlink() { # _hyperlink <url> <text>
+  if [ -t 1 ]; then printf '\033]8;;%s\033\\%s\033]8;;\033\\' "$1" "$2"
+  else printf '%s' "$2"; fi
+}
+
+_opener() {
+  if command -v xdg-open >/dev/null 2>&1; then echo xdg-open
+  elif command -v open >/dev/null 2>&1; then echo open
+  else echo ""; fi
+}
+
+# ── preflight ───────────────────────────────────────────────────────────────
+_need_node() {
+  command -v node >/dev/null 2>&1 || _die "node is not installed. repo-tour needs Node 20 or newer."
+  local major
+  major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null)"
+  if [ -z "$major" ] || [ "$major" -lt 20 ]; then
+    _die "node $(node -v 2>/dev/null) is too old — repo-tour needs Node 20 or newer."
+  fi
+}
+
+_need_deps() {
+  if [ ! -d "$ROOT/node_modules/web-tree-sitter" ] || [ ! -d "$ROOT/node_modules/tree-sitter-wasms" ]; then
+    _warn "dependencies are not installed yet — running npm install (one time, ~10s)"
+    ( cd "$ROOT" && npm install --no-audit --no-fund ) || _die "npm install failed."
+    _ok "dependencies installed"
+  fi
+}
+
+# Resolve the repo to work on: explicit arg, else ask, else here.
+_resolve_target() {
+  local given="${1:-}"
+  if [ -n "$given" ]; then printf '%s' "$given"; return; fi
+  if [ -t 0 ] && [ -t 1 ]; then
+    printf '%sWhich repository should I read?%s %s(Enter for the current directory)%s\n' \
+      "$C_B" "$C_0" "$C_DIM" "$C_0" >&2
+    local reply
+    read -rp "  path: " reply || true
+    # strip surrounding quotes a file-manager drag-and-drop leaves behind
+    reply="${reply%\"}"; reply="${reply#\"}"
+    reply="${reply%\'}"; reply="${reply#\'}"
+    printf '%s' "${reply:-.}"
+  else
+    printf '%s' "."
+  fi
+}
+
+_view_path() { # _view_path <target> — where the CLI drops the page by default
+  printf '%s/.repo-tour/view.html' "$(cd "$1" 2>/dev/null && pwd)"
+}
+
+_open_view() { # _open_view <file>
+  local file="$1"
+  [ -f "$file" ] || return 1
+  local op; op="$(_opener)"
+  printf '\n  %s  ' "$(_hyperlink "file://$file" "open the tour")"
+  printf '%s%s%s\n' "$C_DIM" "$file" "$C_0"
+  if [ -n "$op" ] && [ -t 1 ]; then
+    "$op" "$file" >/dev/null 2>&1 &
+    printf '  %sopening in your browser…%s\n' "$C_DIM" "$C_0"
+  fi
+}
+
+# ── commands ────────────────────────────────────────────────────────────────
+cmd_run() { # cmd_run <tour|digest> [path] [extra flags...]
+  local mode="$1"; shift
+  _need_node
+  _need_deps
+
+  local target=""
+  local -a flags=()
+  for arg in "$@"; do
+    case "$arg" in
+      -*) flags+=("$arg") ;;
+      *)  [ -z "$target" ] && target="$arg" || flags+=("$arg") ;;
+    esac
+  done
+
+  target="$(_resolve_target "$target")"
+  [ -d "$target" ] || _die "not a directory: $target"
+
+  printf '\n%srepo-tour%s %s%s%s\n' "$C_B" "$C_0" "$C_DIM" "$(cd "$target" && pwd)" "$C_0"
+  [ "$mode" = "tour" ] && printf '%sreading the whole tree, then building a tour of it. This is not fast, and is not meant to be.%s\n' "$C_DIM" "$C_0"
+
+  ( cd "$ROOT" && npx tsx src/cli.ts "$mode" "$target" "${flags[@]+"${flags[@]}"}" )
+  local rc=$?
+  [ $rc -eq 0 ] || return $rc
+
+  # --view <file> / --no-write move or suppress the page; only auto-open the default spot.
+  local suppressed=0
+  for f in "${flags[@]+"${flags[@]}"}"; do
+    case "$f" in --view|--no-write) suppressed=1 ;; esac
+  done
+  [ $suppressed -eq 0 ] && _open_view "$(_view_path "$target")"
+  return 0
+}
+
+cmd_open() {
+  local target; target="$(_resolve_target "${1:-}")"
+  local file; file="$(_view_path "$target")"
+  if ! _open_view "$file"; then
+    _die "no view at $file — run './repo-tour tour $target' first."
+  fi
+}
+
+cmd_doctor() {
+  local bad=0
+  printf '\n%srepo-tour doctor%s\n\n' "$C_B" "$C_0"
+
+  if command -v node >/dev/null 2>&1; then
+    local major; major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null)"
+    if [ -n "$major" ] && [ "$major" -ge 20 ]; then _ok "node $(node -v)"
+    else _warn "node $(node -v) — needs 20 or newer"; bad=1; fi
+  else
+    _warn "node not found"; bad=1
+  fi
+
+  command -v git >/dev/null 2>&1 && _ok "git $(git --version | awk '{print $3}')" \
+    || { _warn "git not found — churn ranking needs it"; bad=1; }
+
+  if [ -d "$ROOT/node_modules/web-tree-sitter" ]; then _ok "web-tree-sitter installed"
+  else _warn "dependencies not installed — run: npm install"; bad=1; fi
+
+  local g="$ROOT/node_modules/tree-sitter-wasms/out"
+  local missing=""
+  for lang in python javascript typescript tsx; do
+    [ -f "$g/tree-sitter-$lang.wasm" ] || missing="$missing $lang"
+  done
+  if [ -z "$missing" ]; then _ok "parser grammars: python, javascript, typescript, tsx"
+  else _warn "missing grammars:$missing"; bad=1; fi
+
+  printf '\n'
+  if [ $bad -eq 0 ]; then _ok "ready — try: ./start.sh"; else _warn "fix the above, then re-run ./repo-tour doctor"; fi
+  return $bad
+}
+
+cmd_build() { _need_node; _need_deps; ( cd "$ROOT" && npx tsc -p tsconfig.json ) && _ok "compiled to dist/"; }
+cmd_test()  { _need_node; _need_deps; ( cd "$ROOT" && npx vitest run ); }
+
+usage() {
+  sed -n '3,26p' "$ROOT/repo-tour" | sed 's/^# \{0,1\}//'
+}
+
+# ── dispatch ────────────────────────────────────────────────────────────────
+cmd="${1:-tour}"
+case "$cmd" in
+  tour)            shift || true; cmd_run tour "$@" ;;
+  digest)          shift || true; cmd_run digest "$@" ;;
+  open)            shift || true; cmd_open "$@" ;;
+  doctor)          cmd_doctor ;;
+  build)           cmd_build ;;
+  test)            cmd_test ;;
+  -h|--help|help)  usage ;;
+  -*)              cmd_run tour "$@" ;;          # ./repo-tour --top 5
+  *)               cmd_run tour "$@" ;;          # ./repo-tour ~/some/repo
+esac
