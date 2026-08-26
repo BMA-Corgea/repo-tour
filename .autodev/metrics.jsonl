@@ -3,3 +3,4 @@
 {"ts":"2026-08-26T17:39:04.510Z","kind":"stage.advanced","ticket":"T-1","from":"queue","to":"locate"}
 {"ts":"2026-08-26T17:39:31.252Z","kind":"stage.advanced","ticket":"T-1","from":"locate","to":"plan"}
 {"ts":"2026-08-26T17:40:25.450Z","kind":"stage.advanced","ticket":"T-1","from":"plan","to":"build"}
+{"ts":"2026-08-26T17:41:23.718Z","kind":"stage.advanced","ticket":"T-1","from":"build","to":"auto-review"}

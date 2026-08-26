@@ -199,10 +199,68 @@ function gitFacts(repoAbs: string): { head: string | null; branch: string | null
 }
 
 /** Null-byte probe over the first 8KB — the same test git uses to call a file binary. */
-function isBinary(buf: Buffer): boolean {
-  const n = Math.min(buf.length, 8192);
+function isBinary(buf: Buffer, len = buf.length): boolean {
+  const n = Math.min(len, 8192);
   for (let i = 0; i < n; i++) if (buf[i] === 0) return true;
   return false;
+}
+
+const CHUNK = 1024 * 1024;
+
+interface FileProbe {
+  sha256: string;
+  binary: boolean;
+  /** decoded text, capped at maxReadBytes; empty for binaries */
+  text: string;
+  truncated: boolean;
+  bytesRead: number;
+}
+
+/**
+ * Hash the WHOLE file in chunks while keeping only the first `maxReadBytes` as text.
+ *
+ * Reading whole files into memory to hash them is fine until it isn't: the target here is
+ * large repos, and a single oversized file would otherwise take the heap with it. The
+ * content hash must still cover every byte — it is the cache key that makes a rename free
+ * (spec §4), so hashing a prefix would silently collide edited files.
+ */
+function probeFile(abs: string, maxReadBytes: number): FileProbe {
+  const hash = createHash('sha256');
+  const buf = Buffer.allocUnsafe(CHUNK);
+  const kept: Buffer[] = [];
+  let keptBytes = 0;
+  let total = 0;
+  let binary = false;
+  let checkedBinary = false;
+
+  const fd = fs.openSync(abs, 'r');
+  try {
+    for (;;) {
+      const n = fs.readSync(fd, buf, 0, CHUNK, null);
+      if (n === 0) break;
+      hash.update(buf.subarray(0, n));
+      if (!checkedBinary) {
+        binary = isBinary(buf, n);
+        checkedBinary = true;
+      }
+      if (!binary && keptBytes < maxReadBytes) {
+        const want = Math.min(n, maxReadBytes - keptBytes);
+        kept.push(Buffer.from(buf.subarray(0, want)));
+        keptBytes += want;
+      }
+      total += n;
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+
+  return {
+    sha256: hash.digest('hex'),
+    binary,
+    text: binary ? '' : Buffer.concat(kept).toString('utf8'),
+    truncated: !binary && total > maxReadBytes,
+    bytesRead: total,
+  };
 }
 
 function countLines(text: string): number {
@@ -288,15 +346,14 @@ export function inventory(rootInput: string, opts: InventoryOptions = {}): Inven
       let st: fs.Stats;
       try { st = fs.statSync(abs); } catch { skipped.push({ path: relPath, reason: 'stat failed' }); continue; }
 
-      let buf: Buffer;
-      try { buf = fs.readFileSync(abs); } catch (e) {
+      let probe: FileProbe;
+      try { probe = probeFile(abs, maxReadBytes); } catch (e) {
         skipped.push({ path: relPath, reason: `unreadable: ${(e as Error).message}` });
         continue;
       }
-      bytesRead += buf.length;
+      bytesRead += probe.bytesRead;
 
-      const sha256 = createHash('sha256').update(buf).digest('hex');
-      const binary = isBinary(buf);
+      const { sha256, binary } = probe;
       const ext = path.extname(entry.name).toLowerCase();
       const language = LANGUAGE_BY_EXT[ext] ?? null;
 
@@ -308,8 +365,10 @@ export function inventory(rootInput: string, opts: InventoryOptions = {}): Inven
         continue;
       }
 
-      const tooBig = buf.length > maxReadBytes;
-      const text = tooBig ? buf.subarray(0, maxReadBytes).toString('utf8') : buf.toString('utf8');
+      const tooBig = probe.truncated;
+      const text = probe.text;
+      // -1, never a guess: a truncated file's real line count is unknown, and ranking
+      // treats -1 as zero size rather than pretending the prefix is the whole file.
       const loc = tooBig ? -1 : countLines(text);
       const head = text.slice(0, 2048);
 
