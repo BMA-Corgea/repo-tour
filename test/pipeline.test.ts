@@ -933,3 +933,48 @@ describe('a built tour survives the server restarting', () => {
     }
   });
 });
+
+describe('building is a decision, not a consequence of loading a repo', () => {
+  it('adding a repository starts nothing', async () => {
+    const { RepoTourServer } = await import('../src/server.js');
+    const own = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-choice-'));
+    try {
+      initRepo(own);
+      write(path.join(own, 'a.py'), 'def go(x):\n    """Do it."""\n    return x\n');
+      commitAll(own, 'init');
+
+      const server = new RepoTourServer({ statePath: path.join(own, 'state.json'), interpret: false });
+      expect(server.addRepo(own).ok).toBe(true);
+
+      // Loading a repository and spending minutes on it are two different decisions.
+      const listed = server.listRepos()[0]!;
+      expect(listed.running, 'adding a repo must not start a build').toBe(false);
+      expect(listed.built).toBeNull();
+    } finally {
+      fs.rmSync(own, { recursive: true, force: true });
+    }
+  });
+
+  it('but a repo that HAS been built rebuilds when the tree moves', async () => {
+    // The two behaviours share a route and must not be collapsed: never-built waits to be
+    // asked, already-built refreshes itself. That is the whole point of the app over a file.
+    const { RepoTourServer } = await import('../src/server.js');
+    const own = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-rebuild-'));
+    try {
+      initRepo(own);
+      write(path.join(own, 'a.py'), 'def go(x):\n    """Do it."""\n    return x\n');
+      commitAll(own, 'init');
+
+      const server = new RepoTourServer({ statePath: path.join(own, 'state.json'), interpret: false });
+      server.addRepo(own);
+      await server.build(own, () => {});
+      expect(server.listRepos()[0]!.current).toBe(true);
+
+      write(path.join(own, 'b.py'), 'def stop(x):\n    """Halt it."""\n    return None\n');
+      expect(server.listRepos()[0]!.current, 'an edited tree is no longer current').toBe(false);
+      expect(server.listRepos()[0]!.built, 'but the old build is still there to serve meanwhile').not.toBeNull();
+    } finally {
+      fs.rmSync(own, { recursive: true, force: true });
+    }
+  });
+});

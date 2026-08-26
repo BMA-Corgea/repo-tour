@@ -65,6 +65,19 @@ function renderedDir(repoPath: string): string {
   return path.join(repoPath, CACHE_DIR, 'rendered');
 }
 
+/**
+ * Has this repository ever been built, at any tree state?
+ *
+ * The distinction matters: a repo that has never been built should wait for someone to ask,
+ * while one that HAS been built and has since moved should rebuild on a refresh — that is
+ * the whole point of the app over a static file. Same route, two different answers.
+ */
+function hasAnyBuild(repoPath: string): boolean {
+  try {
+    return fs.readdirSync(renderedDir(repoPath)).some((f) => f.endsWith('.json'));
+  } catch { return false; }
+}
+
 function readRendered(repoPath: string, fp: string): Rendered | null {
   const dir = renderedDir(repoPath);
   try {
@@ -363,7 +376,8 @@ export class RepoTourServer {
         if (!p) return this.json(res, 400, { error: 'a path is required' });
         const added = this.addRepo(p);
         if (!added.ok) return this.json(res, 400, { error: added.error });
-        this.startJob(added.repo.path);
+        // Deliberately does NOT start a build. Loading a repository and committing minutes
+        // of work to it are two different decisions, and only one of them was made here.
         return this.json(res, 200, { repo: added.repo });
       }
 
@@ -373,7 +387,7 @@ export class RepoTourServer {
         return this.json(res, 200, { ok: true });
       }
 
-      if (route === '/api/rebuild' && req.method === 'POST') {
+      if ((route === '/api/build' || route === '/api/rebuild') && req.method === 'POST') {
         const { path: p } = JSON.parse(await this.readBody(req)) as { path?: string };
         if (!p) return this.json(res, 400, { error: 'a path is required' });
         this.cache.delete(p);
@@ -400,8 +414,14 @@ export class RepoTourServer {
         if (cached) return this.html(res, 200, cached.html);
         if (job?.state === 'running') return this.html(res, 200, building(p, job.lines));
 
-        this.startJob(p);
-        return this.html(res, 200, building(p, ['reading the tree…']));
+        // Built before, but the tree has moved: rebuild on the refresh, as asked.
+        if (hasAnyBuild(p)) {
+          this.startJob(p);
+          return this.html(res, 200, building(p, ['the repository has changed — rebuilding…']));
+        }
+
+        // Never built: wait to be asked.
+        return this.html(res, 200, notBuilt(p));
       }
 
       res.writeHead(404, { 'content-type': 'text/plain' });
@@ -525,9 +545,12 @@ function card(r){
     '<div class="top"><span class="nm">' + esc(r.name) + '</span>' + state + meta + '</div>' +
     '<div class="pth">' + esc(r.path) + '</div>' +
     '<div class="row">' +
-      '<a class="btn primary" href="/r?path=' + encodeURIComponent(r.path) + '">' +
-        (r.running ? 'Watch it build' : 'Open tour') + '</a>' +
-      '<button class="btn" data-act="rebuild">Rebuild</button>' +
+      (r.built
+        ? '<a class="btn primary" href="/r?path=' + encodeURIComponent(r.path) + '">Open tour</a>' +
+          '<button class="btn" data-act="rebuild">' + (r.current ? 'Rebuild' : 'Rebuild \u2014 repo has changed') + '</button>'
+        : r.running
+          ? '<a class="btn primary" href="/r?path=' + encodeURIComponent(r.path) + '">Watch it build</a>'
+          : '<button class="btn primary" data-act="build">Build the tour</button>') +
       '<span class="spacer"></span>' +
       '<button class="btn" data-act="remove">Remove</button>' +
     '</div>' +
@@ -575,7 +598,8 @@ document.getElementById('list').addEventListener('click', function(e){
   if (!btn) return;
   var p = btn.closest('.card').getAttribute('data-p');
   var act = btn.getAttribute('data-act');
-  fetch('/api/' + (act === 'remove' ? 'remove' : 'rebuild'),
+  if (act !== 'remove') { btn.disabled = true; btn.textContent = 'Starting…'; }
+  fetch('/api/' + (act === 'remove' ? 'remove' : act === 'build' ? 'build' : 'rebuild'),
     {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({path:p})})
     .then(refresh);
 });
@@ -634,6 +658,44 @@ function tick() {
     .catch(function () { setTimeout(tick, 2500); });
 }
 tick();
+</script>
+</body></html>`;
+}
+
+/**
+ * A repository that is loaded but has never been built.
+ *
+ * It offers the build rather than starting one. The estimate is deliberately vague and
+ * deliberately present: someone about to spend minutes deserves to know that is the shape
+ * of it before they press the button, not after.
+ */
+function notBuilt(repoPath: string): string {
+  const esc = (x: string): string => x.replace(/</g, '&lt;').replace(/"/g, '&quot;');
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${esc(path.basename(repoPath))} — not built yet</title><style>${SHELL_STYLE}</style>
+<script>${skinScript()}</script></head>
+<body>${navBar('building')}<div class="buildwrap">
+<h1>${esc(path.basename(repoPath))} has no tour yet</h1>
+<div class="sub">
+  Loading a repository and building its tour are separate decisions, so nothing has run.
+  Building reads the whole tree and writes an explanation for each stop — minutes, not
+  seconds, and it spends tokens the first time. Everything it works out is cached, so later
+  builds cost only what actually changed. You can leave the page while it runs.
+</div>
+<div class="row" style="margin-top:18px">
+  <button class="btn primary" id="go" type="button">Build the tour</button>
+  <a class="btn" href="/">← All repositories</a>
+</div>
+</div>
+<script>
+document.getElementById('go').addEventListener('click', function () {
+  var p = ${JSON.stringify(repoPath)};
+  this.disabled = true; this.textContent = 'Starting…';
+  fetch('/api/build', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: p }) })
+    .then(function () { location.replace('/r?path=' + encodeURIComponent(p)); });
+});
 </script>
 </body></html>`;
 }
