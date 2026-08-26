@@ -983,3 +983,59 @@ describe('building is a decision, not a consequence of loading a repo', () => {
     }
   });
 });
+
+describe('the landing page', () => {
+  it('serves images by exact name only', async () => {
+    const { RepoTourServer } = await import('../src/server.js');
+    const own = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-img-'));
+    try {
+      const server = new RepoTourServer({ statePath: path.join(own, 'state.json') });
+      const ask = async (url: string): Promise<number> => {
+        let status = 0;
+        const res = {
+          writeHead(code: number) { status = code; return this; },
+          end() { return this; },
+        } as unknown as import('node:http').ServerResponse;
+        await server.handler({ url, method: 'GET' } as import('node:http').IncomingMessage, res);
+        return status;
+      };
+
+      // A server sitting in front of somebody's private repositories must not hand out
+      // arbitrary paths from disk because a URL asked nicely.
+      for (const bad of [
+        '/img/../../package.json',
+        '/img/../src/server.ts',
+        '/img/%2e%2e%2fpackage.json',
+        '/img/nested/thing.jpg',
+        '/img/hero.jpg.ts',
+      ]) {
+        expect(await ask(bad), `${bad} should be refused`).toBe(404);
+      }
+    } finally {
+      fs.rmSync(own, { recursive: true, force: true });
+    }
+  });
+
+  it('credits the photographer, and works with no photograph at all', async () => {
+    const { RepoTourServer } = await import('../src/server.js');
+    const own = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-home-'));
+    try {
+      const server = new RepoTourServer({ statePath: path.join(own, 'state.json') });
+      let body = '';
+      const res = {
+        writeHead() { return this; },
+        end(chunk?: string) { if (chunk) body = chunk; return this; },
+      } as unknown as import('node:http').ServerResponse;
+      await server.handler({ url: '/', method: 'GET' } as import('node:http').IncomingMessage, res);
+
+      expect(body).toContain('Be walked through a repository');
+      // Attribution is an obligation; the credit is rendered whenever an image exists.
+      const hasImage = fs.existsSync(new URL('../assets/img/hero.jpg', import.meta.url));
+      if (hasImage) expect(body).toMatch(/class="credit"/);
+      // And the hero is a designed band either way — never a broken image.
+      expect(body).toMatch(/class="hero/);
+    } finally {
+      fs.rmSync(own, { recursive: true, force: true });
+    }
+  });
+});

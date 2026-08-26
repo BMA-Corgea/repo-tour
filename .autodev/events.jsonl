@@ -66,3 +66,9 @@
 {"ts":"2026-08-26T21:58:35.195Z","type":"session.started","model":"unrecorded","source":"payload-missing","payload_keys":["session_id","transcript_path","cwd","hook_event_name","source"]}
 {"ts":"2026-08-26T21:58:49.673Z","type":"session.started","model":"unrecorded","source":"payload-missing","payload_keys":["session_id","transcript_path","cwd","hook_event_name","source"]}
 {"ts":"2026-08-26T21:59:04.422Z","type":"session.started","model":"unrecorded","source":"payload-missing","payload_keys":["session_id","transcript_path","cwd","hook_event_name","source"]}
+{"ts":"2026-08-26T22:04:46.637Z","type":"session.started","model":"unrecorded","source":"payload-missing","payload_keys":["session_id","transcript_path","cwd","hook_event_name","source"]}
+{"ts":"2026-08-26T22:04:58.504Z","type":"session.started","model":"unrecorded","source":"payload-missing","payload_keys":["session_id","transcript_path","cwd","hook_event_name","source"]}
+{"ts":"2026-08-26T22:05:14.184Z","type":"session.started","model":"unrecorded","source":"payload-missing","payload_keys":["session_id","transcript_path","cwd","hook_event_name","source"]}
+{"ts":"2026-08-26T22:05:35.821Z","type":"session.started","model":"unrecorded","source":"payload-missing","payload_keys":["session_id","transcript_path","cwd","hook_event_name","source"]}
+{"ts":"2026-08-26T22:05:58.665Z","type":"session.started","model":"unrecorded","source":"payload-missing","payload_keys":["session_id","transcript_path","cwd","hook_event_name","source"]}
+{"ts":"2026-08-26T22:06:13.908Z","type":"session.started","model":"unrecorded","source":"payload-missing","payload_keys":["session_id","transcript_path","cwd","hook_event_name","source"]}

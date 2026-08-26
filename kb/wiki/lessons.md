@@ -105,6 +105,37 @@ screen.**
 
 ---
 
+## The right photograph for a developer tool is not a photograph of code (T-5, 2026-08-26)
+
+Evan: **"Give me some design on the landing page. It looks ugly and plain. GLP-Strong-App has
+a pexels API key."**
+
+GLP's image fetcher carries the rule that decided this: *"a wrong photograph is worse than no
+photograph — it makes the thing look automated, which is the one thing a curated library must
+not look like."* For a developer tool the obvious search is "code on a screen", and that is
+exactly the wrong photograph: it is the stock cliché that says we had nothing to say, and a
+reader who writes code all day does not need a picture of code.
+
+The queries aim at STRUCTURE AT SCALE instead — stacks, staircases, halls. What came back is a
+library in levels with a staircase cutting through it, which happens to BE the product's own
+idea: enter at the top, descend to one shelf.
+
+Three things ported from GLP's fetcher and worth keeping:
+
+- **Download, never hotlink.** A third-party CDN has no business receiving a request from a
+  page that lists the private repositories on someone's machine.
+- **Attribution met twice** — `credits.json` beside the files, and a credit line on the page.
+  Because it is an obligation it has to be legible, which over a photograph that is bright in
+  one skin and dark in another means giving it its own backdrop.
+- **Credits are data.** A run skips what it already has and collects no metadata for it, so
+  rewriting the file from one run's results yields a list that silently drops rows.
+
+The scrim is built from `var(--bg)`, so the same photograph reads warm under Titanium and cool
+under Gunmetal without a second asset — and with no image at all the band renders a token
+gradient, which is a designed state rather than a gap.
+
+---
+
 ## Styles are a swappable layer, not decoration (T-5, 2026-08-26)
 
 Evan: **"the buttons are ugly. Check out the way the GLP-Strong-App has styles that can be

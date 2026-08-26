@@ -6,6 +6,11 @@ verifies against reality; BUILD regenerates it at close-out.
 Regenerate with `node scripts/code-map.mjs`. Do not hand-edit; changes
 will be overwritten.
 
+## scripts/fetch-images.mjs
+
+- Exports: (none)
+- Imports: (none)
+
 ## src/architecture.ts
 
 - Exports: architectureBrief, buildArchitecture

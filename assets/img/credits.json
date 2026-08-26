@@ -1,0 +1,20 @@
+[
+  {
+    "slug": "hero",
+    "query": "library staircase",
+    "photographer": "mehmetakifarts",
+    "photographerUrl": "https://www.pexels.com/@mehmetakifarts",
+    "pageUrl": "https://www.pexels.com/photo/modern-istanbul-library-interior-with-bookshelves-37330364/",
+    "avgColor": "#876C5B",
+    "file": "hero.jpg"
+  },
+  {
+    "slug": "hero-alt",
+    "query": "brutalist architecture",
+    "photographer": "Steve Pancrate",
+    "photographerUrl": "https://www.pexels.com/@steve-pancrate-1746203",
+    "pageUrl": "https://www.pexels.com/photo/a-concrete-building-under-the-blue-sky-4328661/",
+    "avgColor": "#405455",
+    "file": "hero-alt.jpg"
+  }
+]

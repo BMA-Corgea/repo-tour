@@ -122,6 +122,24 @@ interface Job {
   startedAt: number;
 }
 
+function assetsImgDir(): string {
+  return path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'assets', 'img');
+}
+
+/** The photographer, for the credit line. Absent images are a designed state, not a gap. */
+function heroCredit(): { photographer: string; url: string } | null {
+  try {
+    const credits = JSON.parse(fs.readFileSync(path.join(assetsImgDir(), 'credits.json'), 'utf8')) as
+      Array<{ slug: string; photographer: string; pageUrl: string }>;
+    const hero = credits.find((c) => c.slug === 'hero');
+    return hero ? { photographer: hero.photographer, url: hero.pageUrl } : null;
+  } catch { return null; }
+}
+
+function hasHero(): boolean {
+  return fs.existsSync(path.join(assetsImgDir(), 'hero.jpg'));
+}
+
 function git(repoPath: string, args: string[]): string | null {
   try {
     return execFileSync('git', ['-C', repoPath, ...args], {
@@ -367,6 +385,24 @@ export class RepoTourServer {
     try {
       if (route === '/') return this.html(res, 200, renderHome());
 
+      // Images only, by exact name. A server that hands out arbitrary paths from disk while
+      // sitting in front of someone's private repositories is not a convenience worth having.
+      if (route.startsWith('/img/')) {
+        const name = route.slice('/img/'.length);
+        if (!/^[a-z0-9-]+\.jpg$/.test(name)) { res.writeHead(404).end(); return; }
+        const file = path.join(assetsImgDir(), name);
+        try {
+          const bytes = fs.readFileSync(file);
+          res.writeHead(200, {
+            'content-type': 'image/jpeg',
+            'content-length': bytes.length,
+            'cache-control': 'public, max-age=86400',
+          });
+          res.end(bytes);
+        } catch { res.writeHead(404).end(); }
+        return;
+      }
+
       if (route === '/api/version') return this.json(res, 200, { bootId: this.bootId });
 
       if (route === '/api/repos') return this.json(res, 200, { repos: this.listRepos() });
@@ -492,6 +528,104 @@ a{color:var(--accent)}
 .elapsed{color:var(--muted);font-size:12px;margin-top:8px}
 .spin{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--accent);margin-right:8px;animation:pulse 1.2s ease-in-out infinite}
 @keyframes pulse{0%,100%{opacity:.25}50%{opacity:1}}
+
+/* ── the hero ──────────────────────────────────────────────────────────────────────────────
+   The photograph is a library in levels with a staircase through it, which is the product's
+   own idea: enter at the top, descend to one shelf. It sits UNDER a scrim built from the
+   page's own ground colour, so the band reads as part of the page in every skin rather than
+   as a picture pasted onto it — and the type stays legible on light skins and dark alike.
+   With no image the same band renders as a token gradient: a designed state, not a gap. */
+.hero{position:relative;overflow:hidden;border-bottom:1px solid var(--line);background:var(--bg)}
+.hero::before{
+  content:'';position:absolute;inset:0;
+  background:linear-gradient(115deg,var(--accent-soft),transparent 60%),var(--chip);
+}
+.hero.hasimg::before{
+  background-image:url('/img/hero.jpg');
+  background-size:cover;background-position:center 38%;
+  filter:saturate(.72);
+}
+/* the scrim: opaque where the words are, clearing toward the far edge */
+.hero::after{
+  content:'';position:absolute;inset:0;
+  background:linear-gradient(100deg,var(--bg) 0%,var(--bg) 34%,color-mix(in srgb,var(--bg) 82%,transparent) 52%,color-mix(in srgb,var(--bg) 42%,transparent) 78%,color-mix(in srgb,var(--bg) 20%,transparent) 100%);
+}
+.hero-inner{position:relative;z-index:1;max-width:1040px;margin:0 auto;padding:64px 20px 56px}
+.kicker{
+  margin:0 0 12px;font-size:11px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--accent);font-weight:700
+}
+.hero h1{
+  margin:0 0 14px;font-size:clamp(26px,3.4vw,40px);line-height:1.16;
+  letter-spacing:-.022em;font-weight:700;max-width:19ch
+}
+.lede{margin:0 0 26px;max-width:56ch;color:var(--muted);font-size:15px;line-height:1.65}
+.addbar{display:flex;gap:8px;flex-wrap:wrap;max-width:640px}
+.addbar input[type=text]{flex:1;min-width:260px;font-size:14px;padding:10px 13px}
+.addbar .btn{padding:10px 18px;font-size:14px}
+.credit{
+  position:absolute;right:10px;bottom:9px;z-index:1;font-size:10px;
+  color:var(--ink);text-decoration:none;
+  padding:3px 8px;border-radius:999px;
+  /* Attribution is an obligation, so it has to be READABLE — over a photograph that is
+     bright in one skin and dark in another, only its own backdrop can guarantee that. */
+  background:color-mix(in srgb,var(--bg) 78%,transparent);
+  border:1px solid color-mix(in srgb,var(--line) 60%,transparent);
+  opacity:.8
+}
+.credit:hover{opacity:1;border-color:var(--accent)}
+@media (max-width:700px){ .hero::after{background:linear-gradient(180deg,color-mix(in srgb,var(--bg) 72%,transparent),var(--bg) 70%)} .hero-inner{padding:40px 20px 36px} }
+
+/* ── the list ──────────────────────────────────────────────────────────────────────────── */
+.wrap{max-width:1040px;margin:0 auto;padding:34px 20px 80px}
+.secthead{display:flex;align-items:baseline;gap:10px;margin-bottom:14px}
+.secthead h2{margin:0;font-size:13px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);font-weight:600}
+
+.card{
+  background:var(--bg);border:1px solid var(--line);border-radius:10px;
+  padding:16px 18px;margin-bottom:12px;transition:border-color .14s ease,transform .1s ease
+}
+.card:hover{border-color:var(--btn-edge-hover);transform:translateY(-1px)}
+.cardtop{display:flex;align-items:flex-start;gap:14px;flex-wrap:wrap}
+.ident{flex:1;min-width:0}
+.card h3{margin:0 0 3px;font-size:17px;font-weight:600;letter-spacing:-.01em}
+.pth{
+  color:var(--muted);font-size:12px;word-break:break-all;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace
+}
+.status{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--muted);white-space:nowrap}
+.dot{width:7px;height:7px;border-radius:50%;flex:none;background:var(--muted)}
+.dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)}
+.dot.work{background:var(--accent);animation:pulse 1.2s ease-in-out infinite}
+.dot.idle{background:transparent;border:1px solid var(--muted)}
+.meta{display:flex;gap:14px;flex-wrap:wrap;margin:11px 0 0;color:var(--muted);font-size:12px}
+.meta span{position:relative}
+.meta span+span::before{content:'·';position:absolute;left:-9px;opacity:.6}
+.actions{display:flex;gap:8px;align-items:center;margin-top:14px;flex-wrap:wrap}
+.actions .spacer{flex:1}
+.actions .btn{text-decoration:none}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--muted)}
+.btn.ghost:hover{background:var(--btn-bg);border-color:var(--btn-edge);color:var(--ink)}
+.log{
+  font:11px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--muted);
+  margin:10px 0 0;white-space:pre-wrap
+}
+.log:empty{display:none}
+
+.empty-card{
+  border:1px dashed var(--line);border-radius:10px;padding:26px 22px;background:var(--bg)
+}
+.empty-card h3{margin:0 0 8px;font-size:16px}
+.empty-card p{margin:0 0 8px;color:var(--muted);font-size:13px;line-height:1.65;max-width:62ch}
+.err{color:#cf222e;font-size:13px;margin:10px 0 0;min-height:1em}
+.empty{color:var(--muted)}
+code{background:var(--chip);padding:1px 6px;border-radius:4px;font-size:12px}
+footer{margin-top:42px;padding-top:22px;border-top:1px solid var(--line)}
+.notegrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:20px}
+.notegrid div{color:var(--muted);font-size:12.5px;line-height:1.7}
+.notegrid b{color:var(--ink);font-weight:600}
+.said{color:var(--muted);font-size:12px}
+a{color:var(--accent)}
 `;
 
 /**
@@ -511,96 +645,161 @@ function navBar(here: 'home' | 'building'): string {
 }
 
 function renderHome(): string {
+  const credit = heroCredit();
+  const hero = hasHero();
+
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>repo-tour</title><style>${SHELL_STYLE}</style><script>${skinScript()}</script></head>
-<body>${navBar('home')}<div class="wrap">
-<h1>repo-tour</h1>
-<div class="sub">Load a repository and it stays loaded. Open its tour and refresh whenever you like — the page re-reads the repo, so what you see is the code as it is now.</div>
+<title>repo-tour</title><style>${SHELL_STYLE}</style>
+<script>${skinScript()}</script></head>
+<body>${navBar('home')}
 
-<div class="addbar">
-  <input type="text" id="p" placeholder="/path/to/a/repository" spellcheck="false">
-  <button class="btn primary" id="add" type="button">Load repository</button>
-</div>
-<div class="err" id="err"></div>
-<div id="list"><p class="empty">Loading…</p></div>
+<header class="hero${hero ? ' hasimg' : ''}">
+  <div class="hero-inner">
+    <p class="kicker">Read an unfamiliar codebase</p>
+    <h1>Be walked through a repository<br>instead of opening it cold.</h1>
+    <p class="lede">
+      repo-tour reads the whole tree, works out which few files actually carry it, and builds a
+      guided tour — the system first, then the code, with the reasoning written by reading the
+      lines it points at.
+    </p>
 
-<footer>
-  Repositories stay loaded between restarts. Opening a tour rebuilds it only when the repo
-  has actually moved — HEAD or the working tree — and a rebuild reuses every unchanged file
-  and every already-written explanation, so an edit costs one file's worth of work.
-</footer>
-</div>
+    <form class="addbar" id="addform" onsubmit="return false">
+      <input type="text" id="p" placeholder="/path/to/a/repository" spellcheck="false" autocomplete="off">
+      <button class="btn primary" id="add" type="submit">Load repository</button>
+    </form>
+    <p class="err" id="err"></p>
+  </div>
+  ${credit ? `<a class="credit" href="${credit.url}" target="_blank" rel="noreferrer">Photo — ${credit.photographer.replace(/</g, '&lt;')}</a>` : ''}
+</header>
+
+<main class="wrap">
+  <div class="secthead">
+    <h2>Your repositories</h2>
+    <span class="said" id="count"></span>
+  </div>
+  <div id="list"><p class="empty">Loading…</p></div>
+
+  <footer>
+    <div class="notegrid">
+      <div><b>Loading is not building.</b> A repository you add sits there until you ask for a
+        tour. The first build reads the tree and writes an explanation for every stop — minutes,
+        not seconds.</div>
+      <div><b>Then it stays cheap.</b> Every file and every explanation is cached by content, so
+        a rebuild after an edit costs one file's worth of work.</div>
+      <div><b>Refresh means refresh.</b> Open a tour and reload it whenever — the server re-reads
+        the repository, so what you are looking at is the code as it is now.</div>
+    </div>
+  </footer>
+</main>
+
 <script>
 var timers = {};
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 
-function card(r){
-  var state = r.running ? '<span class="tag">building…</span>'
-    : r.built ? (r.current ? '<span class="tag ok">up to date</span>' : '<span class="tag stale">repo has changed</span>')
-    : '<span class="tag">not built yet</span>';
-  var meta = r.built ? '<span class="tag">' + r.built.stops + ' stops</span><span class="tag">' + r.built.files.length + ' files</span>' : '';
-  return '<div class="card" data-p="' + esc(r.path) + '">' +
-    '<div class="top"><span class="nm">' + esc(r.name) + '</span>' + state + meta + '</div>' +
-    '<div class="pth">' + esc(r.path) + '</div>' +
-    '<div class="row">' +
-      (r.built
-        ? '<a class="btn primary" href="/r?path=' + encodeURIComponent(r.path) + '">Open tour</a>' +
-          '<button class="btn" data-act="rebuild">' + (r.current ? 'Rebuild' : 'Rebuild \u2014 repo has changed') + '</button>'
-        : r.running
-          ? '<a class="btn primary" href="/r?path=' + encodeURIComponent(r.path) + '">Watch it build</a>'
-          : '<button class="btn primary" data-act="build">Build the tour</button>') +
-      '<span class="spacer"></span>' +
-      '<button class="btn" data-act="remove">Remove</button>' +
-    '</div>' +
-    '<div class="log" data-log></div>' +
-  '</div>';
+function ago(iso) {
+  if (!iso) return '';
+  var m = Math.round((Date.now() - Date.parse(iso)) / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return m + ' min ago';
+  var h = Math.round(m / 60);
+  if (h < 24) return h + (h === 1 ? ' hour ago' : ' hours ago');
+  var d = Math.round(h / 24);
+  return d + (d === 1 ? ' day ago' : ' days ago');
 }
 
-function poll(p, el){
+function card(r) {
+  var dot, state;
+  if (r.running)      { dot = 'work'; state = 'building'; }
+  else if (!r.built)  { dot = 'idle'; state = 'no tour yet'; }
+  else if (r.current) { dot = 'ok';   state = 'up to date'; }
+  else                { dot = 'warn'; state = 'repo has changed'; }
+
+  var meta = r.built
+    ? '<span>' + r.built.stops + ' stops</span><span>' + r.built.files.length + ' files</span><span>built ' + esc(ago(r.built.builtAt)) + '</span>'
+    : '<span>nothing built yet</span>';
+
+  var actions = r.built
+    ? '<a class="btn primary" href="/r?path=' + encodeURIComponent(r.path) + '">Open tour</a>' +
+      '<button class="btn" data-act="rebuild">' + (r.current ? 'Rebuild' : 'Rebuild for the new code') + '</button>'
+    : r.running
+      ? '<a class="btn primary" href="/r?path=' + encodeURIComponent(r.path) + '">Watch it build</a>'
+      : '<button class="btn primary" data-act="build">Build the tour</button>';
+
+  return '<article class="card" data-p="' + esc(r.path) + '">' +
+    '<div class="cardtop">' +
+      '<div class="ident">' +
+        '<h3>' + esc(r.name) + '</h3>' +
+        '<div class="pth">' + esc(r.path) + '</div>' +
+      '</div>' +
+      '<div class="status"><i class="dot ' + dot + '"></i>' + state + '</div>' +
+    '</div>' +
+    '<div class="meta">' + meta + '</div>' +
+    '<div class="actions">' + actions +
+      '<span class="spacer"></span>' +
+      '<button class="btn ghost" data-act="remove" title="Remove from this list">Remove</button>' +
+    '</div>' +
+    '<pre class="log" data-log></pre>' +
+  '</article>';
+}
+
+function poll(p, el) {
   clearInterval(timers[p]);
-  timers[p] = setInterval(function(){
-    fetch('/api/job?path=' + encodeURIComponent(p)).then(function(r){return r.json();}).then(function(j){
+  timers[p] = setInterval(function () {
+    fetch('/api/job?path=' + encodeURIComponent(p)).then(function (r) { return r.json(); }).then(function (j) {
       el.textContent = (j.lines || []).join('\\n');
       if (j.state !== 'running') { clearInterval(timers[p]); refresh(); }
     });
   }, 900);
 }
 
-function refresh(){
-  fetch('/api/repos').then(function(r){return r.json();}).then(function(d){
+function refresh() {
+  fetch('/api/repos').then(function (r) { return r.json(); }).then(function (d) {
     var list = document.getElementById('list');
-    if (!d.repos.length) { list.innerHTML = '<p class="empty">No repositories loaded yet. Paste a path above.</p>'; return; }
+    document.getElementById('count').textContent =
+      d.repos.length ? d.repos.length + (d.repos.length === 1 ? ' loaded' : ' loaded') : '';
+    if (!d.repos.length) {
+      list.innerHTML =
+        '<div class="empty-card">' +
+          '<h3>Nothing loaded yet</h3>' +
+          '<p>Paste the path to a repository above — anything with source in it. It does not have to ' +
+          'be a git repository, though churn is one of the signals used to work out what matters, so ' +
+          'one with history gets a better tour.</p>' +
+          '<p class="said">Nothing is built until you ask for it.</p>' +
+        '</div>';
+      return;
+    }
     list.innerHTML = d.repos.map(card).join('');
-    d.repos.forEach(function(r){
+    d.repos.forEach(function (r) {
       if (r.running) poll(r.path, list.querySelector('[data-p="' + CSS.escape(r.path) + '"] [data-log]'));
     });
   });
 }
 
-document.getElementById('add').addEventListener('click', function(){
+function add() {
   var p = document.getElementById('p').value.trim();
   if (!p) return;
   document.getElementById('err').textContent = '';
-  fetch('/api/add', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({path:p})})
-    .then(function(r){return r.json();})
-    .then(function(d){
+  fetch('/api/add', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: p }) })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
       if (d.error) { document.getElementById('err').textContent = d.error; return; }
       document.getElementById('p').value = '';
       refresh();
     });
-});
-document.getElementById('p').addEventListener('keydown', function(e){ if (e.key === 'Enter') document.getElementById('add').click(); });
+}
+document.getElementById('add').addEventListener('click', add);
+document.getElementById('addform').addEventListener('submit', add);
 
-document.getElementById('list').addEventListener('click', function(e){
+document.getElementById('list').addEventListener('click', function (e) {
   var btn = e.target.closest('[data-act]');
   if (!btn) return;
   var p = btn.closest('.card').getAttribute('data-p');
   var act = btn.getAttribute('data-act');
   if (act !== 'remove') { btn.disabled = true; btn.textContent = 'Starting…'; }
   fetch('/api/' + (act === 'remove' ? 'remove' : act === 'build' ? 'build' : 'rebuild'),
-    {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({path:p})})
+    { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: p }) })
     .then(refresh);
 });
 
