@@ -170,15 +170,14 @@ body {
 .tab.on { border-bottom-color:#fd8c73; font-weight:600; }
 .tab.off { color:var(--muted); }
 .layout {
-  display:grid; grid-template-columns:270px minmax(0,1fr); gap:16px;
+  display:grid; grid-template-columns:270px minmax(0,1fr) 400px; gap:16px;
   padding:16px 20px 40px; align-items:start;
 }
-.layout.touring { grid-template-columns:270px minmax(0,1fr) 400px; }
-@media (max-width:1200px) { .layout.touring { grid-template-columns:minmax(0,1fr) 380px; } .layout.touring .files { display:none; } }
+@media (max-width:1240px) { .layout { grid-template-columns:minmax(0,1fr) 380px; } .layout .files { display:none; } }
 @media (max-width:900px) {
-  .layout, .layout.touring { grid-template-columns:minmax(0,1fr); }
+  .layout { grid-template-columns:minmax(0,1fr); }
   .tree { max-height:220px; }
-  .layout.touring .files { display:block; }
+  .layout .files { display:block; }
 }
 .panel { background:var(--bg); border:1px solid var(--line); border-radius:6px; overflow:hidden; }
 .panel > h3 {
@@ -226,10 +225,22 @@ tr.hit td.ln { background:var(--hl); }
 .btn:hover { filter:brightness(1.06); }
 .said { color:var(--muted); font-size:12px; }
 
-/* The guide is DOCKED, not floating. An explanation worth reading needs a column, not a
-   tooltip — and a docked panel leaves the code fully visible and scrollable beside it. */
-#guide { display:none; position:sticky; top:96px; }
-.layout.touring #guide { display:block; }
+/* The side column is DOCKED, not floating. An explanation worth reading needs a column,
+   not a tooltip — and a docked panel leaves the code fully visible beside it. */
+#side { position:sticky; top:96px; }
+.tabsrow { display:flex; border-bottom:1px solid var(--line); }
+.stab {
+  font:inherit; font-size:13px; font-weight:500; padding:10px 14px; cursor:pointer;
+  background:transparent; border:0; border-bottom:2px solid transparent; color:var(--muted);
+}
+.stab.on { color:var(--ink); font-weight:600; border-bottom-color:#fd8c73; }
+.stab .pill {
+  display:inline-block; min-width:18px; padding:0 5px; margin-left:5px; border-radius:9px;
+  background:var(--chip); color:var(--ink); font-size:11px; font-weight:600;
+}
+#guide, #notes { display:none; }
+#guide.on, #notes.on { display:block; }
+#guide .gidle { padding:20px 18px; color:var(--muted); font-size:13px; line-height:1.6; }
 #guide .gbody { padding:16px 18px 18px; }
 #guide .gstep { font-size:11px; letter-spacing:0.06em; text-transform:uppercase; color:var(--muted); font-weight:600; }
 #guide h2 {
@@ -263,6 +274,46 @@ tr.hit td.ln { background:var(--hl); }
 .archsvg.focused .edge { opacity:.12; }
 .archsvg.focused .edge.on { opacity:1; color:var(--accent); }
 .archnote { font-size:12px; margin-top:12px; }
+
+/* Notes. Every note remembers the stop that provoked it — that provenance is the whole
+   point: a review comment that can say WHICH explanation prompted the question is a
+   different kind of comment from "looks good to me". */
+#notes .nbody { padding:14px 16px 16px; }
+.anchor {
+  font-size:12px; padding:8px 10px; border:1px solid var(--line); border-radius:6px;
+  background:var(--canvas); margin-bottom:10px; display:flex; gap:8px; align-items:baseline;
+}
+.anchor .a-what { flex:1; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:var(--ink); }
+.anchor .a-none { color:var(--muted); font-style:italic; font-family:inherit; }
+.anchor .a-from { color:var(--muted); }
+#ntext {
+  width:100%; min-height:88px; resize:vertical; font:inherit; font-size:13px; line-height:1.55;
+  padding:9px 11px; border-radius:6px; border:1px solid var(--line);
+  background:var(--bg); color:var(--ink);
+}
+.nrow { display:flex; gap:8px; align-items:center; margin-top:9px; flex-wrap:wrap; }
+.nrow .spacer { flex:1; }
+.nlist { margin-top:16px; border-top:1px solid var(--line); max-height:44vh; overflow:auto; }
+.note { padding:11px 0; border-bottom:1px solid var(--line); }
+.note:last-child { border-bottom:0; }
+.note .prov { font-size:11px; color:var(--muted); margin-bottom:5px; }
+.note .prov b { color:var(--accent); font-weight:600; cursor:pointer; }
+.note .prov b:hover { text-decoration:underline; }
+.note .quote {
+  font:11px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:var(--muted);
+  border-left:2px solid var(--line); padding-left:8px; margin:0 0 6px; white-space:pre-wrap;
+  overflow:hidden; text-overflow:ellipsis;
+}
+.note .body { font-size:13px; line-height:1.55; white-space:pre-wrap; }
+.note .del { float:right; cursor:pointer; color:var(--muted); font-size:14px; line-height:1; border:0; background:none; }
+.note .del:hover { color:#cf222e; }
+.nempty { color:var(--muted); font-size:13px; line-height:1.6; padding:14px 0 4px; }
+
+/* Clicking a line number anchors a note to it; shift-click extends the range. */
+td.gut { cursor:pointer; }
+td.gut:hover { color:var(--accent); text-decoration:underline; }
+tr.sel td.gut { background:var(--accent); color:#fff; }
+tr.sel td.ln { background:color-mix(in srgb, var(--accent) 12%, transparent); }
 `;
 
 const HIGHLIGHTER = `
@@ -418,8 +469,189 @@ const APP = `
     return rangeEl;
   }
 
-  window.__repo = { open: open, mark: mark };
+  // Clicking a line number anchors a note to it; shift-click extends the range.
+  var selFrom = null, selTo = null;
+  function paintSel() {
+    var was = codeEl.querySelectorAll('tr.sel');
+    for (var i = 0; i < was.length; i++) was[i].classList.remove('sel');
+    if (selFrom == null) return;
+    for (var L = Math.min(selFrom, selTo); L <= Math.max(selFrom, selTo); L++) {
+      var tr = document.getElementById('L' + L);
+      if (tr) tr.classList.add('sel');
+    }
+  }
+  codeEl.addEventListener('click', function (e) {
+    var gut = e.target.closest('td.gut');
+    if (!gut) return;
+    var line = Number(gut.textContent.trim());
+    if (!line) return;
+    if (e.shiftKey && selFrom != null) selTo = line;
+    else { selFrom = line; selTo = line; }
+    paintSel();
+    window.__notes.anchorFromSelection(current, Math.min(selFrom, selTo), Math.max(selFrom, selTo));
+  });
+  function clearSel() { selFrom = null; selTo = null; paintSel(); }
+
+  window.__repo = {
+    open: open, mark: mark, clearSel: clearSel,
+    current: function () { return current; },
+    lineText: function (file, from, to) {
+      var f = byPath[file];
+      if (!f) return '';
+      return f.text.split(/\\r?\\n/).slice(from - 1, Math.min(to, from + 2)).join('\\n');
+    }
+  };
   open(D.start);
+})();
+`;
+
+
+const NOTES = `
+(function () {
+  var R = window.__REPO__ || {};
+  var repo = R.repo || { name: 'repo', head: null };
+  var KEY = 'repotour:notes:' + repo.name + ':' + (repo.head || 'nohead');
+
+  var el = {
+    what: document.getElementById('a-what'), from: document.getElementById('a-from'),
+    text: document.getElementById('ntext'), save: document.getElementById('nsave'),
+    clear: document.getElementById('nclear'), list: document.getElementById('nlist'),
+    count: document.getElementById('ncount'), hint: document.getElementById('nhint'),
+    copy: document.getElementById('ncopy'), dl: document.getElementById('ndl'), dlj: document.getElementById('ndlj')
+  };
+
+  var notes = [];
+  // localStorage can throw outright (private windows, blocked site data). Notes are worth
+  // keeping but never worth breaking the page for.
+  try { notes = JSON.parse(localStorage.getItem(KEY) || '[]'); } catch (e) { notes = []; }
+  function persist() { try { localStorage.setItem(KEY, JSON.stringify(notes)); } catch (e) {} }
+
+  var anchor = null;
+
+  function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  function showAnchor() {
+    if (!anchor) {
+      el.what.textContent = 'nothing selected';
+      el.what.classList.add('a-none');
+      el.from.textContent = '';
+      el.hint.textContent = 'click a line number to anchor';
+      return;
+    }
+    el.what.classList.remove('a-none');
+    el.what.textContent = anchor.file + ':' + anchor.startLine +
+      (anchor.endLine !== anchor.startLine ? '\\u2013' + anchor.endLine : '');
+    el.from.textContent = anchor.stopTitle ? 'from stop ' + (anchor.stopIndex + 1) + ' \\u00b7 ' + anchor.stopTitle : '';
+    el.hint.textContent = anchor.stopTitle ? 'this note will remember the stop' : 'shift-click a line number to extend';
+  }
+
+  function render() {
+    el.count.textContent = String(notes.length);
+    if (!notes.length) {
+      el.list.innerHTML = '<div class="nempty">No notes yet. Click a line number to anchor one, ' +
+        'or press <b>+ Note on this stop</b> during the tour \\u2014 the note remembers which ' +
+        'explanation prompted it, which is what makes the review afterwards worth reading.</div>';
+      return;
+    }
+    el.list.innerHTML = notes.map(function (nt, i) {
+      var range = nt.startLine + (nt.endLine !== nt.startLine ? '\\u2013' + nt.endLine : '');
+      var prov = '<b data-jump="' + i + '">' + esc(nt.file) + ':' + range + '</b>' +
+        (nt.stopTitle ? ' \\u00b7 from stop ' + (nt.stopIndex + 1) + ', ' + esc(nt.stopTitle) : ' \\u00b7 while browsing');
+      return '<div class="note">' +
+        '<button class="del" data-del="' + i + '" title="delete">\\u00d7</button>' +
+        '<div class="prov">' + prov + '</div>' +
+        (nt.quote ? '<div class="quote">' + esc(nt.quote) + '</div>' : '') +
+        '<div class="body">' + esc(nt.body) + '</div>' +
+        '</div>';
+    }).join('');
+  }
+
+  function markdown() {
+    var out = ['# Review notes \\u2014 ' + repo.name +
+      (repo.head ? ' @ ' + repo.head.slice(0, 10) : '') + '', ''];
+    var byFile = {};
+    notes.forEach(function (nt) { (byFile[nt.file] = byFile[nt.file] || []).push(nt); });
+    Object.keys(byFile).sort().forEach(function (f) {
+      out.push('## ' + f, '');
+      byFile[f].sort(function (a, b) { return a.startLine - b.startLine; }).forEach(function (nt) {
+        var range = 'L' + nt.startLine + (nt.endLine !== nt.startLine ? '-L' + nt.endLine : '');
+        out.push('### ' + range + (nt.stopTitle ? '  \\u2014 prompted by tour stop ' + (nt.stopIndex + 1) + ', ' + nt.stopTitle : ''));
+        if (nt.explanation) out.push('', '> The tour said: ' + nt.explanation);
+        if (nt.quote) out.push('', '\\u0060\\u0060\\u0060', nt.quote, '\\u0060\\u0060\\u0060');
+        out.push('', nt.body, '');
+      });
+    });
+    return out.join('\\n');
+  }
+
+  function refreshDownloads() {
+    try {
+      var md = new Blob([markdown()], { type: 'text/markdown' });
+      el.dl.href = URL.createObjectURL(md);
+      el.dl.download = repo.name + '-review-notes.md';
+      var js = new Blob([JSON.stringify({ repo: repo, notes: notes }, null, 2)], { type: 'application/json' });
+      el.dlj.href = URL.createObjectURL(js);
+      el.dlj.download = repo.name + '-review-notes.json';
+    } catch (e) {}
+  }
+
+  el.save.addEventListener('click', function () {
+    var body = el.text.value.trim();
+    if (!body) { el.text.focus(); return; }
+    if (!anchor) { el.hint.textContent = 'anchor it first \\u2014 click a line number'; return; }
+    notes.push({
+      id: String(notes.length + 1) + '-' + anchor.startLine,
+      file: anchor.file, startLine: anchor.startLine, endLine: anchor.endLine,
+      stopIndex: anchor.stopIndex, stopTitle: anchor.stopTitle || null,
+      explanation: anchor.explanation || null,
+      quote: window.__repo.lineText(anchor.file, anchor.startLine, anchor.endLine),
+      body: body
+    });
+    el.text.value = '';
+    persist(); render(); refreshDownloads();
+  });
+
+  el.clear.addEventListener('click', function () {
+    anchor = null; window.__repo.clearSel(); showAnchor();
+  });
+
+  el.list.addEventListener('click', function (e) {
+    var del = e.target.closest('[data-del]');
+    if (del) { notes.splice(Number(del.getAttribute('data-del')), 1); persist(); render(); refreshDownloads(); return; }
+    var jump = e.target.closest('[data-jump]');
+    if (jump) {
+      var nt = notes[Number(jump.getAttribute('data-jump'))];
+      if (nt) window.__repo.open(nt.file, { from: nt.startLine, to: nt.endLine });
+    }
+  });
+
+  el.copy.addEventListener('click', function () {
+    var md = markdown();
+    var done = function () { el.copy.textContent = 'Copied'; setTimeout(function () { el.copy.textContent = 'Copy as Markdown'; }, 1400); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(md).then(done, done);
+    else { el.text.value = md; done(); }
+  });
+
+  window.__notes = {
+    anchorFromSelection: function (file, from, to) {
+      anchor = { file: file, startLine: from, endLine: to, stopIndex: -1, stopTitle: null, explanation: null };
+      showAnchor();
+      openPane('notes');
+      el.text.focus();
+    },
+    anchorFromStop: function (step, index) {
+      if (!step.file) return; // an architecture stop has no lines to anchor to
+      anchor = {
+        file: step.file, startLine: step.startLine, endLine: step.endLine,
+        stopIndex: index, stopTitle: step.title, explanation: step.text
+      };
+      showAnchor();
+      openPane('notes');
+      el.text.focus();
+    }
+  };
+
+  render(); showAnchor(); refreshDownloads();
 })();
 `;
 
@@ -428,7 +660,21 @@ const TOUR_BOOTSTRAP = `
   var defs = window.__STEPS__ || [];
   var layout = document.querySelector('.layout');
   var btn = document.getElementById('start');
-  if (!defs.length || !layout || !btn) return;
+  if (!layout) return;
+
+  // --- tabs (available whether or not a tour is running)
+  var panes = { guide: document.getElementById('guide'), notes: document.getElementById('notes') };
+  var tabs = { guide: document.getElementById('tab-guide'), notes: document.getElementById('tab-notes') };
+  window.openPane = function (name) {
+    for (var k in panes) {
+      panes[k].classList.toggle('on', k === name);
+      tabs[k].classList.toggle('on', k === name);
+    }
+  };
+  tabs.guide.addEventListener('click', function () { window.openPane('guide'); });
+  tabs.notes.addEventListener('click', function () { window.openPane('notes'); });
+
+  if (!defs.length || !btn) return;
 
   var el = {
     step: document.getElementById('gstep'), title: document.getElementById('gtitle'),
@@ -495,9 +741,20 @@ const TOUR_BOOTSTRAP = `
     el.next.textContent = n === defs.length - 1 ? 'Finish' : 'Next';
   }
 
-  function start() { layout.classList.add('touring'); show(0); }
+  var idle = document.getElementById('gidle');
+  var body = document.getElementById('gbody');
+
+  function start() {
+    layout.classList.add('touring');
+    idle.style.display = 'none';
+    body.style.display = '';
+    window.openPane('guide');
+    show(0);
+  }
   function stop() {
     layout.classList.remove('touring');
+    idle.style.display = '';
+    body.style.display = 'none';
     archPanel.classList.remove('on');
     codePanel.style.display = '';
     focusPart(null);
@@ -507,6 +764,9 @@ const TOUR_BOOTSTRAP = `
   }
 
   btn.addEventListener('click', start);
+  document.getElementById('gnote').addEventListener('click', function () {
+    window.__notes.anchorFromStop(defs[i], i);
+  });
   el.next.addEventListener('click', function () { i === defs.length - 1 ? stop() : show(i + 1); });
   el.back.addEventListener('click', function () { show(i - 1); });
   el.end.addEventListener('click', stop);
@@ -629,9 +889,18 @@ export function renderRepoView(result: DigestResult, opts: RepoViewOptions): str
   </div>
   </div>
 
-  <div class="panel" id="guide">
-    <h3>The tour</h3>
-    <div class="gbody">
+  <div class="panel" id="side">
+    <div class="tabsrow">
+      <button class="stab on" id="tab-guide" data-pane="guide" type="button">The tour</button>
+      <button class="stab" id="tab-notes" data-pane="notes" type="button">Notes<span class="pill" id="ncount">0</span></button>
+    </div>
+
+  <div id="guide" class="on">
+    <div class="gidle" id="gidle">
+      Press <b>Take the tour</b> to be walked through this repository — the system first,
+      then the code. Or browse the tree yourself; the tour will wait.
+    </div>
+    <div class="gbody" id="gbody" style="display:none">
       <div class="gstep" id="gstep"></div>
       <h2 id="gtitle"></h2>
       <div class="gwhere" id="gwhere"></div>
@@ -644,16 +913,41 @@ export function renderRepoView(result: DigestResult, opts: RepoViewOptions): str
         <button class="btn" id="gend" type="button">End tour</button>
       </div>
       <div class="gsrc" id="gsrc"></div>
+      <div class="nrow"><button class="btn" id="gnote" type="button">+ Note on this stop</button></div>
     </div>
+  </div>
+
+  <div id="notes">
+    <div class="nbody">
+      <div class="anchor">
+        <span class="a-what a-none" id="a-what">nothing selected</span>
+        <span class="a-from" id="a-from"></span>
+      </div>
+      <textarea id="ntext" placeholder="What did this make you think? A question, a doubt, something to check in review…"></textarea>
+      <div class="nrow">
+        <button class="btn primary" id="nsave" type="button">Save note</button>
+        <button class="btn" id="nclear" type="button">Clear anchor</button>
+        <span class="spacer"></span>
+        <span class="said" id="nhint">click a line number to anchor</span>
+      </div>
+      <div class="nlist" id="nlist"></div>
+      <div class="nrow">
+        <button class="btn" id="ncopy" type="button">Copy as Markdown</button>
+        <a class="btn" id="ndl" download="">Download .md</a>
+        <a class="btn" id="ndlj" download="">.json</a>
+      </div>
+    </div>
+  </div>
   </div>
 </div>
 
-<script>window.__REPO__ = ${embedJson({ files: embedded, start })};</script>
+<script>window.__REPO__ = ${embedJson({ files: embedded, start, repo: { name: repoName, head: repo?.head ?? null, branch: repo?.branch ?? null } })};</script>
 <script>window.__STEPS__ = ${embedJson(opts.steps)};</script>
 <script>window.__TOPFILE__ = ${embedJson(topFileOf)};</script>
 <script>${HIGHLIGHTER}</script>
 <script>${APP}</script>
 <script>${TOUR_BOOTSTRAP}</script>
+<script>${NOTES}</script>
 </body>
 </html>`;
 }

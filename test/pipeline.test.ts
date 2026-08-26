@@ -644,3 +644,46 @@ describe('the tour walks CODE, not metrics', () => {
     expect(html).not.toMatch(/in-degree|churn 0\.45/);
   });
 });
+
+describe('the notes panel carries provenance', () => {
+  it('ships a notes pane, an anchor, and export controls', async () => {
+    const r = await digest(root, { write: false });
+    const plan = buildCodeTour(r);
+    const html = renderRepoView(r, { steps: plan.steps, itinerary: plan.itinerary });
+
+    for (const id of ['tab-notes', 'a-what', 'ntext', 'nsave', 'nlist', 'ncopy', 'ndl', 'gnote']) {
+      expect(html, `missing #${id}`).toContain(`id="${id}"`);
+    }
+    // A note taken during the tour must record which stop prompted it.
+    expect(html).toMatch(/anchorFromStop/);
+    expect(html).toMatch(/stopIndex/);
+    expect(html).toMatch(/prompted by tour stop/);
+  });
+
+  it('keys stored notes to this repo at this commit', async () => {
+    const r = await digest(root, { write: false });
+    const plan = buildCodeTour(r);
+    const html = renderRepoView(r, { steps: plan.steps, itinerary: plan.itinerary });
+
+    // Notes from one commit must not silently reappear against different code.
+    expect(html).toMatch(/repotour:notes:/);
+    expect(html).toMatch(/repo\.head/);
+    const head = r.manifest.repos.find((x) => x.root === '')?.head;
+    expect(html).toContain(head!);
+  });
+
+  it('every piece of client script is valid JavaScript', async () => {
+    // A stray escape inside a template literal once emitted `/\r?\n/` as a real newline
+    // inside a regex, which killed the whole app script and left an empty file tree. The
+    // page renders fine and does nothing, so only parsing it catches this.
+    const r = await digest(root, { write: false });
+    const plan = buildCodeTour(r);
+    const html = renderRepoView(r, { steps: plan.steps, itinerary: plan.itinerary });
+
+    const blocks = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]!);
+    expect(blocks.length).toBeGreaterThan(3);
+    for (const [i, code] of blocks.entries()) {
+      expect(() => new Function(code), `script block ${i} does not parse`).not.toThrow();
+    }
+  });
+});

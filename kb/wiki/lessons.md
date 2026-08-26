@@ -10,6 +10,23 @@ One entry per lesson, newest first, each citing the ticket or incident it came f
 
 ---
 
+## Client script lives inside TS template literals — parse it in a test (T-3, 2026-08-26)
+
+The page's JavaScript is written as template literals in `src/repoview.ts` and inlined at
+render time. That means every backslash is escaped twice, and getting it wrong produces a
+page that renders perfectly and does nothing.
+
+`f.text.split(/\\r?\\n/)` written with one backslash too few emitted a regex containing a
+REAL newline: `Invalid regular expression: missing /`. The whole app script died on load,
+so the file tree came back empty — a symptom nowhere near the cause.
+
+**The guard:** a test pulls every `<script>` block out of the rendered page and runs it
+through `new Function(code)`. It never executes anything; it only parses. Any escaping
+mistake in any inlined script now fails a unit test instead of silently shipping a dead
+page.
+
+---
+
 ## A tour made only of files teaches you files (T-1, 2026-08-26)
 
 The tour walked eight files well and left you knowing eight files. It could not tell you
