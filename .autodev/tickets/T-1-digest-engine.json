@@ -3,8 +3,8 @@
   "slug": "digest-engine",
   "type": "feature",
   "title": "The digest engine: deterministic extraction with rollup and incremental re-digest",
-  "stage": "plan",
-  "status": "planning",
+  "stage": "build",
+  "status": "building",
   "spec": "",
   "pipeline_version": "feature@v1",
   "modifiers": [],
@@ -23,11 +23,11 @@
     "monitor"
   ],
   "passport": [
-    "2026-08-26 waiting at gate spec_ready (keyholder human:owner) since 2026-08-26",
     "2026-08-26 gate spec_ready cleared by agent:pm(on-behalf:evan,GA-1) on go-ahead GA-1 (\"I like it. It's approved. But I'm about to go to bed. We sta\")",
     "2026-08-26 advanced refine → queue · refine on unrecorded",
     "2026-08-26 advanced queue → locate · queue on claude-opus-5[1m]",
-    "2026-08-26 advanced locate → plan · locate on claude-opus-5[1m]"
+    "2026-08-26 advanced locate → plan · locate on claude-opus-5[1m]",
+    "2026-08-26 advanced plan → build · plan on claude-opus-5[1m]"
   ],
   "assignees": {},
   "links": {},
@@ -69,6 +69,12 @@
       "to": "plan",
       "by": "agent:planner",
       "at": "2026-08-26T17:39:31.252Z"
+    },
+    {
+      "from": "plan",
+      "to": "build",
+      "by": "agent:planner",
+      "at": "2026-08-26T17:40:25.443Z"
     }
   ],
   "receipts": {
@@ -102,6 +108,14 @@
       "fingerprint": ".autodev/reports/T-1-locate.md — location report naming both entry points (repo-tour digest / digest()), all 7 target files with the stage each owns, the full call path, and the pinned parser dependencies.",
       "by": "agent:planner",
       "at": "2026-08-26T17:39:31.251Z",
+      "model": "claude-opus-5[1m]"
+    },
+    "plan": {
+      "evidence": "branch T-1-digest-engine at commit 948de1efbefd921f4ff3c02d4a178ab33ffbead4 — plan artifact .autodev/reports/T-1-plan.md committed on the ticket branch (local-only topology: no git remote configured, so no PR required). Plan names 9 sub-tasks, the inline/serial delegation shape and why, and the honest per-criterion status.",
+      "kind": "other",
+      "fingerprint": "branch T-1-digest-engine at commit 948de1efbefd921f4ff3c02d4a178ab33ffbead4 — plan artifact .autodev/reports/T-1-plan.md committed on the ticket branch (local-only topology: no git remote configured, so no PR required). Plan names 9 sub-tasks, the inline/serial delegation shape and why, and the honest per-criterion status.",
+      "by": "agent:planner",
+      "at": "2026-08-26T17:40:25.442Z",
       "model": "claude-opus-5[1m]"
     }
   }
