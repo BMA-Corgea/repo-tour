@@ -269,3 +269,13 @@
 }
 :root[data-theme="classic"] .navhome { color: #ffffff; }
 :root[data-theme="classic"] .topbar { background: var(--bg); border-bottom: 1px solid #808080; }
+
+/* ── the freshness chip is a small window, square and beveled like the rest ──────────────── */
+:root[data-theme="classic"] .freshchip {
+  border: none;
+  border-radius: 0;
+  box-shadow: var(--bevel-raise);
+  background: #d6d3ce;
+}
+:root[data-theme="classic"] .freshchip button { border: none; border-radius: 0; box-shadow: var(--bevel-raise); }
+:root[data-theme="classic"] .freshchip button:active { box-shadow: var(--bevel-press); }

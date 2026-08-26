@@ -1154,3 +1154,42 @@ describe('a tour stays reachable when the code moves under it', () => {
     expect(html).toMatch(/\.freshchip \{[^}]*position:\s*fixed/);
   });
 });
+
+describe('a cached page carries the renderer that made it', () => {
+  it('will not reuse a page built by a different presentation', async () => {
+    // Pages are cached to disk with their CSS inlined, because a tour must open from file://
+    // with no network. So a page carries the presentation it was built with, forever: adding
+    // two skins changed nothing about any tour already on disk — neither their CSS nor their
+    // options were in those files, so the picker could not offer what was not there.
+    const { RepoTourServer } = await import('../src/server.js');
+    const own = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-pv-'));
+    try {
+      initRepo(own);
+      write(path.join(own, 'a.py'), 'def go(x):\n    """Do it."""\n    return x\n');
+      commitAll(own, 'init');
+
+      const server = new RepoTourServer({ statePath: path.join(own, 'state.json'), interpret: false });
+      server.addRepo(own);
+      await server.build(own, () => {});
+      expect(server.listRepos()[0]!.current).toBe(true);
+
+      // Every stored build records the renderer that produced it.
+      const dir = path.join(own, '.repo-tour', 'rendered');
+      const metaFile = fs.readdirSync(dir).find((f) => f.endsWith('.json'))!;
+      const metaPath = path.join(dir, metaFile);
+      const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8')) as { presentation: string };
+      expect(meta.presentation, 'a build must record its presentation').toBeTruthy();
+
+      // Pretend it was built by an older renderer — the shape of "we added a skin since".
+      fs.writeFileSync(metaPath, JSON.stringify({ ...meta, presentation: 'from-before' }));
+
+      const fresh = new RepoTourServer({ statePath: path.join(own, 'state.json'), interpret: false });
+      expect(
+        fresh.listRepos()[0]!.current,
+        'a page from an older renderer is not current, however unchanged the code is',
+      ).toBe(false);
+    } finally {
+      fs.rmSync(own, { recursive: true, force: true });
+    }
+  });
+});

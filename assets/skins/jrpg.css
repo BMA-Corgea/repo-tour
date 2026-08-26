@@ -205,3 +205,12 @@
 :root[data-theme="jrpg"] .archsvg.focused .node.on rect { stroke: var(--accent); stroke-width: 2.5; }
 :root[data-theme="jrpg"] .archsvg .nlabel { fill: var(--ink); }
 :root[data-theme="jrpg"] .archsvg .edge { color: #7d6a3c; }
+
+/* ── the freshness chip, framed like everything else on the field ────────────────────────── */
+:root[data-theme="jrpg"] .freshchip {
+  border: none;
+  box-shadow: var(--frame-soft), 0 3px 14px rgba(0,0,0,.4);
+  color: var(--muted);
+}
+:root[data-theme="jrpg"] .freshchip.ready { box-shadow: var(--frame), 0 0 16px rgba(232,196,106,.25); }
+:root[data-theme="jrpg"] .freshchip button { box-shadow: var(--frame-soft); border: none; }

@@ -40,6 +40,8 @@ export interface LoadedRepo {
 
 interface Rendered {
   fingerprint: string;
+  /** which version of the RENDERER produced this page — see presentationVersion() */
+  presentation: string;
   html: string;
   builtAt: string;
   stops: number;
@@ -133,13 +135,19 @@ function newestRendered(repoPath: string): Rendered | null {
       if (!best || meta.builtAt > best.at) best = { at: meta.builtAt, fp: meta.fingerprint };
     }
   } catch { return null; }
-  return best ? readRendered(repoPath, best.fp) : null;
+  if (!best) return null;
+  try {
+    const meta = JSON.parse(fs.readFileSync(path.join(dir, `${best.fp}.json`), 'utf8')) as RenderedMeta;
+    const html = fs.readFileSync(path.join(dir, `${best.fp}.html`), 'utf8');
+    return { ...meta, html };
+  } catch { return null; }
 }
 
 function readRendered(repoPath: string, fp: string): Rendered | null {
   const dir = renderedDir(repoPath);
   try {
     const meta = JSON.parse(fs.readFileSync(path.join(dir, `${fp}.json`), 'utf8')) as RenderedMeta;
+    if (meta.presentation !== presentationVersion()) return null;
     const html = fs.readFileSync(path.join(dir, `${fp}.html`), 'utf8');
     return { ...meta, html };
   } catch {
@@ -178,6 +186,62 @@ interface Job {
   state: 'running' | 'done' | 'failed';
   lines: string[];
   startedAt: number;
+}
+
+/**
+ * A hash of everything that decides how a page LOOKS, as opposed to what it says.
+ *
+ * Rendered pages are cached to disk with their CSS and scripts inlined, because a tour has
+ * to open from `file://` with no network. That means a page carries the presentation it was
+ * built with, forever: adding two skins changed nothing about any tour already on disk —
+ * neither their CSS nor their options were in those files, so the picker could not offer
+ * what was not there.
+ *
+ * Hashing the renderer's own inputs makes that automatic. Change a skin, edit the view, and
+ * every cached page stops matching without anyone having to remember to invalidate it.
+ *
+ * Re-rendering is cheap: the digest is incremental and every explanation is already cached
+ * by content hash, so a presentation change costs a render, not a re-read and not a token.
+ */
+/**
+ * Held briefly, never for the life of the process.
+ *
+ * Memoising it forever was the same mistake as baking the boot id into a cached page: a
+ * running server could not notice its own skins changing, so editing one changed nothing
+ * until a restart. A couple of seconds is long enough to keep the four-second poll from
+ * re-reading ten small files, and short enough that a saved stylesheet lands immediately.
+ */
+let presentationCache: { value: string; at: number } | null = null;
+const PRESENTATION_TTL_MS = 2000;
+
+function presentationVersion(): string {
+  if (presentationCache && Date.now() - presentationCache.at < PRESENTATION_TTL_MS) {
+    return presentationCache.value;
+  }
+  const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const h = createHash('sha256');
+
+  const feed = (file: string): void => {
+    try { h.update(fs.readFileSync(file)); } catch { /* absent input is itself a state */ }
+  };
+
+  // the skins and the vendored tour assets
+  for (const dir of [path.join(root, 'assets', 'skins'), path.join(root, 'assets')]) {
+    let entries: string[] = [];
+    try { entries = fs.readdirSync(dir).sort(); } catch { continue; }
+    for (const f of entries) {
+      if (!/\.(css|js)$/.test(f)) continue;
+      feed(path.join(dir, f));
+    }
+  }
+  // and the modules that build the page. Absent in a compiled install, which is fine: the
+  // assets alone still catch every skin change.
+  for (const f of ['repoview.ts', 'skins.ts', 'codetour.ts', 'architecture.ts', 'interpret.ts']) {
+    feed(path.join(root, 'src', f));
+  }
+
+  presentationCache = { value: h.digest('hex').slice(0, 12), at: Date.now() };
+  return presentationCache.value;
 }
 
 function assetsImgDir(): string {
@@ -419,6 +483,7 @@ export class RepoTourServer {
 
     const rendered: Rendered = {
       fingerprint: fp,
+      presentation: presentationVersion(),
       html,
       builtAt: new Date().toISOString(),
       stops: steps.length,
@@ -550,7 +615,13 @@ export class RepoTourServer {
         // truth about the commit it describes, and making it unreachable turns every edit
         // into a wait before anything can be read. The page carries a quiet marker instead.
         const older = newestRendered(p);
-        if (older) return this.html(res, 200, older.html);
+        if (older) {
+          // The renderer itself has moved on (a new skin, a changed view). That is the app
+          // updating rather than the reader's code changing, and re-rendering costs no
+          // tokens — so start it behind them and let the chip offer the result.
+          if (older.presentation !== presentationVersion() && job?.state !== 'running') this.startJob(p);
+          return this.html(res, 200, older.html);
+        }
 
         if (job?.state === 'running') return this.html(res, 200, building(p, job.lines));
         return this.html(res, 200, notBuilt(p));
