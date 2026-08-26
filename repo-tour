@@ -5,7 +5,7 @@
 # Point it at a repository and it walks you through it: digest the tree, then open a
 # guided tour of what it found.
 #
-#   ./repo-tour serve  [--port N]         THE APP: load repos, refresh to see changes (default)
+#   ./repo-tour serve  [--port N] [--no-watch]  THE APP: load repos, refresh to see changes (default)
 #   ./repo-tour tour   [path] [--flags]   one-off: digest a repo and open a static tour page
 #   ./repo-tour digest [path] [--flags]   digest a repo and open the plain browsable view
 #   ./repo-tour open   [path|id]          re-open a saved tour WITHOUT re-digesting
@@ -153,13 +153,35 @@ cmd_open() {
 cmd_serve() {
   _need_node; _need_deps
   local port=7777
-  [ "${1:-}" = "--port" ] && port="${2:-7777}"
+  local -a passthru=()
+  local watch=1
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --port) port="${2:-7777}"; passthru+=("$1" "$2"); shift 2 ;;
+      --no-watch) watch=0; shift ;;
+      *) passthru+=("$1"); shift ;;
+    esac
+  done
+
   local url="http://127.0.0.1:$port"
   local op; op="$(_opener)"
   if [ -n "$op" ] && [ -t 1 ]; then
     ( sleep 2; "$op" "$url" >/dev/null 2>&1 ) &
   fi
-  ( cd "$ROOT" && npx tsx src/cli.ts serve "$@" )
+
+  # `tsx watch` restarts the server when repo-tour's own source changes.
+  #
+  # Without it, the running process holds the code it started with: pulling an update and
+  # then wondering why the app looks the same is the obvious outcome, and "restart the whole
+  # app" is not an answer anybody should have to reach for. The served pages poll
+  # /api/version and reload themselves when the boot id changes, so an update lands without
+  # a restart AND without a refresh. --no-watch opts out.
+  if [ "$watch" -eq 1 ]; then
+    printf '%swatching src/ — the app restarts and your open tabs reload when the code changes%s\n' "$C_DIM" "$C_0"
+    ( cd "$ROOT" && npx tsx watch --clear-screen=false src/cli.ts serve "${passthru[@]+"${passthru[@]}"}" )
+  else
+    ( cd "$ROOT" && npx tsx src/cli.ts serve "${passthru[@]+"${passthru[@]}"}" )
+  fi
 }
 
 cmd_tours() {

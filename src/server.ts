@@ -113,6 +113,14 @@ export interface ServerOptions {
 }
 
 export class RepoTourServer {
+  /**
+   * Identifies THIS run of the server.
+   *
+   * A page served by one boot polls for this; when it changes, the code behind the page has
+   * changed and the page reloads itself. It is derived from the process start time because
+   * anything persisted would survive the restart it exists to detect.
+   */
+  readonly bootId = `${process.pid}-${Math.floor(process.uptime() * 1000)}-${Date.now().toString(36)}`;
   private repos: LoadedRepo[] = [];
   private cache = new Map<string, Rendered>();
   private jobs = new Map<string, Job>();
@@ -218,6 +226,7 @@ export class RepoTourServer {
     onLine('rendering…');
     const html = renderRepoView(result, {
       steps, itinerary: plan.itinerary, architecture: arch.subsystems.length > 1 ? arch : undefined,
+      servedBy: { homeUrl: '/', bootId: this.bootId },
     });
 
     const rendered: Rendered = {
@@ -277,6 +286,8 @@ export class RepoTourServer {
 
     try {
       if (route === '/') return this.html(res, 200, renderHome());
+
+      if (route === '/api/version') return this.json(res, 200, { bootId: this.bootId });
 
       if (route === '/api/repos') return this.json(res, 200, { repos: this.listRepos() });
 

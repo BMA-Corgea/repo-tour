@@ -862,3 +862,32 @@ describe('paths with spaces in them', () => {
     }
   });
 });
+
+describe('a page the app served knows where it came from', () => {
+  it('carries a back link and a live-reload poll only when served', async () => {
+    const r = await digest(root, { write: false });
+    const plan = buildCodeTour(r);
+
+    // Exported to a file, there is nowhere to go back TO and no server to watch.
+    const exported = renderRepoView(r, { steps: plan.steps, itinerary: plan.itinerary });
+    expect(exported).not.toContain('All repositories');
+    expect(exported).not.toMatch(/api\/version/);
+
+    // Served by the app, both belong.
+    const served = renderRepoView(r, {
+      steps: plan.steps, itinerary: plan.itinerary,
+      servedBy: { homeUrl: '/', bootId: 'boot-xyz' },
+    });
+    expect(served).toContain('All repositories');
+    expect(served).toMatch(/api\/version/);
+    expect(served).toContain('boot-xyz');
+  });
+
+  it('reads the stylesheet per render, so editing a skin needs no restart', async () => {
+    // A module-level `const STYLE = baseCss()` is read once when the process starts, so a
+    // CSS change could only reach a running server by restarting it.
+    const src = fs.readFileSync(new URL('../src/repoview.ts', import.meta.url), 'utf8');
+    expect(src).not.toMatch(/const STYLE\s*=/);
+    expect(src).toMatch(/\$\{baseCss\(\)\}/);
+  });
+});

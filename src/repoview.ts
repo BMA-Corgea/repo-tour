@@ -25,6 +25,13 @@ export interface RepoViewOptions {
   /** cap on embedded file count and total bytes, so the page stays one openable file */
   maxFiles?: number;
   maxBytes?: number;
+  /**
+   * Set when the app is serving this page rather than exporting it to a file.
+   *
+   * Two things follow: there is somewhere to go BACK to, and the page can notice when the
+   * server it came from has restarted — which is what a static export can never do.
+   */
+  servedBy?: { homeUrl: string; bootId: string };
 }
 
 interface EmbeddedFile {
@@ -40,6 +47,31 @@ function escapeHtml(s: string): string {
 
 function embedJson(value: unknown): string {
   return JSON.stringify(value).replace(/</g, '\\u003c');
+}
+
+/**
+ * Reload when the server that served this page has restarted.
+ *
+ * The app runs the tour renderer in-process, so a change to repo-tour's own code only
+ * reaches you when the server restarts — and until now that meant you also had to know to
+ * restart it, and then to refresh. The server restarts itself on a source change; this
+ * notices the new boot id and reloads, so an update arrives without being asked for.
+ *
+ * It fails silently and often: while the server is down mid-restart every request errors.
+ * That is expected, so a failed poll simply tries again rather than reporting anything.
+ */
+function liveReloadScript(bootId: string): string {
+  return `
+(function () {
+  var mine = ${JSON.stringify(bootId)};
+  setInterval(function () {
+    fetch('/api/version', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (v) { if (v.bootId && v.bootId !== mine) location.reload(); })
+      .catch(function () { /* the server is restarting; try again next tick */ });
+  }, 2000);
+})();
+`;
 }
 
 function readAsset(name: string): string {
@@ -129,8 +161,6 @@ function architectureSvg(arch: Architecture): string {
 
   return `<svg viewBox="0 0 ${W} ${H}" class="archsvg" role="img" aria-label="System diagram">${parts.join('')}</svg>`;
 }
-
-const STYLE = baseCss();
 
 
 const HIGHLIGHTER = `
@@ -797,14 +827,16 @@ export function renderRepoView(result: DigestResult, opts: RepoViewOptions): str
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(repoName)} — repo-tour</title>
-<style>${STYLE}</style>
+<style>${baseCss()}</style>
 <style>${alternateCss()}</style>
 <script>${skinScript()}</script>
+${opts.servedBy ? `<script>${liveReloadScript(opts.servedBy.bootId)}</script>` : ''}
 </head>
 <body>
 
 <div class="topbar">
   <div class="repoline">
+    ${opts.servedBy ? `<a class="btn back" href="${opts.servedBy.homeUrl}">← All repositories</a>` : ''}
     <span class="owner">${escapeHtml(path.basename(path.dirname(root)) || 'local')}</span>
     <span class="sep">/</span>
     <span class="name">${escapeHtml(repoName)}</span>
