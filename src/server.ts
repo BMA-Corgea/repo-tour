@@ -47,6 +47,61 @@ interface Rendered {
   head: string | null;
 }
 
+/** Everything about a build except the page itself, so a listing need not read the HTML. */
+type RenderedMeta = Omit<Rendered, 'html'>;
+
+/**
+ * Where a built page lives between restarts.
+ *
+ * Keeping it only in memory meant every restart showed "not built yet" for every
+ * repository — and once the server started restarting on its own source changes, that was
+ * constantly. The digest and the interpretations survived on disk, so a rebuild was cheap,
+ * but "not built yet" reads as "your work is gone", and clicking through meant waiting
+ * again for something already finished.
+ *
+ * Keyed by FINGERPRINT, so a page is only reused for the exact tree state it describes.
+ */
+function renderedDir(repoPath: string): string {
+  return path.join(repoPath, CACHE_DIR, 'rendered');
+}
+
+function readRendered(repoPath: string, fp: string): Rendered | null {
+  const dir = renderedDir(repoPath);
+  try {
+    const meta = JSON.parse(fs.readFileSync(path.join(dir, `${fp}.json`), 'utf8')) as RenderedMeta;
+    const html = fs.readFileSync(path.join(dir, `${fp}.html`), 'utf8');
+    return { ...meta, html };
+  } catch {
+    return null;
+  }
+}
+
+/** Keep the last few builds of a repo; older ones describe trees nobody is looking at. */
+function writeRendered(repoPath: string, r: Rendered, keep = 4): void {
+  const dir = renderedDir(repoPath);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    const { html, ...meta } = r;
+    fs.writeFileSync(path.join(dir, `${r.fingerprint}.html`), html);
+    fs.writeFileSync(path.join(dir, `${r.fingerprint}.json`), JSON.stringify(meta, null, 2));
+
+    const metas = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
+    const dated = metas
+      .map((f) => {
+        try {
+          const m = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')) as RenderedMeta;
+          return { f, at: m.builtAt };
+        } catch { return { f, at: '' }; }
+      })
+      .sort((a, b) => (a.at < b.at ? 1 : -1));
+    for (const stale of dated.slice(keep)) {
+      const base = stale.f.replace(/\.json$/, '');
+      fs.rmSync(path.join(dir, `${base}.json`), { force: true });
+      fs.rmSync(path.join(dir, `${base}.html`), { force: true });
+    }
+  } catch { /* an unwritable cache costs a rebuild, never correctness */ }
+}
+
 interface Job {
   repo: string;
   state: 'running' | 'done' | 'failed';
@@ -170,13 +225,24 @@ export class RepoTourServer {
     this.persist();
   }
 
-  listRepos(): Array<LoadedRepo & { built: Rendered | null; current: boolean; running: boolean }> {
+  /** A build for this repo at this exact tree state, from memory or from disk. */
+  private lookup(repoPath: string, fp: string): Rendered | null {
+    const hot = this.cache.get(repoPath);
+    if (hot && hot.fingerprint === fp) return hot;
+    const cold = readRendered(repoPath, fp);
+    if (cold) this.cache.set(repoPath, cold);
+    return cold;
+  }
+
+  listRepos(): Array<LoadedRepo & { built: RenderedMeta | null; current: boolean; running: boolean }> {
     return this.repos.map((r) => {
-      const built = this.cache.get(r.path) ?? null;
+      const fp = fingerprint(r.path);
+      const built = this.lookup(r.path, fp) ?? this.cache.get(r.path) ?? null;
+      const meta = built ? (({ html, ...rest }) => rest)(built) : null;
       return {
         ...r,
-        built,
-        current: built !== null && built.fingerprint === fingerprint(r.path),
+        built: meta,
+        current: meta !== null && meta.fingerprint === fp,
         running: this.jobs.get(r.path)?.state === 'running',
       };
     });
@@ -185,8 +251,8 @@ export class RepoTourServer {
   /** Build (or rebuild) a repository's tour. Returns the rendered page. */
   async build(repoPath: string, onLine: (s: string) => void): Promise<Rendered> {
     const fp = fingerprint(repoPath);
-    const cached = this.cache.get(repoPath);
-    if (cached && cached.fingerprint === fp) return cached;
+    const already = this.lookup(repoPath, fp);
+    if (already) return already;
 
     onLine('reading the tree…');
     const result = await digest(repoPath, { write: true });
@@ -238,6 +304,7 @@ export class RepoTourServer {
       head: result.manifest.repos.find((r) => r.root === '')?.head ?? null,
     };
     this.cache.set(repoPath, rendered);
+    writeRendered(repoPath, rendered);
     return rendered;
   }
 
@@ -328,9 +395,9 @@ export class RepoTourServer {
         if (!this.repos.some((r) => r.path === p)) return this.html(res, 404, notFound(p));
         const job = this.jobs.get(p);
         const fp = fingerprint(p);
-        const cached = this.cache.get(p);
+        const cached = this.lookup(p, fp);
 
-        if (cached && cached.fingerprint === fp) return this.html(res, 200, cached.html);
+        if (cached) return this.html(res, 200, cached.html);
         if (job?.state === 'running') return this.html(res, 200, building(p, job.lines));
 
         this.startJob(p);

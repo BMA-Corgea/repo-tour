@@ -34,6 +34,29 @@ where the eye already is. Silent refusal reads as a dead button.**
 
 ---
 
+## "Not built yet" is a claim about the user's work, so it had better be true (T-4, 2026-08-26)
+
+Evan: **"it's showing as not built yet"** — for both repositories, right after they had been
+built.
+
+The rendered page lived only in a `Map` in the server process. Everything expensive survived
+a restart (the digest cache inside each repo, the interpretation cache keyed by content
+hash), so a rebuild was quick and nothing was truly lost — but the LABEL said the work was
+gone, and clicking through meant waiting again for something already finished.
+
+This got much worse the moment the server started restarting on its own source changes: a
+feature meant to remove friction turned the memory cache over constantly.
+
+Built pages now persist to `<repo>/.repo-tour/rendered/<fingerprint>.html`, keyed by the
+fingerprint so a page is only ever reused for the exact tree state it describes, keeping the
+last four. Verified by killing the server outright: a fresh process reports "built: 34 stops,
+up to date" and serves the finished 3.85MB page in 19ms with no rebuild.
+
+**The general point: a cache that is only in memory is a cache that lies to the user every
+time the process dies — not about correctness, but about whether their work still exists.**
+
+---
+
 ## Test servers must not write to the real state file (T-4, 2026-08-26)
 
 Evan, looking at the app: **"Did we lose the tours we made?"** His list showed one

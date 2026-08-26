@@ -891,3 +891,45 @@ describe('a page the app served knows where it came from', () => {
     expect(src).toMatch(/\$\{baseCss\(\)\}/);
   });
 });
+
+describe('a built tour survives the server restarting', () => {
+  it('re-finds a build on disk instead of reporting "not built yet"', async () => {
+    // The rendered page used to live only in memory, so every restart showed every
+    // repository as unbuilt — and once the server began restarting on its own source
+    // changes, that was constantly. The digest and the interpretations survived, so a
+    // rebuild was cheap; but "not built yet" reads as "your work is gone".
+    const { RepoTourServer } = await import('../src/server.js');
+
+    const own = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-restart-'));
+    const state = path.join(own, 'loaded.json');
+    try {
+      initRepo(own);
+      write(path.join(own, 'core.py'), [
+        'def run(job):',
+        '    """Do the thing."""',
+        '    return job',
+        '',
+        'def stop(job):',
+        '    """Undo the thing."""',
+        '    return None',
+        '',
+      ].join('\n'));
+      commitAll(own, 'init');
+
+      // interpret:false keeps this a pure structure test — no model is called.
+      const first = new RepoTourServer({ statePath: state, interpret: false });
+      expect(first.addRepo(own).ok).toBe(true);
+      await first.build(own, () => {});
+      expect(first.listRepos()[0]!.built).not.toBeNull();
+
+      // A brand new instance: nothing carried over in memory.
+      const second = new RepoTourServer({ statePath: state, interpret: false });
+      const seen = second.listRepos()[0]!;
+      expect(seen.built, 'a fresh server should find the build on disk').not.toBeNull();
+      expect(seen.current, 'and recognise it as current for this tree').toBe(true);
+      expect(seen.built!.stops).toBeGreaterThan(0);
+    } finally {
+      fs.rmSync(own, { recursive: true, force: true });
+    }
+  });
+});
