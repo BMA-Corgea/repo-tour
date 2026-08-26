@@ -876,7 +876,7 @@ describe('a page the app served knows where it came from', () => {
     // Served by the app, both belong.
     const served = renderRepoView(r, {
       steps: plan.steps, itinerary: plan.itinerary,
-      servedBy: { homeUrl: '/' },
+      servedBy: { homeUrl: '/', repoPath: '/tmp/x', builtAt: '2026-01-01T00:00:00Z' },
     });
     expect(served).toContain('All repositories');
     expect(served).toMatch(/api\/version/);
@@ -1093,5 +1093,64 @@ describe('a build survives the process dying', () => {
     } finally {
       fs.rmSync(own, { recursive: true, force: true });
     }
+  });
+});
+
+describe('a tour stays reachable when the code moves under it', () => {
+  it('serves the older build rather than making it unreachable', async () => {
+    // Before this, a changed repo sent /r straight to a build page: every edit made the
+    // existing tour unreadable for minutes. A tour pinned to an older commit is still the
+    // truth about that commit — it does not stop being worth reading because a file changed.
+    const { RepoTourServer } = await import('../src/server.js');
+    const own = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-stale-serve-'));
+    try {
+      initRepo(own);
+      write(path.join(own, 'a.py'), 'def go(x):\n    """Do it."""\n    return x\n');
+      commitAll(own, 'init');
+
+      const server = new RepoTourServer({ statePath: path.join(own, 'state.json'), interpret: false });
+      server.addRepo(own);
+      await server.build(own, () => {});
+      expect(server.listRepos()[0]!.current).toBe(true);
+
+      write(path.join(own, 'b.py'), 'def stop(x):\n    """Halt."""\n    return None\n');
+
+      const listed = server.listRepos()[0]!;
+      expect(listed.current, 'the tree has moved').toBe(false);
+      expect(listed.built, 'but the built tour is still reported, not hidden').not.toBeNull();
+
+      let body = '';
+      const res = {
+        writeHead() { return this; },
+        end(chunk?: string) { if (chunk) body = chunk; return this; },
+      } as unknown as import('node:http').ServerResponse;
+      await server.handler(
+        { url: `/r?path=${encodeURIComponent(own)}`, method: 'GET' } as import('node:http').IncomingMessage,
+        res,
+      );
+
+      // The real tour, not a "building" or "not built" page.
+      expect(body).toContain('id="startbig"');
+      expect(body).not.toContain('has no tour yet');
+    } finally {
+      fs.rmSync(own, { recursive: true, force: true });
+    }
+  });
+
+  it('marks the staleness in a corner chip, not a banner', async () => {
+    const r = await digest(root, { write: false });
+    const plan = buildCodeTour(r);
+    const html = renderRepoView(r, {
+      steps: plan.steps, itinerary: plan.itinerary,
+      servedBy: { homeUrl: '/', repoPath: root, builtAt: '2026-01-01T00:00:00Z' },
+    });
+
+    expect(html).toMatch(/freshchip/);
+    expect(html).toMatch(/the code has moved since this tour/);
+    // A newer build is OFFERED, never forced on a reader mid-tour.
+    expect(html).toMatch(/a newer tour is ready/);
+    expect(html).toMatch(/Show it/);
+    // Corner, fixed, small — not a full-width strip.
+    expect(html).toMatch(/\.freshchip \{[^}]*position:\s*fixed/);
   });
 });

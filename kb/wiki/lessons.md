@@ -34,6 +34,33 @@ where the eye already is. Silent refusal reads as a dead button.**
 
 ---
 
+## An older tour is still true, so never make it unreachable (T-4, 2026-08-26)
+
+Evan, working it out himself: **"Repo tour keeps resetting because we keep updating the
+codebase. We need to be able to keep an old tour pinned even if it's changing. It needs to
+not become unreachable, just a subtle note … while still being able to access it."**
+
+He was right, and the design was wrong. `/r` served a tour only when the fingerprint matched
+exactly; any edit sent it straight to a build page. So on a repository under active work —
+which is every repository worth touring — the tour was unreadable most of the time, and each
+edit cost minutes before anything could be read at all.
+
+**A tour pinned to an older commit is still the truth about that commit.** It does not stop
+being worth reading because a file changed. `/r` now serves the newest build it has, whatever
+tree state it describes, and the card reports that build rather than claiming "no tour yet".
+
+The staleness is a **corner chip**, not a banner, and that is the substance rather than the
+styling: the page is still correct, so pushing the code down to announce it would interrupt a
+reader who may not care yet. The chip states the fact, offers the rebuild, and — when a newer
+build lands — offers the switch instead of taking it. Nobody gets yanked out of chapter six
+because a build finished.
+
+**The general rule: staleness is a property to disclose, not a reason to withhold.** The
+version that refuses to show you anything until it is perfectly current is the version you
+cannot use.
+
+---
+
 ## An in-flight build must survive the process that started it (T-4, 2026-08-26)
 
 Evan: **"Does the repo tour building reset every time the app resets? I've tried building it
@@ -160,6 +187,28 @@ Three things ported from GLP's fetcher and worth keeping:
 The scrim is built from `var(--bg)`, so the same photograph reads warm under Titanium and cool
 under Gunmetal without a second asset — and with no image at all the band renders a token
 gradient, which is a designed state rather than a gap.
+
+---
+
+## Two skins ported, and what actually makes a look read (T-5, 2026-08-26)
+
+Evan asked for GIMS-Project's **Classic** and then, from a Tales-of-era screenshot, a **JRPG**
+skin. Both are one file plus one registry row, and both are more about structure than palette.
+
+**Classic** (Win9x desktop): the colours are the least of it. What sells it is three bevel
+tokens — raise, press, sunken — built from four insets each, per the 98.css technique, and the
+fact that *documents are white and chrome is gray*. So the code pane became a sunken white
+client area rather than a panel. The hero photograph is suppressed outright: a 2020s stock
+photo under a Win2000 title bar is not a skin, it is a mistake wearing one.
+
+**JRPG** (console menu): also not the colours. Three things, in order — the DOUBLE RULE (dark,
+gold, dark) which is what reads as forged where a single gold border reads as a web alert;
+LABEL versus VALUE, cream noun and gold number, which the product's muted/accent split already
+encodes; and 2px corners, so it is neither a card nor a terminal.
+
+**Where taste has to beat theme:** the JRPG skin puts a serif display face on headings and
+leaves the code pane monospace on a quiet ground. The same serif over 1,500 lines of Python
+would make the tool unreadable, and this is a reading tool before it is a costume.
 
 ---
 

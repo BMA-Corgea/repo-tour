@@ -1,0 +1,271 @@
+/* ══════════════════════════════════════════════════════════════════════════════════════════
+   CLASSIC — ported from GIMS-Project's `static/styles/classic.css`.
+
+   Win9x/2000/XP "classic desktop": light 3D gray chrome, white sunken client areas, raised
+   beveled buttons, navy title bars, square corners, Tahoma. No gradients, glows, blur, web
+   fonts or decorative motion. Runs on a toaster.
+
+   ── How it works ─────────────────────────────────────────────────────────────────────────
+   Every rule is scoped under `:root[data-theme="classic"]`, so the file is inert until the
+   switcher sets that attribute. Two layers, in the order they matter:
+
+     1. TOKENS — the whole of base.css's `:root`, redefined: light palette, radii to 0,
+        shadows flattened, the accent collapsed to one navy. That alone re-skins every
+        token-driven rule in the product, including anything added after this file.
+     2. BEVELS — explicit overrides give the shared controls their classic 3D character:
+        raised buttons, sunken fields, ridged panels. This is the part a token cannot do,
+        because a bevel is four insets rather than a colour.
+
+   ── What this port changes about the original ────────────────────────────────────────────
+   GIMS is a forms application; this is a reading surface with a page of source code in the
+   middle of it. Two consequences:
+
+     · The CODE PANE is a sunken white client area, not a panel. Classic put documents on
+       white and chrome on gray, and code is the document here.
+     · The HERO PHOTOGRAPH IS SUPPRESSED. A 2020s stock photograph under a Win2000 title bar
+       is not a skin, it is a mistake wearing one. The band falls back to flat chrome — which
+       base.css already renders when no image exists, so this costs one line.
+   ══════════════════════════════════════════════════════════════════════════════════════════ */
+
+:root[data-theme="classic"] {
+  /* ── surfaces: 3D gray chrome, white client areas ────────────────────────────────────── */
+  --canvas:      #d6d3ce;
+  --bg:          #d6d3ce;
+  --chip:        #d6d3ce;
+  --line:        #808080;
+
+  /* ── text: classic black, and a soft that is grey rather than tinted ─────────────────── */
+  --ink:         #000000;
+  --muted:       #404040;
+
+  /* ── accent: professional navy — title bars, selection, focus, links ─────────────────── */
+  --accent:      #0a3d6e;
+  --accent-soft: #cfe0f2;
+
+  /* ── selection: the classic light-blue wash with a navy edge, not a highlighter ──────── */
+  --hl:          #cfe0f2;
+  --hl-line:     #0a3d6e;
+
+  /* ── syntax: flat, period-appropriate, no neon ───────────────────────────────────────── */
+  --kw:          #000080;
+  --str:         #7d0000;
+  --com:         #4a7a4a;
+  --num:         #7d0000;
+  --fn:          #0a3d6e;
+  --dec:         #7d5000;
+
+  /* ── square corners, everywhere ──────────────────────────────────────────────────────── */
+  --radius:      0;
+
+  /* ── controls: the bevel does the work, so the border is none and the fill is chrome ─── */
+  --btn-bg:            #d6d3ce;
+  --btn-bg-hover:      #dedbd6;
+  --btn-edge:          transparent;
+  --btn-edge-hover:    transparent;
+  --btn-ink:           #000000;
+  --btn-shadow:        var(--bevel-raise);
+  --btn-shadow-primary:var(--bevel-raise);
+
+  /* Classic has no coloured call-to-action: the DEFAULT button is the same gray, marked by
+     a heavier outline. A green pill here would be from a different decade. */
+  --accent-solid:       #d6d3ce;
+  --accent-solid-hover: #dedbd6;
+  --accent-solid-edge:  #000000;
+  --accent-solid-ink:   #000000;
+
+  --field-bg:    #ffffff;
+  --field-edge:  transparent;
+  --focus:       #0a3d6e;
+  --focus-ring:  transparent;
+
+  --ok:   #0a7d32;
+  --warn: #9a6a00;
+
+  /* ── the three bevels, per the well-worn 98.css technique ────────────────────────────── */
+  --bevel-raise:  inset -1px -1px #0a0a0a, inset 1px 1px #ffffff, inset -2px -2px #808080, inset 2px 2px #dfdfdf;
+  --bevel-press:  inset -1px -1px #ffffff, inset 1px 1px #0a0a0a, inset -2px -2px #dfdfdf, inset 2px 2px #808080;
+  --bevel-sunken: inset -1px -1px #ffffff, inset 1px 1px #808080, inset -2px -2px #dfdfdf, inset 2px 2px #0a0a0a;
+}
+
+/* ── the canvas: system font, no smoothing, no ambient anything ──────────────────────────── */
+:root[data-theme="classic"] body {
+  font-family: Tahoma, "Segoe UI", Verdana, "MS Sans Serif", system-ui, sans-serif;
+  font-size: 13px;
+  -webkit-font-smoothing: auto;
+}
+
+/* ══════ WINDOWS — raised gray frame, navy title bar ═══════════════════════════════════════
+   The title bar is the signature of the whole look, and repo-tour already has the right
+   markup for it: every panel opens with an <h3>. */
+:root[data-theme="classic"] .panel {
+  border: none;
+  border-radius: 0;
+  box-shadow: var(--bevel-raise);
+  background: var(--bg);
+}
+:root[data-theme="classic"] .panel > h3 {
+  background: #0a3d6e;
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: .01em;
+  border-bottom: none;
+  padding: 4px 8px;
+  margin: 3px 3px 0;
+}
+
+/* ── client areas: sunken and white. Code is a document, not chrome. ─────────────────────── */
+:root[data-theme="classic"] .code,
+:root[data-theme="classic"] .tree,
+:root[data-theme="classic"] .archwrap {
+  background: #ffffff;
+  box-shadow: var(--bevel-sunken);
+  margin: 3px;
+}
+:root[data-theme="classic"] td.gut {
+  background: #d6d3ce;
+  border-right: 1px solid #808080;
+  color: #404040;
+}
+:root[data-theme="classic"] tr.hit td.gut { background: var(--hl); color: #0a3d6e; }
+:root[data-theme="classic"] tr.sel td.gut { background: #0a3d6e; color: #ffffff; }
+:root[data-theme="classic"] .filehead {
+  background: var(--bg);
+  border-bottom: 1px solid #808080;
+}
+
+/* ── controls: raised at rest, pressed when active. No transform: the bevel IS the press. ── */
+:root[data-theme="classic"] .btn {
+  border: none;
+  box-shadow: var(--bevel-raise);
+  padding: 5px 14px;
+  transition: none;
+}
+:root[data-theme="classic"] .btn:active {
+  box-shadow: var(--bevel-press);
+  transform: none;
+  padding: 6px 13px 4px 15px;   /* the label shifts down-right, as it did */
+}
+:root[data-theme="classic"] .btn.primary {
+  box-shadow: var(--bevel-raise), inset 0 0 0 1px #0a0a0a;
+  font-weight: 700;
+}
+:root[data-theme="classic"] .btn:focus-visible {
+  outline: 1px dotted #000000;
+  outline-offset: -4px;
+}
+:root[data-theme="classic"] .btn.ghost { box-shadow: none; }
+:root[data-theme="classic"] .btn.ghost:hover { box-shadow: var(--bevel-raise); }
+
+:root[data-theme="classic"] input[type=text],
+:root[data-theme="classic"] input[type=search],
+:root[data-theme="classic"] textarea,
+:root[data-theme="classic"] select,
+:root[data-theme="classic"] .skinpick {
+  border: none;
+  box-shadow: var(--bevel-sunken);
+  background: #ffffff;
+  border-radius: 0;
+}
+:root[data-theme="classic"] input:focus,
+:root[data-theme="classic"] textarea:focus,
+:root[data-theme="classic"] select:focus {
+  box-shadow: var(--bevel-sunken);
+  outline: 1px dotted #000000;
+  outline-offset: -3px;
+}
+
+/* ── tabs: the underline convention is modern; classic tabs are raised and joined ────────── */
+:root[data-theme="classic"] .tabs,
+:root[data-theme="classic"] .tabsrow { gap: 2px; border-bottom: 1px solid #808080; }
+:root[data-theme="classic"] .tab,
+:root[data-theme="classic"] .stab {
+  background: #cac6bf;
+  box-shadow: inset 1px 1px #ffffff, inset -1px 0 #808080;
+  border-bottom: none;
+  padding: 4px 12px;
+  margin-bottom: -1px;
+}
+:root[data-theme="classic"] .tab.on,
+:root[data-theme="classic"] .stab.on {
+  background: #d6d3ce;
+  font-weight: 700;
+  border-bottom: 1px solid #d6d3ce;
+  box-shadow: inset 1px 1px #ffffff, inset -1px 0 #808080;
+}
+
+/* ── the chapter header reads as a title bar of its own ──────────────────────────────────── */
+:root[data-theme="classic"] .chaphead {
+  background: #0a3d6e;
+  color: #ffffff;
+  border-bottom: none;
+  margin: 3px 3px 0;
+  padding: 4px 8px;
+}
+:root[data-theme="classic"] .chaphead:hover { background: #1565a8; }
+:root[data-theme="classic"] .chaphead .cnum,
+:root[data-theme="classic"] .chaphead .caret { color: #cfe0f2; }
+:root[data-theme="classic"] .toc button.on {
+  background: #0a3d6e;
+  color: #ffffff;
+  box-shadow: none;
+}
+:root[data-theme="classic"] .toc button.on .s,
+:root[data-theme="classic"] .toc button.on .n,
+:root[data-theme="classic"] .toc button.on .c { color: #cfe0f2; }
+
+/* ── flatten every soft edge the modern skins rely on ────────────────────────────────────── */
+:root[data-theme="classic"] .card,
+:root[data-theme="classic"] .empty-card,
+:root[data-theme="classic"] .note .quote,
+:root[data-theme="classic"] .anchor,
+:root[data-theme="classic"] .progress {
+  border-radius: 0;
+}
+:root[data-theme="classic"] .card {
+  border: none;
+  box-shadow: var(--bevel-raise);
+  background: var(--bg);
+}
+:root[data-theme="classic"] .card:hover { transform: none; }
+:root[data-theme="classic"] .progress { box-shadow: var(--bevel-sunken); background: #ffffff; }
+:root[data-theme="classic"] .progress i { background: #0a3d6e; }
+:root[data-theme="classic"] .chip,
+:root[data-theme="classic"] .tag {
+  border-radius: 0;
+  border: 1px solid #808080;
+  background: #d6d3ce;
+  color: #000000;
+}
+:root[data-theme="classic"] .dot { border-radius: 0; }
+:root[data-theme="classic"] .spin,
+:root[data-theme="classic"] .dot.work { animation: none; }
+
+/* ── the hero photograph is suppressed: a stock photo under a Win2000 title bar is not a
+      skin, it is a mistake wearing one. base.css already draws a flat band without it. ───── */
+:root[data-theme="classic"] .hero.hasimg::before {
+  background-image: none;
+  background: #d6d3ce;
+}
+:root[data-theme="classic"] .hero::after { background: none; }
+:root[data-theme="classic"] .hero { box-shadow: var(--bevel-raise); border-bottom: none; }
+:root[data-theme="classic"] .hero h1 { letter-spacing: 0; font-weight: 700; }
+:root[data-theme="classic"] .kicker { color: #0a3d6e; }
+:root[data-theme="classic"] .credit { display: none; }
+
+/* ── the system diagram: flat boxes with bevels, navy focus ──────────────────────────────── */
+:root[data-theme="classic"] .archsvg .node rect {
+  fill: #d6d3ce;
+  stroke: #808080;
+  stroke-width: 1;
+}
+:root[data-theme="classic"] .archsvg.focused .node.on rect { stroke: #0a3d6e; stroke-width: 2; }
+:root[data-theme="classic"] .archsvg .edge { color: #404040; }
+
+/* ── the nav bar is a title bar too ──────────────────────────────────────────────────────── */
+:root[data-theme="classic"] .nav {
+  background: #0a3d6e;
+  border-bottom: 1px solid #404040;
+}
+:root[data-theme="classic"] .navhome { color: #ffffff; }
+:root[data-theme="classic"] .topbar { background: var(--bg); border-bottom: 1px solid #808080; }

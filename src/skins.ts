@@ -46,6 +46,8 @@ export const SKINS: readonly Skin[] = [
   { name: 'dark', label: 'Dark', note: 'The base palette, always dark.' },
   { name: 'gunmetal', label: 'Gunmetal', note: 'Brushed graphite and one electric cyan.' },
   { name: 'titanium', label: 'Titanium', note: 'Warm light metal and a deep teal. Built for daylight.' },
+  { name: 'classic', label: 'Classic', note: 'Win9x desktop — gray chrome, navy title bars, square corners.' },
+  { name: 'jrpg', label: 'JRPG', note: 'A console menu screen: teal field, gold frames, cream text.' },
 ] as const;
 
 /** The skin a page opens in when nothing is stored. */

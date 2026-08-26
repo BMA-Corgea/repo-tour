@@ -1,0 +1,207 @@
+/* ══════════════════════════════════════════════════════════════════════════════════════════
+   JRPG — a console menu screen. Deep teal ground, gold double-rule frames, cream text.
+
+   The reference is the Tales-of-era status menu: every panel is a framed window sitting on a
+   dark jewel-tone field, labels in cream, values in gold, and bars that read as gauges.
+
+   ── What actually makes it read as a JRPG menu ───────────────────────────────────────────
+   Not the colours. Three things, in order:
+
+     1. THE DOUBLE RULE. Every window is bounded by a thin dark line, a gold line, and
+        another dark line. One gold border looks like a bootstrap alert; the sandwich is what
+        looks forged. It is one token, `--frame`, applied as stacked box-shadow rings, so
+        nothing needs extra markup.
+     2. LABEL VERSUS VALUE. A menu never sets both in the same colour: the noun is cream and
+        the number is gold. Here that maps onto muted-versus-accent, which the product
+        already distinguishes everywhere.
+     3. NOTHING IS ROUNDED, BUT NOTHING IS SHARP EITHER. 2px, so the frame reads as metal
+        rather than as a web card or a terminal.
+
+   ── The one place taste has to beat theme ────────────────────────────────────────────────
+   The code pane keeps a quiet ground and a MONOSPACE face. A serif display font on the
+   headings sells the menu; the same font over 1,500 lines of Python would make the thing
+   unreadable, and this is a reading tool before it is a costume.
+   ══════════════════════════════════════════════════════════════════════════════════════════ */
+
+:root[data-theme="jrpg"] {
+  /* ── the field: deep teal, the colour every one of these menus sits on ──────────────── */
+  --canvas:      #0a2226;
+  --bg:          #10353a;
+  --chip:        #17454b;
+  --line:        #c9a961;
+
+  /* ── text: warm cream, never white — white on teal is a spreadsheet ─────────────────── */
+  --ink:         #f2e8cf;
+  --muted:       #9fbdb4;
+
+  /* ── gold: the value colour, and the only accent ────────────────────────────────────── */
+  --accent:      #e8c46a;
+  --accent-soft: #1d4f52;
+
+  /* ── selection: a warm amber wash with a gold edge, like a highlighted menu row ─────── */
+  --hl:          #2a4a3c;
+  --hl-line:     #e8c46a;
+
+  /* ── syntax: jewel tones that hold up on teal ───────────────────────────────────────── */
+  --kw:          #f2919b;
+  --str:         #a8d8a0;
+  --com:         #6f9a92;
+  --num:         #e8c46a;
+  --fn:          #8fd4e0;
+  --dec:         #e0a060;
+
+  --radius:      2px;
+
+  /* ── controls: framed plates, gold on teal ──────────────────────────────────────────── */
+  --btn-bg:            #17454b;
+  --btn-bg-hover:      #1f5860;
+  --btn-edge:          #c9a961;
+  --btn-edge-hover:    #e8c46a;
+  --btn-ink:           #f2e8cf;
+  --btn-shadow:        inset 0 1px 0 rgba(255,255,255,.07);
+  --btn-shadow-primary:inset 0 1px 0 rgba(255,255,255,.14);
+
+  /* the confirm action is gold on dark: the only filled thing on the screen */
+  --accent-solid:       #d4a94a;
+  --accent-solid-hover: #e8c46a;
+  --accent-solid-edge:  #f0d68a;
+  --accent-solid-ink:   #14262a;
+
+  --field-bg:    #0c2b2f;
+  --field-edge:  #6f8a80;
+  --focus:       #e8c46a;
+  --focus-ring:  rgba(232,196,106,.3);
+
+  --ok:   #86d19a;
+  --warn: #e8c46a;
+
+  /* ── the double rule. One gold line is a web alert; the sandwich is what reads forged. ── */
+  --frame: 0 0 0 1px #0a2226, 0 0 0 2px #c9a961, 0 0 0 3px #0a2226;
+  --frame-soft: 0 0 0 1px #0a2226, 0 0 0 2px #7d6a3c;
+}
+
+:root[data-theme="jrpg"] body {
+  background-image:
+    radial-gradient(ellipse at 50% 0%, rgba(60,140,140,.10), transparent 60%);
+}
+
+/* ══════ WINDOWS — every panel is a framed menu box ══════════════════════════════════════ */
+:root[data-theme="jrpg"] .panel,
+:root[data-theme="jrpg"] .card,
+:root[data-theme="jrpg"] .empty-card {
+  border: none;
+  box-shadow: var(--frame);
+  background: var(--bg);
+  border-radius: 2px;
+}
+:root[data-theme="jrpg"] .card { margin-bottom: 16px; }
+:root[data-theme="jrpg"] .card:hover { box-shadow: var(--frame), 0 0 14px rgba(232,196,106,.18); transform: none; }
+
+/* the window's header: a gold rule under a cream label, like a menu column heading */
+:root[data-theme="jrpg"] .panel > h3 {
+  color: var(--accent);
+  border-bottom: 1px solid #7d6a3c;
+  letter-spacing: .12em;
+  font-weight: 700;
+}
+
+/* headings get the display face; body and code deliberately do not */
+:root[data-theme="jrpg"] .hero h1,
+:root[data-theme="jrpg"] .panel > h3,
+:root[data-theme="jrpg"] .card h3,
+:root[data-theme="jrpg"] #guide h2,
+:root[data-theme="jrpg"] .chaphead .cname {
+  font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+}
+:root[data-theme="jrpg"] .hero h1 {
+  color: var(--ink);
+  text-shadow: 0 2px 0 rgba(0,0,0,.55);
+  letter-spacing: 0;
+}
+:root[data-theme="jrpg"] .kicker { color: var(--accent); letter-spacing: .2em; }
+
+/* ── label versus value: the noun is cream, the number is gold ──────────────────────────── */
+:root[data-theme="jrpg"] .meta span,
+:root[data-theme="jrpg"] .filemeta,
+:root[data-theme="jrpg"] .toc .c,
+:root[data-theme="jrpg"] #gstep { color: var(--accent); }
+:root[data-theme="jrpg"] .toc .s { color: var(--muted); }
+
+/* ── controls: framed plates that light up rather than move ─────────────────────────────── */
+:root[data-theme="jrpg"] .btn {
+  box-shadow: var(--frame-soft), var(--btn-shadow);
+  letter-spacing: .04em;
+  border: none;
+}
+:root[data-theme="jrpg"] .btn:hover { box-shadow: var(--frame), var(--btn-shadow); }
+:root[data-theme="jrpg"] .btn.primary { box-shadow: var(--frame), inset 0 1px 0 rgba(255,255,255,.25); font-weight: 700; }
+:root[data-theme="jrpg"] .btn.ghost { box-shadow: none; }
+:root[data-theme="jrpg"] .btn.ghost:hover { box-shadow: var(--frame-soft); }
+
+:root[data-theme="jrpg"] input[type=text],
+:root[data-theme="jrpg"] input[type=search],
+:root[data-theme="jrpg"] textarea,
+:root[data-theme="jrpg"] select,
+:root[data-theme="jrpg"] .skinpick {
+  border: none;
+  box-shadow: var(--frame-soft);
+  background: var(--field-bg);
+}
+:root[data-theme="jrpg"] input:focus,
+:root[data-theme="jrpg"] textarea:focus,
+:root[data-theme="jrpg"] select:focus { box-shadow: var(--frame); }
+
+/* ── the selected row, exactly as a menu highlights one ─────────────────────────────────── */
+:root[data-theme="jrpg"] .toc button.on {
+  background: linear-gradient(90deg, rgba(232,196,106,.22), transparent);
+  box-shadow: inset 3px 0 0 var(--accent);
+  color: var(--ink);
+}
+:root[data-theme="jrpg"] .tree .row.on {
+  background: linear-gradient(90deg, rgba(232,196,106,.18), transparent);
+  color: var(--accent);
+}
+:root[data-theme="jrpg"] .tab.on,
+:root[data-theme="jrpg"] .stab.on { border-bottom-color: var(--accent); color: var(--accent); }
+
+/* ── the progress bar is a gauge: dark channel, gold fill, a lit top edge ───────────────── */
+:root[data-theme="jrpg"] .progress {
+  background: #0a2226;
+  box-shadow: var(--frame-soft);
+  height: 6px;
+}
+:root[data-theme="jrpg"] .progress i {
+  background: linear-gradient(180deg, #f7e3a8, #d4a94a 55%, #a87c2b);
+}
+
+/* ── the code pane keeps its ground quiet: a costume must not cost legibility ───────────── */
+:root[data-theme="jrpg"] .code { background: #0c2b2f; }
+:root[data-theme="jrpg"] td.gut { background: #0c2b2f; color: #6f8a80; }
+:root[data-theme="jrpg"] tr.hit td.gut { background: var(--hl); color: var(--accent); }
+:root[data-theme="jrpg"] .filehead { border-bottom: 1px solid #7d6a3c; }
+
+/* ── chips and status dots become small framed tokens ───────────────────────────────────── */
+:root[data-theme="jrpg"] .chip,
+:root[data-theme="jrpg"] .tag {
+  border-radius: 2px;
+  border: 1px solid #7d6a3c;
+  color: var(--accent);
+}
+:root[data-theme="jrpg"] .dot { border-radius: 0; transform: rotate(45deg); }
+
+/* ── the hero: the photograph stays, but sunk into the field and gold-framed ────────────── */
+:root[data-theme="jrpg"] .hero.hasimg::before { filter: saturate(.45) hue-rotate(150deg) brightness(.7); }
+:root[data-theme="jrpg"] .hero { border-bottom: 2px solid var(--line); }
+:root[data-theme="jrpg"] .credit { border-color: #7d6a3c; color: var(--muted); }
+
+/* ── the nav is the top bar of the menu ─────────────────────────────────────────────────── */
+:root[data-theme="jrpg"] .nav,
+:root[data-theme="jrpg"] .topbar { border-bottom: 2px solid var(--line); }
+:root[data-theme="jrpg"] .navhome,
+:root[data-theme="jrpg"] .repoline .name { color: var(--accent); }
+
+/* ── the diagram: framed nodes on the field ─────────────────────────────────────────────── */
+:root[data-theme="jrpg"] .archsvg .node rect { fill: #17454b; stroke: #7d6a3c; stroke-width: 1.5; }
+:root[data-theme="jrpg"] .archsvg.focused .node.on rect { stroke: var(--accent); stroke-width: 2.5; }
+:root[data-theme="jrpg"] .archsvg .nlabel { fill: var(--ink); }
+:root[data-theme="jrpg"] .archsvg .edge { color: #7d6a3c; }

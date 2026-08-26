@@ -31,7 +31,12 @@ export interface RepoViewOptions {
    * Two things follow: there is somewhere to go BACK to, and the page can notice when the
    * server it came from has restarted — which is what a static export can never do.
    */
-  servedBy?: { homeUrl: string };
+  servedBy?: {
+    homeUrl: string;
+    /** the repository this page describes, so the page can ask about its own freshness */
+    repoPath: string;
+    builtAt: string;
+  };
 }
 
 interface EmbeddedFile {
@@ -80,6 +85,82 @@ function liveReloadScript(): string {
   }
   poll();
   setInterval(poll, 2000);
+})();
+`;
+}
+
+/**
+ * A quiet marker in the corner when the code has moved on since this tour was built.
+ *
+ * Deliberately not a banner. The page is still correct about the commit it describes, and
+ * shouting about it would push the code down and interrupt a reader who may not care yet.
+ * It is a chip: a state, a rebuild, and — when the rebuild lands — an invitation to switch,
+ * taken when the reader chooses rather than the moment it is ready.
+ */
+function freshnessScript(repoPath: string, builtAt: string): string {
+  return `
+(function () {
+  var repo = ${JSON.stringify(repoPath)};
+
+  // This script is inlined in <head> — the same place the skin script has to run so a
+  // chosen skin never flashes — so there is no <body> to append to yet.
+  function ready(fn) {
+    if (document.body) fn();
+    else document.addEventListener('DOMContentLoaded', fn);
+  }
+
+  var chip = document.createElement('div');
+  chip.className = 'freshchip';
+  chip.style.display = 'none';
+  ready(function () { document.body.appendChild(chip); });
+
+  var state = 'unknown';
+
+  function show(html, cls) {
+    chip.innerHTML = html;
+    chip.className = 'freshchip ' + (cls || '');
+    chip.style.display = '';
+  }
+
+  function check() {
+    fetch('/api/repos', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var me = (d.repos || []).filter(function (r) { return r.path === repo; })[0];
+        if (!me) return;
+
+        if (me.running) { state = 'building'; show('rebuilding this tour…'); return; }
+
+        // A build finished that is newer than the page being read: offer it, do not take it.
+        if (state === 'building' && me.built && me.built.builtAt > ${JSON.stringify(builtAt)}) {
+          state = 'ready';
+          show('a newer tour is ready <button type="button" data-go>Show it</button>', 'ready');
+          return;
+        }
+
+        if (!me.current) {
+          state = 'stale';
+          show('the code has moved since this tour <button type="button" data-build>Rebuild</button>');
+        } else {
+          state = 'current';
+          chip.style.display = 'none';
+        }
+      })
+      .catch(function () { /* the server is restarting; ask again next time */ });
+  }
+
+  chip.addEventListener('click', function (e) {
+    if (e.target.hasAttribute('data-build')) {
+      show('rebuilding this tour…');
+      state = 'building';
+      fetch('/api/build', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: repo }) });
+    } else if (e.target.hasAttribute('data-go')) {
+      location.reload();
+    }
+  });
+
+  check();
+  setInterval(check, 4000);
 })();
 `;
 }
@@ -841,6 +922,7 @@ export function renderRepoView(result: DigestResult, opts: RepoViewOptions): str
 <style>${alternateCss()}</style>
 <script>${skinScript()}</script>
 ${opts.servedBy ? `<script>${liveReloadScript()}</script>` : ''}
+${opts.servedBy ? `<script>${freshnessScript(opts.servedBy.repoPath, opts.servedBy.builtAt)}</script>` : ''}
 </head>
 <body>
 

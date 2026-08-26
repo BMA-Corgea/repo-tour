@@ -115,6 +115,27 @@ function wasBuilding(repoPath: string): boolean {
   } catch { return false; }
 }
 
+/**
+ * The most recent build of a repository, whatever tree state it describes.
+ *
+ * This is what makes a tour survive the code moving underneath it. A tour pinned to an older
+ * commit is still the truth about that commit — it does not stop being readable because a
+ * file changed — and taking it away the moment anything is edited turns every edit into a
+ * multi-minute wait before you can read anything at all.
+ */
+function newestRendered(repoPath: string): Rendered | null {
+  const dir = renderedDir(repoPath);
+  let best: { at: string; fp: string } | null = null;
+  try {
+    for (const f of fs.readdirSync(dir)) {
+      if (!f.endsWith('.json')) continue;
+      const meta = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')) as RenderedMeta;
+      if (!best || meta.builtAt > best.at) best = { at: meta.builtAt, fp: meta.fingerprint };
+    }
+  } catch { return null; }
+  return best ? readRendered(repoPath, best.fp) : null;
+}
+
 function readRendered(repoPath: string, fp: string): Rendered | null {
   const dir = renderedDir(repoPath);
   try {
@@ -335,7 +356,9 @@ export class RepoTourServer {
   }> {
     return this.repos.map((r) => {
       const fp = fingerprint(r.path);
-      const built = this.lookup(r.path, fp) ?? this.cache.get(r.path) ?? null;
+      // Fall back to the newest build of ANY tree state: a repo whose code has moved still
+      // HAS a tour, and reporting "no tour yet" would both be false and hide a readable one.
+      const built = this.lookup(r.path, fp) ?? newestRendered(r.path) ?? null;
       const meta = built ? (({ html, ...rest }) => rest)(built) : null;
       return {
         ...r,
@@ -391,7 +414,7 @@ export class RepoTourServer {
     onLine('rendering…');
     const html = renderRepoView(result, {
       steps, itinerary: plan.itinerary, architecture: arch.subsystems.length > 1 ? arch : undefined,
-      servedBy: { homeUrl: '/' },
+      servedBy: { homeUrl: '/', repoPath, builtAt: new Date().toISOString() },
     });
 
     const rendered: Rendered = {
@@ -522,15 +545,14 @@ export class RepoTourServer {
         const cached = this.lookup(p, fp);
 
         if (cached) return this.html(res, 200, cached.html);
+
+        // The tree has moved since the last build. Serve that build anyway — it is still the
+        // truth about the commit it describes, and making it unreachable turns every edit
+        // into a wait before anything can be read. The page carries a quiet marker instead.
+        const older = newestRendered(p);
+        if (older) return this.html(res, 200, older.html);
+
         if (job?.state === 'running') return this.html(res, 200, building(p, job.lines));
-
-        // Built before, but the tree has moved: rebuild on the refresh, as asked.
-        if (hasAnyBuild(p)) {
-          this.startJob(p);
-          return this.html(res, 200, building(p, ['the repository has changed — rebuilding…']));
-        }
-
-        // Never built: wait to be asked.
         return this.html(res, 200, notBuilt(p));
       }
 

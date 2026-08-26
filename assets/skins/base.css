@@ -159,6 +159,35 @@ tr.hit td.ln { background:var(--hl); }
 /* The tour has to be startable from the pane a reader is already looking at. The header
    button is right, but it is at the far edge of a wide window; this one is under their eyes. */
 .bigstart { width:100%; padding:10px 14px; font-size:14px; }
+/* The freshness chip: a quiet corner state when the code has moved on since a tour was
+   built. Deliberately not a banner — the page is still correct about the commit it
+   describes, and shouting would push the code down and interrupt a reader who may not
+   care yet. */
+
+
+/* ── the freshness chip ────────────────────────────────────────────────────────────────────
+   A quiet corner state for when the code has moved on since this tour was built.
+
+   Deliberately NOT a banner. The page is still correct about the commit it describes, so
+   shouting about it would push the code down and interrupt a reader who may not care yet.
+   It states the fact, offers the rebuild, and — when a newer tour is ready — offers the
+   switch rather than taking it. */
+.freshchip {
+  position: fixed; right: 14px; bottom: 14px; z-index: 40;
+  display: flex; align-items: center; gap: 9px;
+  padding: 7px 12px; border-radius: 999px;
+  background: var(--bg); border: 1px solid var(--line); color: var(--muted);
+  font-size: 12px; box-shadow: 0 2px 12px rgba(0,0,0,.22);
+  max-width: min(92vw, 430px);
+}
+.freshchip.ready { border-color: var(--accent); color: var(--ink); }
+.freshchip button {
+  font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+  padding: 3px 11px; border-radius: 999px;
+  border: 1px solid var(--btn-edge); background: var(--btn-bg); color: var(--btn-ink);
+}
+.freshchip button:hover { border-color: var(--accent); }
+
 .buildstamp {
   margin-top:14px; padding-top:10px; border-top:1px solid var(--line);
   color:var(--muted); font-size:11px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
