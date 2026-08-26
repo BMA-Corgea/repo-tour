@@ -35,3 +35,8 @@ will be overwritten.
 
 - Exports: (none)
 - Imports: (none)
+
+## src/view.ts
+
+- Exports: renderView
+- Imports: (none)
