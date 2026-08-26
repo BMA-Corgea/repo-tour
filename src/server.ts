@@ -767,6 +767,11 @@ a{color:var(--accent)}
   padding:10px 20px;background:var(--bg);border-bottom:1px solid var(--line)
 }
 .navhome{font-weight:600;text-decoration:none;font-size:14px}
+/* AGPL section 13: a program people interact with over a network should offer them its
+   source. This IS a network-interactive program, so the offer belongs in the interface
+   rather than only in a file nobody opens. */
+.src{font-size:12px;color:var(--muted);text-decoration:none}
+.src:hover{color:var(--accent)}
 .nav .btn{text-decoration:none}
 .buildwrap{max-width:760px;margin:0 auto;padding:40px 20px}
 .elapsed{color:var(--muted);font-size:12px;margin-top:8px}
@@ -906,6 +911,8 @@ function navBar(here: 'home' | 'building'): string {
   ${here === 'building' ? '<a class="btn" href="/">\u2190 All repositories</a>' : ''}
   <span style="flex:1"></span>
   ${skinPicker()}
+  <a class="src" href="https://github.com/BMA-Corgea/repo-tour" target="_blank" rel="noreferrer"
+     title="repo-tour is free software under the AGPL. This is its source.">Source</a>
 </div>`;
 }
 
