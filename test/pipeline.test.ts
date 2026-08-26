@@ -613,9 +613,11 @@ describe('the tour walks CODE, not metrics', () => {
     // the real source text is embedded, not just its metrics
     expect(html).toContain('def run(job)');
     expect(html).toMatch(/window\.__STEPS__/);
-    // The tour must never start on its own — it waits for the button.
-    expect(html).not.toMatch(/Tour\.start\(/);
+    // The tour must never start on its own — it waits for the button. The engine's own
+    // source defines Tour.start, so assert on the BOOTSTRAP's call, not the mere string.
+    expect(html).not.toMatch(/window\.Tour\.start\(cfg\)/);
     expect(html).toMatch(/id="start"/);
+    expect(html).toMatch(/btn\.addEventListener\('click'/);
     expect((html.match(/(?:https?:)?\/\/[a-zA-Z0-9.-]+/g) ?? [])).toEqual([]);
     expect(html).not.toMatch(/<script[^>]+src=/i);
     // and the scoring rubric is NOT on the screen
