@@ -1183,11 +1183,25 @@ describe('a cached page carries the renderer that made it', () => {
       // Pretend it was built by an older renderer — the shape of "we added a skin since".
       fs.writeFileSync(metaPath, JSON.stringify({ ...meta, presentation: 'from-before' }));
 
+      // `current` stays true — it is a claim about the CODE, and the code has not moved.
+      // What must change is that the stale page is no longer REUSED: opening the tour starts
+      // a rebuild behind the reader, which is how a new skin reaches a page already on disk.
       const fresh = new RepoTourServer({ statePath: path.join(own, 'state.json'), interpret: false });
+      expect(fresh.listRepos()[0]!.running, 'nothing running before it is opened').toBe(false);
+
+      const res = {
+        writeHead() { return this; },
+        end() { return this; },
+      } as unknown as import('node:http').ServerResponse;
+      await fresh.handler(
+        { url: `/r?path=${encodeURIComponent(own)}`, method: 'GET' } as import('node:http').IncomingMessage,
+        res,
+      );
+
       expect(
-        fresh.listRepos()[0]!.current,
-        'a page from an older renderer is not current, however unchanged the code is',
-      ).toBe(false);
+        fresh.listRepos()[0]!.running,
+        'opening a page built by an older renderer should rebuild it behind the reader',
+      ).toBe(true);
     } finally {
       fs.rmSync(own, { recursive: true, force: true });
     }
