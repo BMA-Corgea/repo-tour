@@ -46,6 +46,11 @@ will be overwritten.
 - Exports: PARSEABLE, inventory
 - Imports: (none)
 
+## src/library.ts
+
+- Exports: findTour, listTours, newestFor, registryPath, renderLibrary, saveTour, toursDir
+- Imports: (none)
+
 ## src/rank.ts
 
 - Exports: MULTIPLIER, WEIGHTS, churnByFile, rank
@@ -59,6 +64,11 @@ will be overwritten.
 ## src/rollup.ts
 
 - Exports: rollup
+- Imports: (none)
+
+## src/server.ts
+
+- Exports: RepoTourServer, fingerprint
 - Imports: (none)
 
 ## src/tour.ts

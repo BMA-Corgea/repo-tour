@@ -17,6 +17,9 @@ import { buildCodeTour, buildArchitectureSteps } from './codetour.js';
 import { buildArchitecture, architectureBrief } from './architecture.js';
 import { renderRepoView } from './repoview.js';
 import { interpretStops, applyMeanings, interpretArchitecture, DEFAULT_MODEL } from './interpret.js';
+import { saveTour, listTours, findTour, newestFor, renderLibrary } from './library.js';
+import { RepoTourServer } from './server.js';
+import { execFileSync } from 'node:child_process';
 import type { RankedFile } from './types.js';
 
 interface Args {
@@ -29,12 +32,15 @@ interface Args {
   maxRows: number;
   interpret: boolean;
   model: string;
+  port: number;
+  /** rebuild even when a tour for this exact commit already exists */
+  fresh: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
   const args: Args = {
     command: argv[0] ?? 'help', target: '.', top: 25, write: true, json: false,
-    view: null, maxRows: 750, interpret: true, model: DEFAULT_MODEL,
+    view: null, maxRows: 750, interpret: true, model: DEFAULT_MODEL, fresh: false, port: 7777,
   };
   const rest = argv.slice(1);
   for (let i = 0; i < rest.length; i++) {
@@ -45,6 +51,8 @@ function parseArgs(argv: string[]): Args {
     else if (a === '--view') { args.view = rest[++i] ?? ''; }
     else if (a === '--max-rows') { args.maxRows = Number(rest[++i] ?? 750); }
     else if (a === '--no-interpret') { args.interpret = false; }
+    else if (a === '--fresh') { args.fresh = true; }
+    else if (a === '--port') { args.port = Number(rest[++i] ?? 7777); }
     else if (a === '--model') { args.model = rest[++i] ?? DEFAULT_MODEL; }
     else if (!a.startsWith('-')) { args.target = a; }
   }
@@ -74,14 +82,97 @@ function printRanked(ranked: RankedFile[], top: number): void {
   });
 }
 
+/** The commit a repository is on right now, or null when it has none. */
+function headOf(repoPath: string): string | null {
+  try {
+    return execFileSync('git', ['-C', repoPath, 'rev-parse', 'HEAD'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch { return null; }
+}
+
+/** True when the working tree has changes git would report — a tour cannot pin to a commit then. */
+function isDirty(repoPath: string): boolean {
+  try {
+    return execFileSync('git', ['-C', repoPath, 'status', '--porcelain'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim().length > 0;
+  } catch { return false; }
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+
+  // ---- the app: repositories stay loaded, and a refresh re-reads them
+  if (args.command === 'serve' || args.command === 'app') {
+    const server = new RepoTourServer({
+      port: args.port, model: args.model, interpret: args.interpret,
+    });
+    const { port } = await server.listen();
+    const url = `http://127.0.0.1:${port}`;
+    console.log(`\n  repo-tour is running at ${url}`);
+    console.log(`  Load a repository there; it stays loaded, and refreshing a tour re-reads it.`);
+    console.log(`\n  Ctrl-C to stop.\n`);
+    return new Promise<void>(() => { /* run until interrupted */ });
+  }
+
+  // ---- verbs that read the library rather than a repository
+  if (args.command === 'list' || args.command === 'open' || args.command === 'library') {
+    const tours = listTours();
+
+    if (args.command === 'list') {
+      if (!tours.length) { console.log('\nNo tours yet. Run: repo-tour tour <path>\n'); return; }
+      console.log(`\n${tours.length} tour${tours.length === 1 ? '' : 's'}:\n`);
+      for (const t of tours) {
+        console.log(`  ${pad(t.id, 12)} ${pad(t.repoName, 18)} ${padStart(String(t.stops), 3)} stops  ${t.generatedAt.slice(0, 16).replace('T', ' ')}`);
+        console.log(`  ${' '.repeat(12)} ${t.page}`);
+      }
+      console.log('');
+      return;
+    }
+
+    if (args.command === 'open') {
+      const wanted = args.target !== '.' ? findTour(args.target) : newestFor(process.cwd());
+      if (!wanted) {
+        console.error(args.target !== '.' ? `no tour matching "${args.target}"` : 'no tour for this directory yet — run: repo-tour tour .');
+        process.exit(1);
+      }
+      console.log(wanted.page);
+      return;
+    }
+
+    // library: regenerate the index over every known tour and print its path
+    const heads: Record<string, string | null> = {};
+    for (const t of tours) heads[t.repoPath] = headOf(t.repoPath);
+    const libPath = path.join(path.dirname(new URL(import.meta.url).pathname), '..', '.cache', 'library.html');
+    fs.mkdirSync(path.dirname(libPath), { recursive: true });
+    fs.writeFileSync(libPath, renderLibrary(tours, heads, Date.now()));
+    console.log(libPath);
+    return;
+  }
 
   if (args.command !== 'digest' && args.command !== 'tour' && args.command !== 'inspect') {
     console.log('usage: repo-tour digest <path> [--top N] [--view FILE] [--max-rows N] [--no-write] [--json]');
     console.log('       repo-tour tour <path> [--view FILE] [--no-write]        the repo page + a tour of the code');
     console.log('       repo-tour inspect <path> [--view FILE] [--top N]        the digest quality view (scores, signals)');
+    console.log('       repo-tour serve [--port N]                              THE APP: load repos, refresh to see changes');
+    console.log('       repo-tour list                                          every tour you have made');
+    console.log('       repo-tour open [id]                                     print the path of a saved tour');
+    console.log('       repo-tour library                                       rebuild and print the index of all tours');
     process.exit(args.command === 'help' ? 0 : 1);
+  }
+
+  // A tour is pinned to a commit. If one already exists for this exact commit and nothing
+  // has changed since, there is nothing to redo — reuse it instead of rebuilding the page.
+  if (args.command === 'tour' && !args.fresh && args.view === null) {
+    const abs = path.resolve(args.target);
+    const head = headOf(abs);
+    const existing = newestFor(abs);
+    if (head && existing && existing.head === head && !isDirty(abs)) {
+      console.log(`\n  This commit already has a tour, and nothing has changed since.`);
+      console.log(`  ${existing.stops} stops · made ${existing.generatedAt.slice(0, 16).replace('T', ' ')}`);
+      console.log(`\n  ${existing.page}`);
+      console.log(`\n  Use --fresh to rebuild it anyway.\n`);
+      return;
+    }
   }
 
   const result = await digest(args.target, { write: args.write });
@@ -232,6 +323,39 @@ async function main(): Promise<void> {
     );
     const kb = Math.round(fs.statSync(viewPath).size / 1024);
     console.log(`\n  view               ${viewPath}  (${kb} KB, self-contained)`);
+
+    // Tours are entities, not loose files: record this one and refresh the library.
+    if (codeTour && args.write) {
+      const abs = path.resolve(args.target);
+      const dirty = isDirty(abs);
+      const repoHead = m.repos.find((x) => x.root === '');
+      const record = saveTour(
+        abs,
+        fs.readFileSync(viewPath, 'utf8'),
+        {
+          repoName: path.basename(abs) || abs,
+          repoPath: abs,
+          head: dirty ? null : repoHead?.head ?? null,
+          branch: repoHead?.branch ?? null,
+          stops: tourSteps.length,
+          architectureStops: tourSteps.filter((s) => s.architecture).length,
+          files: codeTour.itinerary,
+          interpreted: tourSteps.some((s) => s.interpreted),
+        },
+        new Date().toISOString(),
+      );
+
+      const all = listTours();
+      const heads: Record<string, string | null> = {};
+      for (const t of all) heads[t.repoPath] = headOf(t.repoPath);
+      const libPath = path.join(path.dirname(new URL(import.meta.url).pathname), '..', '.cache', 'library.html');
+      fs.mkdirSync(path.dirname(libPath), { recursive: true });
+      fs.writeFileSync(libPath, renderLibrary(all, heads, Date.now()));
+
+      console.log(`  saved as           ${record.id}${dirty ? '  (uncommitted tree — not pinned to a commit)' : ''}`);
+      console.log(`                     ${record.page}`);
+      console.log(`  all your tours     ${libPath}`);
+    }
     if (codeTour) {
       const archCount = tourSteps.filter((s) => s.architecture).length;
       console.log(`  tour               ${tourSteps.length} stops — ${archCount} on the system, ${codeTour.steps.length} through ${codeTour.itinerary.length} files:`);

@@ -224,6 +224,9 @@ tr.hit td.ln { background:var(--hl); }
 .btn.primary { background:#1f883d; border-color:#1f883d; color:#fff; }
 .btn:hover { filter:brightness(1.06); }
 .said { color:var(--muted); font-size:12px; }
+.bar.snapshot { padding:7px 20px; background:var(--canvas); }
+.bar.snapshot b { color:var(--ink); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+.bar.snapshot code { background:var(--chip); padding:1px 6px; border-radius:4px; font-size:11px; }
 
 /* The side column is DOCKED, not floating. An explanation worth reading needs a column,
    not a tooltip — and a docked panel leaves the code fully visible beside it. */
@@ -299,6 +302,7 @@ tr.hit td.ln { background:var(--hl); }
 .note .prov { font-size:11px; color:var(--muted); margin-bottom:5px; }
 .note .prov b { color:var(--accent); font-weight:600; cursor:pointer; }
 .note .prov b:hover { text-decoration:underline; }
+.note .staleflag { color:var(--warn); }
 .note .quote {
   font:11px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:var(--muted);
   border-left:2px solid var(--line); padding-left:8px; margin:0 0 6px; white-space:pre-wrap;
@@ -510,7 +514,10 @@ const NOTES = `
 (function () {
   var R = window.__REPO__ || {};
   var repo = R.repo || { name: 'repo', head: null };
-  var KEY = 'repotour:notes:' + repo.name + ':' + (repo.head || 'nohead');
+  // Keyed to the REPO, not the commit. Notes are review material: losing them because a
+  // new tour was generated would defeat the point. Each note records the commit it was
+  // taken at instead, so one from older code is labelled rather than silently trusted.
+  var KEY = 'repotour:notes:' + repo.name;
 
   var el = {
     what: document.getElementById('a-what'), from: document.getElementById('a-from'),
@@ -555,8 +562,10 @@ const NOTES = `
     }
     el.list.innerHTML = notes.map(function (nt, i) {
       var range = nt.startLine + (nt.endLine !== nt.startLine ? '\\u2013' + nt.endLine : '');
+      var stale = nt.head && repo.head && nt.head !== repo.head;
       var prov = '<b data-jump="' + i + '">' + esc(nt.file) + ':' + range + '</b>' +
-        (nt.stopTitle ? ' \\u00b7 from stop ' + (nt.stopIndex + 1) + ', ' + esc(nt.stopTitle) : ' \\u00b7 while browsing');
+        (nt.stopTitle ? ' \\u00b7 from stop ' + (nt.stopIndex + 1) + ', ' + esc(nt.stopTitle) : ' \\u00b7 while browsing') +
+        (stale ? ' \\u00b7 <span class="staleflag">taken at ' + esc(nt.head.slice(0, 8)) + ', code has moved</span>' : '');
       return '<div class="note">' +
         '<button class="del" data-del="' + i + '" title="delete">\\u00d7</button>' +
         '<div class="prov">' + prov + '</div>' +
@@ -575,7 +584,8 @@ const NOTES = `
       out.push('## ' + f, '');
       byFile[f].sort(function (a, b) { return a.startLine - b.startLine; }).forEach(function (nt) {
         var range = 'L' + nt.startLine + (nt.endLine !== nt.startLine ? '-L' + nt.endLine : '');
-        out.push('### ' + range + (nt.stopTitle ? '  \\u2014 prompted by tour stop ' + (nt.stopIndex + 1) + ', ' + nt.stopTitle : ''));
+        out.push('### ' + range + (nt.stopTitle ? '  \\u2014 prompted by tour stop ' + (nt.stopIndex + 1) + ', ' + nt.stopTitle : '') +
+          (nt.head && repo.head && nt.head !== repo.head ? '  \\u2014 taken at ' + nt.head.slice(0, 8) + ', code has moved since' : ''));
         if (nt.explanation) out.push('', '> The tour said: ' + nt.explanation);
         if (nt.quote) out.push('', '\\u0060\\u0060\\u0060', nt.quote, '\\u0060\\u0060\\u0060');
         out.push('', nt.body, '');
@@ -604,6 +614,7 @@ const NOTES = `
       file: anchor.file, startLine: anchor.startLine, endLine: anchor.endLine,
       stopIndex: anchor.stopIndex, stopTitle: anchor.stopTitle || null,
       explanation: anchor.explanation || null,
+      head: repo.head || null,
       quote: window.__repo.lineText(anchor.file, anchor.startLine, anchor.endLine),
       body: body
     });
@@ -825,6 +836,7 @@ export function renderRepoView(result: DigestResult, opts: RepoViewOptions): str
   const start = opts.steps.find((s) => s.file)?.file ?? embedded[0]?.path ?? '';
   const archSvg = opts.architecture ? architectureSvg(opts.architecture) : '';
   const archStops = opts.steps.filter((s) => s.architecture).length;
+  const generatedAt = m.generatedAt;
   const topFileOf: Record<string, string> = {};
   for (const sub of opts.architecture?.subsystems ?? []) {
     if (sub.topFiles[0]) topFileOf[sub.path] = sub.topFiles[0].path;
@@ -865,6 +877,13 @@ export function renderRepoView(result: DigestResult, opts: RepoViewOptions): str
     : `${opts.steps.length} stops through ${opts.itinerary.length} ${opts.itinerary.length === 1 ? 'file' : 'files'} — the ones that actually carry this repo.`}</span>
   <span class="said">·</span>
   <span class="said">${shown.toLocaleString()} of ${total.toLocaleString()} files browsable here; generated, vendored and binary content is left out.</span>
+</div>
+<div class="bar snapshot">
+  <span class="said">
+    A snapshot of <b>${repo?.head ? escapeHtml(repo.head.slice(0, 10)) : 'an uncommitted tree'}</b>${repo?.branch ? ` on ${escapeHtml(repo.branch)}` : ''},
+    taken ${escapeHtml(generatedAt.slice(0, 16).replace('T', ' '))}. Refreshing this page will never pick up new code —
+    it does not look at the repository again. Re-run <code>repo-tour tour</code> for a fresh one.
+  </span>
 </div>
 
 <div class="layout">

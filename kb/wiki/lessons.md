@@ -10,6 +10,35 @@ One entry per lesson, newest first, each citing the ticket or incident it came f
 
 ---
 
+## A generated file cannot be refreshed — the product had to become an app (T-4, 2026-08-26)
+
+Evan: **"does my full refresh doesn't work for updating? ... essentially I need an app that
+can load repos with tours into it. That way a refresh will enable seeing more updates."**
+
+He was describing the fundamental limit of what had been built. `repo-tour tour` wrote a
+self-contained HTML file, and a self-contained file never looks at the repository again.
+Refreshing it re-reads the same bytes forever, and — worse — a stale tour is
+indistinguishable from a fresh one.
+
+`repo-tour serve` replaces it as the front door. Repositories are loaded in and stay
+loaded; a refresh fingerprints the tree and rebuilds only if it actually moved. The static
+export still exists (`repo-tour tour --view`) because a file you can send someone is a real
+thing to want — but it is no longer the primary shape.
+
+**What made the refresh affordable was already built.** Content-hash file reuse, the
+interpretation cache, and incremental digest all existed for other reasons; together they
+mean a refresh after one edit re-does one file's worth of work. An unchanged refresh is
+served from memory in about 9ms.
+
+**And the same self-referential trap bit twice.** The fingerprint was HEAD plus
+`git status --porcelain` — but the digest writes its cache INTO the repo, so status always
+reported it, the fingerprint changed on every build, and the page was permanently "stale",
+rebuilding forever. The digest had already learned this lesson (`.repo-tour` is in
+`NEVER_DESCEND`); the server had to learn it again. **Anything that reads a tree it also
+writes to must exclude its own output — and a single run will never reveal the bug.**
+
+---
+
 ## Client script lives inside TS template literals — parse it in a test (T-3, 2026-08-26)
 
 The page's JavaScript is written as template literals in `src/repoview.ts` and inlined at

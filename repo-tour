@@ -5,9 +5,11 @@
 # Point it at a repository and it walks you through it: digest the tree, then open a
 # guided tour of what it found.
 #
-#   ./repo-tour tour   [path] [--flags]   digest a repo and open its guided tour (default)
+#   ./repo-tour serve  [--port N]         THE APP: load repos, refresh to see changes (default)
+#   ./repo-tour tour   [path] [--flags]   one-off: digest a repo and open a static tour page
 #   ./repo-tour digest [path] [--flags]   digest a repo and open the plain browsable view
-#   ./repo-tour open   [path]             re-open the last view WITHOUT re-digesting
+#   ./repo-tour open   [path|id]          re-open a saved tour WITHOUT re-digesting
+#   ./repo-tour tours                     the library: every tour you have made, pick one
 #   ./repo-tour doctor                    check node, deps and parser grammars
 #   ./repo-tour build                     compile src/ to dist/
 #   ./repo-tour test                      run the acceptance suite
@@ -133,11 +135,38 @@ cmd_run() { # cmd_run <tour|digest> [path] [extra flags...]
 }
 
 cmd_open() {
-  local target; target="$(_resolve_target "${1:-}")"
-  local file; file="$(_view_path "$target")"
-  if ! _open_view "$file"; then
-    _die "no view at $file — run './repo-tour tour $target' first."
+  _need_node; _need_deps
+  local file
+  # An id (or id prefix) names a saved tour; anything else is a path.
+  if [ -n "${1:-}" ] && [ ! -d "${1:-}" ]; then
+    file="$( cd "$ROOT" && npx tsx src/cli.ts open "$1" 2>/dev/null )" || true
+  else
+    local target; target="$(_resolve_target "${1:-}")"
+    file="$( cd "$target" && cd "$ROOT" && npx tsx src/cli.ts open "$(cd "$target" && pwd)" 2>/dev/null )" || true
+    [ -f "${file:-}" ] || file="$(_view_path "$target")"
   fi
+  if ! _open_view "${file:-}"; then
+    _die "no saved tour for that — run './repo-tour tour <path>' first, or './repo-tour tours' to see what you have."
+  fi
+}
+
+cmd_serve() {
+  _need_node; _need_deps
+  local port=7777
+  [ "${1:-}" = "--port" ] && port="${2:-7777}"
+  local url="http://127.0.0.1:$port"
+  local op; op="$(_opener)"
+  if [ -n "$op" ] && [ -t 1 ]; then
+    ( sleep 2; "$op" "$url" >/dev/null 2>&1 ) &
+  fi
+  ( cd "$ROOT" && npx tsx src/cli.ts serve "$@" )
+}
+
+cmd_tours() {
+  _need_node; _need_deps
+  ( cd "$ROOT" && npx tsx src/cli.ts list )
+  local lib; lib="$( cd "$ROOT" && npx tsx src/cli.ts library )"
+  _open_view "$lib" || true
 }
 
 cmd_doctor() {
@@ -175,19 +204,21 @@ cmd_build() { _need_node; _need_deps; ( cd "$ROOT" && npx tsc -p tsconfig.json )
 cmd_test()  { _need_node; _need_deps; ( cd "$ROOT" && npx vitest run ); }
 
 usage() {
-  sed -n '3,26p' "$ROOT/repo-tour" | sed 's/^# \{0,1\}//'
+  sed -n '3,27p' "$ROOT/repo-tour" | sed 's/^# \{0,1\}//'
 }
 
 # ── dispatch ────────────────────────────────────────────────────────────────
-cmd="${1:-tour}"
+cmd="${1:-serve}"
 case "$cmd" in
+  serve|app)       shift || true; cmd_serve "$@" ;;
   tour)            shift || true; cmd_run tour "$@" ;;
   digest)          shift || true; cmd_run digest "$@" ;;
   open)            shift || true; cmd_open "$@" ;;
+  tours|library)   cmd_tours ;;
   doctor)          cmd_doctor ;;
   build)           cmd_build ;;
   test)            cmd_test ;;
   -h|--help|help)  usage ;;
-  -*)              cmd_run tour "$@" ;;          # ./repo-tour --top 5
+  -*)              cmd_serve "$@" ;;             # ./repo-tour --port 8080
   *)               cmd_run tour "$@" ;;          # ./repo-tour ~/some/repo
 esac

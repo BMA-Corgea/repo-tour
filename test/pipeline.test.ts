@@ -21,6 +21,7 @@ import { planIncremental } from '../src/incremental.js';
 import { buildTourSteps } from '../src/tour.js';
 import { buildCodeTour } from '../src/codetour.js';
 import { renderRepoView } from '../src/repoview.js';
+import { fingerprint } from '../src/server.js';
 
 let root: string;
 
@@ -660,16 +661,30 @@ describe('the notes panel carries provenance', () => {
     expect(html).toMatch(/prompted by tour stop/);
   });
 
-  it('keys stored notes to this repo at this commit', async () => {
+  it('keeps notes across commits but stamps the one they were taken at', async () => {
     const r = await digest(root, { write: false });
     const plan = buildCodeTour(r);
     const html = renderRepoView(r, { steps: plan.steps, itinerary: plan.itinerary });
 
-    // Notes from one commit must not silently reappear against different code.
-    expect(html).toMatch(/repotour:notes:/);
-    expect(html).toMatch(/repo\.head/);
+    // Notes are review material: a new tour must not throw them away...
+    expect(html).toMatch(/repotour:notes:' \+ repo\.name/);
+    // ...but a note taken against code that has since moved must say so, not sit there
+    // looking as though it still applies.
+    expect(html).toMatch(/head: repo\.head/);
+    expect(html).toMatch(/code has moved/);
     const head = r.manifest.repos.find((x) => x.root === '')?.head;
     expect(html).toContain(head!);
+  });
+
+  it('says on the page that it is a snapshot of one commit', async () => {
+    const r = await digest(root, { write: false });
+    const plan = buildCodeTour(r);
+    const html = renderRepoView(r, { steps: plan.steps, itinerary: plan.itinerary });
+
+    // A static page cannot know it has gone stale, so it must at least be honest about
+    // being static — refreshing it will never pick up new code.
+    expect(html).toMatch(/A snapshot of/);
+    expect(html).toMatch(/Refreshing this page will never pick up new code/);
   });
 
   it('every piece of client script is valid JavaScript', async () => {
@@ -685,5 +700,26 @@ describe('the notes panel carries provenance', () => {
     for (const [i, code] of blocks.entries()) {
       expect(() => new Function(code), `script block ${i} does not parse`).not.toThrow();
     }
+  });
+});
+
+describe('the app refreshes on real change, not on its own output', () => {
+  it('ignores its own .repo-tour cache when deciding the repo has moved', async () => {
+    // The digest writes its cache INTO the repo, so `git status` reports it. Fingerprinting
+    // that would make every build look like a change, leaving the page permanently "stale"
+    // and rebuilding forever — which is exactly what happened the first time.
+    const before = fingerprint(root);
+
+    await digest(root, { write: true });
+    const afterCacheWritten = fingerprint(root);
+    expect(afterCacheWritten, 'writing the cache must not count as a change').toBe(before);
+
+    // A real edit must still be seen.
+    write(path.join(root, 'src/newly_added.py'), 'def added():\n    return 1\n');
+    const afterRealEdit = fingerprint(root);
+    expect(afterRealEdit).not.toBe(before);
+
+    fs.rmSync(path.join(root, 'src/newly_added.py'));
+    fs.rmSync(path.join(root, '.repo-tour'), { recursive: true, force: true });
   });
 });
