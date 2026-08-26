@@ -10,10 +10,13 @@ here and found via the reference table below.
 <!-- What is in motion right now: one line per active ticket/effort —
      what, why, where it stands, what is next. Never pruned while live. -->
 
-- **T-1** (feature) — The digest engine. **COMPLETE and waiting on Evan.** All 9 acceptance
-  criteria met. On `main` at github.com/BMA-Corgea/repo-tour, 28 tests green, tour verified
-  in real Chromium. Sitting at **uat** — the `accept` gate is Evan's and only he can clear it.
-  **Next:** he says yes or sends it back. Nothing else moves until then.
+- **T-1** (feature) — The digest engine: all 9 acceptance criteria met, on `main`, 32 tests
+  green. Still at **uat** awaiting Evan's `accept` gate.
+- **The product surface was rebuilt** after Evan rejected the first demo ("there's no code
+  on the screen"). `repo-tour tour` is now a GitHub-shaped repo page walking the ACTUAL
+  code; the old metrics view survives as `repo-tour inspect` for judging digest quality.
+  This was outside T-1's spec — T-1 never included a tour (spec §9 defers it to T-2) — so
+  it is not blocking T-1's acceptance either way. **Next:** Evan's call on both.
 
 
 ## Waiting on
@@ -30,6 +33,11 @@ here and found via the reference table below.
 <!-- One line per completed item, WITH the why. Newest first. Prune from the
      bottom; the permanent record lives in tickets, events.jsonl, and wiki. -->
 
+- **2026-08-26** — Product surface rebuilt on Evan's rejection of the metrics demo. Why it
+  went wrong: the ranking signals are how the engine picks what to show, not what a reader
+  wants; putting them on screen showed the rubric instead of the repo. Now: repo page with
+  real code, tour anchored to line ranges, narration leading with the author's own
+  docstrings (7 of 14 stops on autoSQL quote the author directly).
 - **2026-08-26** — T-1 completed through verify: stage 5 rollup, incremental re-digest, and
   a generated tour. Why the tour is here and not deferred: Evan asked to see a demo, and a
   tour is a projection of the digest, so it cost a renderer rather than a new subsystem.

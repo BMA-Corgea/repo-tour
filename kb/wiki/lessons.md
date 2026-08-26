@@ -10,6 +10,54 @@ One entry per lesson, newest first, each citing the ticket or incident it came f
 
 ---
 
+## I built the machinery's UI instead of the product's UI (T-1, 2026-08-26)
+
+The first demo was a dashboard of score, churn, in-degree, LOC and classification, with a
+tour that walked a viewer through *the dashboard*. Evan's verdict: **"There's no code on
+the screen... This is nothing like the github repo format we were looking to recreate...
+I need to know almost nothing about the score, churn, in LOG, class, or lang."**
+
+He was right on every point, and the mistake is worth naming precisely because it is easy
+to repeat.
+
+**The metrics are how the engine DECIDES what to show you. They are not what a reader
+wants to see.** They are load-bearing and they should be invisible — under the floor,
+like a query planner. Putting them on screen and calling it a tour is showing someone the
+scoring rubric instead of the thing being scored.
+
+There was a second, compounding error: the demo was run against *repo-tour itself*. A
+tool that reads repositories should never be demoed on its own source. The reader has no
+stake in it, and it proves nothing about the hard case.
+
+**The rule now:** the product surface is the repo — file tree, real source, line numbers,
+a guide pointing at lines. Anything a reader would not care about belongs in
+`repo-tour inspect`, which exists to judge digest QUALITY and is a different job.
+
+---
+
+## The author already wrote the "why" — read it before spending a token (T-1, 2026-08-26)
+
+Deterministic narration can say what a function IS, how long it is, and who calls it. It
+cannot say why it exists. That gap looked like it needed stage 4 (the paid stage).
+
+It mostly does not. **Docstrings and leading comment blocks are the author explaining
+their own code, and extracting them is free.** On autoSQL, 7 of 14 tour stops now quote
+the author directly, including sentences no metric could ever produce: *"One pick → the
+whole response body. Separated from the route so the suite drives the same code the
+screen does, with no HTTP."*
+
+Two consequences, both live in `src/codetour.ts`:
+
+1. A stop's narration LEADS with the author's words when they exist.
+2. Symbol selection **prefers documented symbols**. A documented 20-line function is a
+   better stop than an undocumented 200-line one, because the reader leaves it knowing
+   something.
+
+Stage 4's job shrinks accordingly: it is for the code nobody explained, and for the
+cross-file "why" no single docstring can carry.
+
+---
+
 ## The digest must never digest its own cache (T-1, 2026-08-26)
 
 Found by running the tool twice on its own repository during the `verify` stage — not by
