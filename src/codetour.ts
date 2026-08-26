@@ -15,6 +15,7 @@
  * page rather than papered over.
  */
 
+import fs from 'node:fs';
 import path from 'node:path';
 import type { DigestResult } from './digest.js';
 import type { RankedFile, SymbolRecord } from './types.js';
@@ -89,6 +90,45 @@ function describeSymbol(s: SymbolRecord, file: string): { title: string; text: s
     title: s.name,
     text: `${said}${said ? '' : `A ${kind} at line ${n(s.line)}. `}${said ? `${n(span)} lines, from line ${n(s.line)}. ` : `${sizeNote}. `}${reach}`,
   };
+}
+
+/**
+ * Split a long definition into sections a reader can actually be walked through.
+ *
+ * One stop on a 120-line function is not a walkthrough — it is a summary you nod at and
+ * move past. Cuts land on blank lines inside the body, which is where the author already
+ * separated one thought from the next, so no section starts mid-statement.
+ */
+function sectionsOf(
+  lines: string[], start: number, end: number, target = 45, maxSections = 3,
+): Array<{ start: number; end: number }> {
+  const span = end - start + 1;
+  if (span <= target * 1.4) return [{ start, end }];
+
+  const breaks: number[] = [];
+  for (let i = start + 1; i < end; i++) {
+    if ((lines[i - 1] ?? '').trim() === '') breaks.push(i);
+  }
+  if (breaks.length === 0) return [{ start, end }];
+
+  const wanted = Math.min(maxSections, Math.max(2, Math.round(span / target)));
+  const cuts: number[] = [];
+  for (let k = 1; k < wanted; k++) {
+    const ideal = start + Math.round((span * k) / wanted);
+    const nearest = breaks.reduce((best, b) =>
+      Math.abs(b - ideal) < Math.abs(best - ideal) ? b : best, breaks[0]!);
+    if (!cuts.includes(nearest) && nearest > start + 4 && nearest < end - 4) cuts.push(nearest);
+  }
+  cuts.sort((a, b) => a - b);
+
+  const out: Array<{ start: number; end: number }> = [];
+  let from = start;
+  for (const cut of cuts) {
+    out.push({ start: from, end: cut - 1 });
+    from = cut;
+  }
+  out.push({ start: from, end });
+  return out;
 }
 
 export interface CodeTourOptions {
@@ -173,12 +213,32 @@ export function buildCodeTour(result: DigestResult, opts: CodeTourOptions = {}):
       text: `${roleLine} ${importLine}`,
     });
 
-    // --- the substantial pieces inside it
+    // --- the substantial pieces inside it, long ones walked in sections
+    let srcLines: string[] = [];
+    try { srcLines = fs.readFileSync(path.join(m.root, r.path), 'utf8').split(/\r?\n/); } catch { /* fall back to one stop */ }
+
     const picks = headlineSymbols(ex.symbols, role === 'other' ? 1 : 3);
     for (const s of picks) {
       if (steps.length >= maxSteps - 1) break;
       const d = describeSymbol(s, r.path);
-      steps.push({ file: r.path, startLine: s.line, endLine: s.endLine, title: d.title, text: d.text });
+      let sections = srcLines.length ? sectionsOf(srcLines, s.line, s.endLine) : [{ start: s.line, end: s.endLine }];
+
+      // All of a function's sections, or none of them. A stop labelled "(1/3)" whose 2 and
+      // 3 were cut by the step budget is worse than never splitting it: the reader is told
+      // there is more and then walked away from it.
+      const room = maxSteps - 1 - steps.length;
+      if (room <= 0) break;
+      if (sections.length > room) sections = [{ start: s.line, end: s.endLine }];
+
+      sections.forEach((sec, idx) => {
+        steps.push({
+          file: r.path,
+          startLine: sec.start,
+          endLine: sec.end,
+          title: sections.length > 1 ? `${d.title} (${idx + 1}/${sections.length})` : d.title,
+          text: d.text,
+        });
+      });
     }
   };
 

@@ -31,6 +31,11 @@ will be overwritten.
 - Exports: planIncremental
 - Imports: (none)
 
+## src/interpret.ts
+
+- Exports: DEFAULT_MODEL, PROMPT_VERSION, applyMeanings, defaultCacheDir, interpretStops, stopKey
+- Imports: (none)
+
 ## src/inventory.ts
 
 - Exports: PARSEABLE, inventory

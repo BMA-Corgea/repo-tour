@@ -10,6 +10,46 @@ One entry per lesson, newest first, each citing the ticket or incident it came f
 
 ---
 
+## Stage 4 is the product, and there is no template that substitutes for it (T-1, 2026-08-26)
+
+Shown a tour stop on `main` that read *"A function at line 71. 95 lines. It is private to
+cli.ts, so it can be changed in place."*, Evan said: **"that sure is saying very little
+about how it works. We've explained nothing and we move on after this step."**
+
+The instinct was to enrich the template — pull call graphs and control flow off the AST and
+write a fuller sentence. That would have produced *"it parses argv, guards on the command,
+calls digest(), then branches on --json"*: a narration of syntax the reader can already
+see. **The "why" is not in the syntax, so no template can reach it.** Docstrings help only
+where an author happened to write one; `main` had none.
+
+Stage 4 — a model reading the actual source — is not an optimisation of the deterministic
+path. It is the thing the other four stages exist to make affordable. On autoSQL it is
+**5 calls and about $0.38** for a 14-stop tour, because stages 1-3 narrowed 365 files to 5.
+Cached by content hash, so it is paid once.
+
+**Rule:** when narration is thin, the answer is to interpret, not to template harder.
+
+---
+
+## Fit the container to the explanation, not the explanation to the container (T-1, 2026-08-26)
+
+Stage 4's first answers were good and too long for the coachmark bubble, so the prompt was
+told to "BE SHORT" — capping the explanation at 40 words to fit the UI.
+
+Evan reversed it: **"We might need to readjust how we portray information so that we can
+have longer explanations. I'm thinking like a textbook paragraph's worth of information."**
+
+He was right, and the mistake was structural: a floating spotlight bubble is a UI for
+*"click this button"* tooltips, not for teaching someone a codebase. Shrinking the teaching
+to fit the tooltip was optimising the wrong side of the equation.
+
+The guide is now a **docked third column** — tree, code, guide — sized for a real
+paragraph. Explanations run 95-192 words, and the browser test asserts none of them is
+clipped by the panel. The floating-bubble engine was dropped from this surface entirely;
+the highlighted lines are the spotlight, so the dim overlay was never needed.
+
+---
+
 ## I built the machinery's UI instead of the product's UI (T-1, 2026-08-26)
 
 The first demo was a dashboard of score, churn, in-degree, LOC and classification, with a

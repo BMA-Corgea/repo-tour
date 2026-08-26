@@ -16,7 +16,7 @@ import type { DigestResult } from './digest.js';
 import type { CodeStep } from './codetour.js';
 
 export interface RepoViewOptions {
-  steps: CodeStep[];
+  steps: Array<CodeStep & { interpreted?: boolean }>;
   itinerary: string[];
   /** cap on embedded file count and total bytes, so the page stays one openable file */
   maxFiles?: number;
@@ -82,8 +82,17 @@ body {
 .tab { padding:8px 2px 10px; font-size:14px; color:var(--ink); border-bottom:2px solid transparent; }
 .tab.on { border-bottom-color:#fd8c73; font-weight:600; }
 .tab.off { color:var(--muted); }
-.layout { display:grid; grid-template-columns:300px 1fr; gap:16px; padding:16px 20px 40px; align-items:start; }
-@media (max-width:900px) { .layout { grid-template-columns:1fr; } .tree { max-height:240px; } }
+.layout {
+  display:grid; grid-template-columns:270px minmax(0,1fr); gap:16px;
+  padding:16px 20px 40px; align-items:start;
+}
+.layout.touring { grid-template-columns:270px minmax(0,1fr) 400px; }
+@media (max-width:1200px) { .layout.touring { grid-template-columns:minmax(0,1fr) 380px; } .layout.touring .files { display:none; } }
+@media (max-width:900px) {
+  .layout, .layout.touring { grid-template-columns:minmax(0,1fr); }
+  .tree { max-height:220px; }
+  .layout.touring .files { display:block; }
+}
 .panel { background:var(--bg); border:1px solid var(--line); border-radius:6px; overflow:hidden; }
 .panel > h3 {
   margin:0; padding:9px 14px; font-size:13px; font-weight:600;
@@ -129,6 +138,25 @@ tr.hit td.ln { background:var(--hl); }
 .btn.primary { background:#1f883d; border-color:#1f883d; color:#fff; }
 .btn:hover { filter:brightness(1.06); }
 .said { color:var(--muted); font-size:12px; }
+
+/* The guide is DOCKED, not floating. An explanation worth reading needs a column, not a
+   tooltip — and a docked panel leaves the code fully visible and scrollable beside it. */
+#guide { display:none; position:sticky; top:96px; }
+.layout.touring #guide { display:block; }
+#guide .gbody { padding:16px 18px 18px; }
+#guide .gstep { font-size:11px; letter-spacing:0.06em; text-transform:uppercase; color:var(--muted); font-weight:600; }
+#guide h2 {
+  margin:6px 0 4px; font-size:17px; font-weight:600; letter-spacing:-0.01em;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+#guide .gwhere { font-size:12px; color:var(--muted); margin-bottom:12px; }
+#guide .gtext { font-size:14px; line-height:1.65; white-space:pre-wrap; }
+#guide .gtext.plain { color:var(--muted); font-style:italic; }
+#guide .gnav { display:flex; gap:8px; align-items:center; margin-top:18px; padding-top:14px; border-top:1px solid var(--line); }
+#guide .gnav .spacer { flex:1; }
+#guide .gsrc { margin-top:12px; font-size:11px; color:var(--muted); }
+.progress { height:3px; background:var(--line); border-radius:2px; overflow:hidden; margin-top:10px; }
+.progress i { display:block; height:100%; background:var(--accent); transition:width .25s ease; }
 `;
 
 const HIGHLIGHTER = `
@@ -292,33 +320,55 @@ const APP = `
 const TOUR_BOOTSTRAP = `
 (function () {
   var defs = window.__STEPS__ || [];
-  if (!defs.length || !window.Tour) return;
-
-  var steps = defs.map(function (s, i) {
-    return {
-      target: '#range',
-      title: s.title,
-      text: s.text,
-      placement: 'right',
-      beforeShow: function (api) {
-        window.__repo.open(s.file, { from: s.startLine, to: s.endLine });
-        return api.wait(120);
-      }
-    };
-  });
-
-  var cfg = {
-    storageKey: null,
-    narrator: { name: 'repo-tour' },
-    steps: steps,
-    finishLabel: 'Done',
-  };
-
-  // The tour NEVER starts on its own. Someone opening a repository is usually here to
-  // look at something specific; being grabbed by a guide is an interruption, not a
-  // welcome. The page is fully browsable the moment it loads, and the tour waits.
+  var layout = document.querySelector('.layout');
   var btn = document.getElementById('start');
-  btn.addEventListener('click', function () { window.Tour.replay(cfg); });
+  if (!defs.length || !layout || !btn) return;
+
+  var el = {
+    step: document.getElementById('gstep'), title: document.getElementById('gtitle'),
+    where: document.getElementById('gwhere'), text: document.getElementById('gtext'),
+    bar: document.getElementById('gbar'), src: document.getElementById('gsrc'),
+    back: document.getElementById('gback'), next: document.getElementById('gnext'),
+    end: document.getElementById('gend')
+  };
+  var i = -1;
+
+  function show(n) {
+    if (n < 0 || n >= defs.length) return;
+    i = n;
+    var s = defs[n];
+    window.__repo.open(s.file, { from: s.startLine, to: s.endLine });
+    el.step.textContent = 'Stop ' + (n + 1) + ' of ' + defs.length;
+    el.title.textContent = s.title;
+    el.where.textContent = s.file + '  ·  lines ' + s.startLine + '\u2013' + s.endLine;
+    el.text.textContent = s.text;
+    el.text.classList.toggle('plain', !s.interpreted);
+    el.src.textContent = s.interpreted
+      ? 'Written by reading these lines.'
+      : 'Structural facts only \u2014 this stop was not interpreted.';
+    el.bar.style.width = Math.round(((n + 1) / defs.length) * 100) + '%';
+    el.back.disabled = n === 0;
+    el.next.textContent = n === defs.length - 1 ? 'Finish' : 'Next';
+  }
+
+  function start() { layout.classList.add('touring'); show(0); }
+  function stop() {
+    layout.classList.remove('touring');
+    var hits = document.querySelectorAll('tr.hit');
+    for (var k = 0; k < hits.length; k++) hits[k].classList.remove('hit');
+    i = -1;
+  }
+
+  btn.addEventListener('click', start);
+  el.next.addEventListener('click', function () { i === defs.length - 1 ? stop() : show(i + 1); });
+  el.back.addEventListener('click', function () { show(i - 1); });
+  el.end.addEventListener('click', stop);
+  document.addEventListener('keydown', function (e) {
+    if (i < 0) return;
+    if (e.key === 'ArrowRight') { e.preventDefault(); i === defs.length - 1 ? stop() : show(i + 1); }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); show(i - 1); }
+    else if (e.key === 'Escape') stop();
+  });
 })();
 `;
 
@@ -376,7 +426,6 @@ export function renderRepoView(result: DigestResult, opts: RepoViewOptions): str
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(repoName)} — repo-tour</title>
 <style>${STYLE}</style>
-<style>${readAsset('tour.css')}</style>
 </head>
 <body>
 
@@ -404,7 +453,7 @@ export function renderRepoView(result: DigestResult, opts: RepoViewOptions): str
 </div>
 
 <div class="layout">
-  <div class="panel">
+  <div class="panel files">
     <h3>Files</h3>
     <div class="tree" id="tree"></div>
   </div>
@@ -415,13 +464,30 @@ export function renderRepoView(result: DigestResult, opts: RepoViewOptions): str
     </div>
     <div class="code" id="code"><div class="empty">Pick a file.</div></div>
   </div>
+
+  <div class="panel" id="guide">
+    <h3>The tour</h3>
+    <div class="gbody">
+      <div class="gstep" id="gstep"></div>
+      <h2 id="gtitle"></h2>
+      <div class="gwhere" id="gwhere"></div>
+      <div class="gtext" id="gtext"></div>
+      <div class="progress"><i id="gbar"></i></div>
+      <div class="gnav">
+        <button class="btn" id="gback" type="button">Back</button>
+        <button class="btn primary" id="gnext" type="button">Next</button>
+        <span class="spacer"></span>
+        <button class="btn" id="gend" type="button">End tour</button>
+      </div>
+      <div class="gsrc" id="gsrc"></div>
+    </div>
+  </div>
 </div>
 
 <script>window.__REPO__ = ${embedJson({ files: embedded, start })};</script>
 <script>window.__STEPS__ = ${embedJson(opts.steps)};</script>
 <script>${HIGHLIGHTER}</script>
 <script>${APP}</script>
-<script>${readAsset('tour.js')}</script>
 <script>${TOUR_BOOTSTRAP}</script>
 </body>
 </html>`;

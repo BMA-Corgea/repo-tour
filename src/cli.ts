@@ -15,6 +15,7 @@ import { renderView } from './view.js';
 import { buildTourSteps } from './tour.js';
 import { buildCodeTour } from './codetour.js';
 import { renderRepoView } from './repoview.js';
+import { interpretStops, applyMeanings, DEFAULT_MODEL } from './interpret.js';
 import type { RankedFile } from './types.js';
 
 interface Args {
@@ -25,12 +26,14 @@ interface Args {
   json: boolean;
   view: string | null;
   maxRows: number;
+  interpret: boolean;
+  model: string;
 }
 
 function parseArgs(argv: string[]): Args {
   const args: Args = {
     command: argv[0] ?? 'help', target: '.', top: 25, write: true, json: false,
-    view: null, maxRows: 750,
+    view: null, maxRows: 750, interpret: true, model: DEFAULT_MODEL,
   };
   const rest = argv.slice(1);
   for (let i = 0; i < rest.length; i++) {
@@ -40,6 +43,8 @@ function parseArgs(argv: string[]): Args {
     else if (a === '--json') { args.json = true; }
     else if (a === '--view') { args.view = rest[++i] ?? ''; }
     else if (a === '--max-rows') { args.maxRows = Number(rest[++i] ?? 750); }
+    else if (a === '--no-interpret') { args.interpret = false; }
+    else if (a === '--model') { args.model = rest[++i] ?? DEFAULT_MODEL; }
     else if (!a.startsWith('-')) { args.target = a; }
   }
   return args;
@@ -85,6 +90,22 @@ async function main(): Promise<void> {
   // `tour` is `digest` plus a projection of it — never a separate artifact.
   const isTour = args.command === 'tour';
   const codeTour = isTour ? buildCodeTour(result) : null;
+
+  // Stage 4 — the only stage that spends tokens, and it only ever sees the itinerary.
+  let tourSteps = codeTour?.steps ?? [];
+  let interpretCost: Awaited<ReturnType<typeof interpretStops>>['cost'] | null = null;
+  if (codeTour) {
+    const interp = await interpretStops(
+      m.root, codeTour.steps, result.inventory.files, result.extracts, result.graph.edges,
+      {
+        model: args.model,
+        cachedOnly: !args.interpret,
+        onProgress: (msg) => console.log(`  ${msg}`),
+      },
+    );
+    interpretCost = interp.cost;
+    tourSteps = applyMeanings(codeTour.steps, result.inventory.files, interp.meanings);
+  }
   const steps = args.command === 'inspect' ? buildTourSteps(result) : undefined;
 
   if (args.json) {
@@ -123,9 +144,18 @@ async function main(): Promise<void> {
 
   console.log(`\nCOST`);
   console.log(`  files scanned      ${padStart(String(m.cost.filesScanned), 8)}`);
-  console.log(`  files interpreted  ${padStart(String(m.cost.filesInterpreted), 8)}   (stage 4 not built)`);
-  console.log(`  tokens fast        ${padStart(String(m.cost.tokens.fast), 8)}`);
-  console.log(`  tokens strong      ${padStart(String(m.cost.tokens.strong), 8)}`);
+  console.log(`  files interpreted  ${padStart(String(interpretCost ? interpretCost.calls : 0), 8)}`);
+  if (interpretCost) {
+    const ic = interpretCost;
+    console.log(`  interpreted        ${padStart(String(ic.interpretedStops), 8)} stops in ${ic.calls} call(s) on ${ic.model}`);
+    console.log(`  reused (cached)    ${padStart(String(ic.cachedStops), 8)} stops — paid for on an earlier run`);
+    console.log(`  tokens in / out    ${padStart(ic.inputTokens + ' / ' + ic.outputTokens, 8)}`);
+    console.log(`  cost               ${padStart('$' + ic.usd.toFixed(4), 8)}`);
+    for (const f of ic.failures) console.log(`  ! ${f}`);
+  } else {
+    console.log(`  tokens fast        ${padStart(String(m.cost.tokens.fast), 8)}`);
+    console.log(`  tokens strong      ${padStart(String(m.cost.tokens.strong), 8)}`);
+  }
   console.log(`  wall clock         ${padStart(ms(m.cost.wallMs), 8)}   (inventory ${ms(m.cost.inventoryMs)}, extract ${ms(m.cost.extractMs)}, rank ${ms(m.cost.rankMs)})`);
   console.log(`  deep slice         ${padStart(String(m.counts.deepSlice), 8)} files would enter stage 4`);
   console.log(`  sweep eligible     ${padStart(String(m.counts.sweepEligible), 8)} files scored above zero`);
@@ -150,7 +180,7 @@ async function main(): Promise<void> {
     fs.writeFileSync(
       viewPath,
       codeTour
-        ? renderRepoView(result, { steps: codeTour.steps, itinerary: codeTour.itinerary })
+        ? renderRepoView(result, { steps: tourSteps, itinerary: codeTour.itinerary })
         : renderView(result, { maxRows: args.maxRows, tour: steps }),
     );
     const kb = Math.round(fs.statSync(viewPath).size / 1024);
