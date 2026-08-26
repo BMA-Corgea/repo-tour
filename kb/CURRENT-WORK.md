@@ -10,30 +10,34 @@ here and found via the reference table below.
 <!-- What is in motion right now: one line per active ticket/effort —
      what, why, where it stands, what is next. Never pruned while live. -->
 
-- **T-1** (feature) — The digest engine: deterministic extraction with rollup and incremental re-dige… — verify
-  `T-1-digest-engine` (4 commits, 19 tests green). Sitting at **auto-review**, deliberately
-  not advanced: acceptance criteria 5 (rollup) and 6 (incremental driver) are still
-  unbuilt, so the ticket must not drift toward `accept`. **Next:** build stage 5 (rollup)
-  and the diff-driven incremental digest, then advance.
+- **T-1** (feature) — The digest engine. **COMPLETE and waiting on Evan.** All 9 acceptance
+  criteria met. On `main` at github.com/BMA-Corgea/repo-tour, 28 tests green, tour verified
+  in real Chromium. Sitting at **uat** — the `accept` gate is Evan's and only he can clear it.
+  **Next:** he says yes or sends it back. Nothing else moves until then.
+
 
 ## Waiting on
 
 <!-- Holds: "waiting at <gate> on <keyholder> since <date>, ping sent to
      <channel>" — no session should discover a hold by archaeology (ruling 24). -->
 
-- **Nothing is blocking.** Two things are Evan's to decide when he wants them, neither
-  urgent and neither blocking the build:
-  - the `merge` gate on T-1 is next after auto-review; its policy is `unattended`, so it
-    does not require him — but partial work should not land silently, so it is being held
-    until criteria 5 and 6 are built.
-  - `github.com/BMA-Corgea/repo-tour` exists and is empty. No git remote is configured in
-    this working tree. Wiring it and pushing is his call; nothing needs it yet.
+- **T-1** — waiting at the `accept` gate on `human:owner` (Evan) since 2026-08-26. The
+  question that gate asks is not "does it match the spec" but "is this what you actually
+  meant, and would you show it to someone?" Nothing is blocked behind it except T-1 itself.
 
 ## Recent past (~15 items / ~30 days)
 
 <!-- One line per completed item, WITH the why. Newest first. Prune from the
      bottom; the permanent record lives in tickets, events.jsonl, and wiki. -->
 
+- **2026-08-26** — T-1 completed through verify: stage 5 rollup, incremental re-digest, and
+  a generated tour. Why the tour is here and not deferred: Evan asked to see a demo, and a
+  tour is a projection of the digest, so it cost a renderer rather than a new subsystem.
+- **2026-08-26** — verify found a defect no unit test could: the digest was scanning its own
+  `.repo-tour/` cache on a second run, inventing ~100 additions and a false 44% reuse figure.
+  Fixed and pinned. The general rule now recorded: a tool that writes into the tree it reads
+  must exclude its own output, and one run will never show you the bug.
+- **2026-08-26** — Wired to github.com/BMA-Corgea/repo-tour; `main` is the default branch.
 - **2026-08-26** — Criterion 8 built: self-contained HTML digest view (`src/view.ts`).
   Why: criteria 1–7 prove the machinery, but only a human reading a page can judge whether
   the digest is any good. Self-containment is enforced by test, not intent.
