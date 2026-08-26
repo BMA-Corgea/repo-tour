@@ -27,6 +27,13 @@ export interface CodeStep {
   endLine: number;
   title: string;
   text: string;
+  /**
+   * A stop the tour wrote about itself rather than about the code under it — the closing
+   * summary. Stage 4 must skip these: it anchors to the entry file's first few lines, and
+   * interpreting them would replace "that is the spine of this repo" with an explanation
+   * of three import statements.
+   */
+  synthetic?: boolean;
 }
 
 function n(x: number): string {
@@ -132,9 +139,10 @@ function sectionsOf(
 }
 
 export interface CodeTourOptions {
-  /** how many files to embed and walk */
+  /** how many files the tour visits */
   maxFiles?: number;
-  maxSteps?: number;
+  /** stops per file, including the file's opening stop */
+  perFile?: number;
 }
 
 export interface CodeTourPlan {
@@ -143,9 +151,18 @@ export interface CodeTourPlan {
   itinerary: string[];
 }
 
+/**
+ * Plan a tour across a repository.
+ *
+ * The itinerary is chosen BEFORE any stops are allocated, and every file on it gets the
+ * same budget. An earlier version walked files in rank order and stopped when it ran out
+ * of steps, which meant the top-ranked file swallowed half the tour (7 of 14 stops on
+ * autoSQL's app.py) and everything after it got a single "here is a file" nod. A tour
+ * that spends half its time in one file has not shown you a system.
+ */
 export function buildCodeTour(result: DigestResult, opts: CodeTourOptions = {}): CodeTourPlan {
-  const maxFiles = opts.maxFiles ?? 6;
-  const maxSteps = opts.maxSteps ?? 14;
+  const maxFiles = opts.maxFiles ?? 8;
+  const perFile = Math.max(2, opts.perFile ?? 3);
 
   const m = result.manifest;
   const repoName = path.basename(m.root) || m.root;
@@ -153,40 +170,71 @@ export function buildCodeTour(result: DigestResult, opts: CodeTourOptions = {}):
   const extractByPath = new Map(result.extracts.map((e) => [e.path, e] as const));
   const fileByPath = new Map(result.inventory.files.map((f) => [f.path, f] as const));
 
-  // Only files we can actually show code for.
+  // Only files we can actually show code for, and that have something inside worth stopping at.
   const candidates = result.ranked.filter((r) => {
     const f = fileByPath.get(r.path);
-    return r.score > 0 && f && !f.binary && f.loc > 0 && extractByPath.has(r.path);
+    const ex = extractByPath.get(r.path);
+    return r.score > 0 && f && !f.binary && f.loc > 0 && ex && ex.symbols.length > 0;
   });
+  if (candidates.length === 0) return { steps: [], itinerary: [] };
 
-  const steps: CodeStep[] = [];
-  const itinerary: string[] = [];
-
-  const entry = candidates[0];
-  if (!entry) return { steps, itinerary };
-
-  // The hub: what the most other files import. Often not the same as the entry point.
+  // ---- 1. choose the itinerary first
+  const entry = candidates[0]!;
   const hub = candidates
     .slice()
     .sort((a, b) => b.inDegree - a.inDegree)
     .find((r) => r.inDegree > 0 && r.path !== entry.path);
 
-  const walk = (r: RankedFile, role: 'entry' | 'hub' | 'other'): void => {
-    if (itinerary.includes(r.path)) return;
-    if (itinerary.length >= maxFiles) return;
-    const ex = extractByPath.get(r.path);
-    if (!ex) return;
-    itinerary.push(r.path);
+  const roles = new Map<string, 'entry' | 'hub' | 'other'>();
+  const itinerary: string[] = [entry.path];
+  roles.set(entry.path, 'entry');
+  if (hub) { itinerary.push(hub.path); roles.set(hub.path, 'hub'); }
 
-    const importers = rev.get(r.path) ?? [];
+  // Fill in rank order, but cap how many files any one directory contributes.
+  //
+  // The cap is a TIEBREAKER, not an override. An earlier version preferred any file from
+  // an unseen directory, which dragged in `spikes/` and a vendor test while skipping
+  // autoSQL's builder.py and legality.py — the 8th and 9th most important files in the
+  // repo. Rank decides what matters; the cap only stops a tour becoming a tour of one
+  // folder. The second pass drops the cap so the itinerary always fills.
+  const perDir = new Map<string, number>();
+  for (const p of itinerary) {
+    const d = path.posix.dirname(p);
+    perDir.set(d, (perDir.get(d) ?? 0) + 1);
+  }
+  // Deliberately LOOSE: no single directory supplies more than half the tour, and rank
+  // decides everything else. Tighter caps were tried and each one traded one bad outcome
+  // for another — a cap of 3 dropped autoSQL's legality.py (rank 9) for a spike at rank
+  // 17. This only bites on the pathological case it exists for: a tour of one folder.
+  const dirCap = Math.max(2, Math.ceil(maxFiles / 2));
+
+  for (const capped of [true, false]) {
+    for (const c of candidates) {
+      if (itinerary.length >= maxFiles) break;
+      if (itinerary.includes(c.path)) continue;
+      const dir = path.posix.dirname(c.path);
+      if (capped && (perDir.get(dir) ?? 0) >= dirCap) continue;
+      itinerary.push(c.path);
+      roles.set(c.path, 'other');
+      perDir.set(dir, (perDir.get(dir) ?? 0) + 1);
+    }
+  }
+
+  // ---- 2. every file on the itinerary gets the same budget
+  const rankByPath = new Map(candidates.map((r) => [r.path, r] as const));
+  const steps: CodeStep[] = [];
+
+  for (const filePath of itinerary) {
+    const r = rankByPath.get(filePath)!;
+    const ex = extractByPath.get(filePath)!;
+    const role = roles.get(filePath) ?? 'other';
+    const loc = fileByPath.get(filePath)?.loc ?? 0;
+
+    const importers = rev.get(filePath) ?? [];
     const internalImports = ex.imports.filter((i) => i.resolved !== null);
     const firstCode = ex.symbols.length ? Math.max(1, ex.symbols[0]!.line - 1) : 1;
+    const openingEnd = Math.min(Math.max(Math.min(firstCode, 24), 6), Math.max(loc, 1));
 
-    // --- the file's opening: what it depends on
-    // Clamp to the file's real length: a 3-line module has no line 6 to point at, and a
-    // spotlight anchored past EOF has nothing to bind to.
-    const loc = fileByPath.get(r.path)?.loc ?? 0;
-    const openingEnd = Math.min(firstCode, 24, Math.max(loc, 1));
     const roleLine =
       role === 'entry'
         ? `This is where I would start reading. Of ${n(m.counts.files)} files, this one ranked first: ` +
@@ -194,7 +242,8 @@ export function buildCodeTour(result: DigestResult, opts: CodeTourOptions = {}):
         : role === 'hub'
           ? `${plural(importers.length, 'other file')} in this repo import this one. ` +
             `It is load-bearing — the rest of the system leans on it.`
-          : `${n(r.loc)} lines, ${plural(r.churn, 'commit')}.`;
+          : `${n(r.loc)} lines, ${plural(r.churn, 'commit')}` +
+            (importers.length ? `, imported by ${plural(importers.length, 'file')}.` : '.');
 
     const importLine = internalImports.length
       ? `It pulls in ${plural(internalImports.length, 'module')} from inside this repo` +
@@ -203,69 +252,54 @@ export function buildCodeTour(result: DigestResult, opts: CodeTourOptions = {}):
           : `, including ${internalImports.slice(0, 3).map((i) => i.raw).join(', ')}.`)
       : ex.imports.length
         ? `Everything it imports comes from outside this repo — ${plural(ex.imports.length, 'external dependency', 'external dependencies')}.`
-        : `It imports nothing.`;
+        : 'It imports nothing.';
 
     steps.push({
-      file: r.path,
-      startLine: 1,
-      endLine: Math.min(Math.max(openingEnd, 6), Math.max(loc, 1)),
-      title: path.basename(r.path),
+      file: filePath, startLine: 1, endLine: openingEnd,
+      title: path.basename(filePath),
       text: `${roleLine} ${importLine}`,
     });
 
-    // --- the substantial pieces inside it, long ones walked in sections
+    let budget = perFile - 1; // the opening stop is spent
     let srcLines: string[] = [];
-    try { srcLines = fs.readFileSync(path.join(m.root, r.path), 'utf8').split(/\r?\n/); } catch { /* fall back to one stop */ }
+    try { srcLines = fs.readFileSync(path.join(m.root, filePath), 'utf8').split(/\r?\n/); } catch { /* one stop per symbol */ }
 
-    const picks = headlineSymbols(ex.symbols, role === 'other' ? 1 : 3);
-    for (const s of picks) {
-      if (steps.length >= maxSteps - 1) break;
-      const d = describeSymbol(s, r.path);
-      let sections = srcLines.length ? sectionsOf(srcLines, s.line, s.endLine) : [{ start: s.line, end: s.endLine }];
-
-      // All of a function's sections, or none of them. A stop labelled "(1/3)" whose 2 and
-      // 3 were cut by the step budget is worse than never splitting it: the reader is told
-      // there is more and then walked away from it.
-      const room = maxSteps - 1 - steps.length;
-      if (room <= 0) break;
-      if (sections.length > room) sections = [{ start: s.line, end: s.endLine }];
+    for (const sym of headlineSymbols(ex.symbols, budget)) {
+      if (budget <= 0) break;
+      const d = describeSymbol(sym, filePath);
+      let sections = srcLines.length ? sectionsOf(srcLines, sym.line, sym.endLine) : [{ start: sym.line, end: sym.endLine }];
+      // All of a function's sections or none: a stop labelled "(1/3)" whose 2 and 3 were
+      // cut is worse than never splitting it.
+      if (sections.length > budget) sections = [{ start: sym.line, end: sym.endLine }];
 
       sections.forEach((sec, idx) => {
         steps.push({
-          file: r.path,
-          startLine: sec.start,
-          endLine: sec.end,
+          file: filePath, startLine: sec.start, endLine: sec.end,
           title: sections.length > 1 ? `${d.title} (${idx + 1}/${sections.length})` : d.title,
           text: d.text,
         });
       });
+      budget -= sections.length;
     }
-  };
-
-  walk(entry, 'entry');
-  if (hub) walk(hub, 'hub');
-  for (const c of candidates) {
-    if (steps.length >= maxSteps - 1) break;
-    if (itinerary.length >= maxFiles) break;
-    walk(c, 'other');
   }
 
-  // --- closing step, anchored to the top of the entry file
+  // ---- 3. closing
   const publicCount = itinerary.reduce(
-    (t, p) => t + (extractByPath.get(p)?.symbols.filter((s) => s.exported).length ?? 0),
-    0,
+    (t, p) => t + (extractByPath.get(p)?.symbols.filter((s) => s.exported).length ?? 0), 0,
   );
   steps.push({
     file: entry.path,
     startLine: 1,
     endLine: Math.min(3, Math.max(fileByPath.get(entry.path)?.loc ?? 3, 1)),
     title: `That is the spine of ${repoName}`,
+    synthetic: true,
     text:
-      `${plural(itinerary.length, 'file')}, ${plural(publicCount, 'public symbol')}, out of ${n(m.counts.files)} files in the tree. ` +
-      `Everything I said was read off a parser or off git — which means I can tell you what this code IS, ` +
-      `how big it is, what it pulls in and who leans on it, but not yet WHY any of it exists. ` +
-      `That last part is the interpret stage, and it has not run.`,
+      `${plural(itinerary.length, 'file')}, ${plural(publicCount, 'public symbol')}, out of ` +
+      `${n(m.counts.files)} files in the tree. These are the ones churn, imports and structure ` +
+      `agree carry the most weight — not the whole repo, but the part you would have had to ` +
+      `find yourself before you could read any of the rest. Everything else is still in the ` +
+      `tree on the left; the tour picked a path through it, it did not hide the rest.`,
   });
 
-  return { steps: steps.slice(0, maxSteps), itinerary };
+  return { steps, itinerary };
 }

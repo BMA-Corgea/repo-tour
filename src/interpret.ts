@@ -227,6 +227,7 @@ export async function interpretStops(
   // Group the stops by file: one call per file, not one per stop.
   const jobs = new Map<string, FileJob>();
   steps.forEach((step, index) => {
+    if (step.synthetic) return; // the tour's own words, not code to explain
     const f = fileByPath.get(step.file);
     if (!f) return;
     const key = stopKey(f.sha256, step.startLine, step.endLine);
@@ -320,6 +321,7 @@ export function applyMeanings(
 ): Array<CodeStep & { interpreted: boolean }> {
   const shaByPath = new Map(files.map((f) => [f.path, f.sha256] as const));
   return steps.map((s) => {
+    if (s.synthetic) return { ...s, interpreted: false };
     const sha = shaByPath.get(s.file);
     const m = sha ? meanings.get(stopKey(sha, s.startLine, s.endLine)) : undefined;
     if (!m) return { ...s, interpreted: false };

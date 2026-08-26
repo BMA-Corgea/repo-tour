@@ -598,11 +598,29 @@ describe('the tour walks CODE, not metrics', () => {
     }
   });
 
-  it('says out loud that it cannot yet explain WHY', async () => {
+  it('closes with an honest account of what it did and did not cover', async () => {
     const r = await digest(root, { write: false });
     const plan = buildCodeTour(r);
     const last = plan.steps[plan.steps.length - 1]!;
-    expect(last.text).toMatch(/not yet WHY|interpret stage/);
+
+    // It names the coverage rather than implying the tour was the whole repo...
+    expect(last.text).toContain(r.inventory.files.length.toLocaleString());
+    expect(last.text).toMatch(/did not hide the rest/);
+    // ...and it is the tour talking about itself, so stage 4 must leave it alone.
+    expect(last.synthetic).toBe(true);
+  });
+
+  it('spreads its stops instead of drowning in the top-ranked file', async () => {
+    const r = await digest(root, { write: false });
+    const plan = buildCodeTour(r);
+    const perFile = new Map<string, number>();
+    for (const s of plan.steps) perFile.set(s.file, (perFile.get(s.file) ?? 0) + 1);
+
+    // No single file may take more than a third of the tour. app.py once took 7 of 14.
+    const worst = Math.max(...perFile.values());
+    expect(worst).toBeLessThanOrEqual(Math.ceil(plan.steps.length / 3));
+    // And no file on the itinerary gets a lone "here is a file" nod.
+    for (const f of plan.itinerary) expect(perFile.get(f) ?? 0).toBeGreaterThanOrEqual(2);
   });
 
   it('renders a self-contained repo page with the code actually in it', async () => {
