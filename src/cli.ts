@@ -36,12 +36,20 @@ interface Args {
   port: number;
   /** rebuild even when a tour for this exact commit already exists */
   fresh: boolean;
+  /**
+   * Where the app keeps its list of loaded repositories.
+   *
+   * Overridable because it must be: a throwaway server started for a test used to write to
+   * the real list, and clearing that list between test runs quietly wiped the repositories
+   * someone had actually loaded. A test server points this somewhere disposable.
+   */
+  state: string | null;
 }
 
 function parseArgs(argv: string[]): Args {
   const args: Args = {
     command: argv[0] ?? 'help', target: '.', top: 25, write: true, json: false,
-    view: null, maxRows: 750, interpret: true, model: DEFAULT_MODEL, fresh: false, port: 7777,
+    view: null, maxRows: 750, interpret: true, model: DEFAULT_MODEL, fresh: false, port: 7777, state: null,
   };
   const rest = argv.slice(1);
   for (let i = 0; i < rest.length; i++) {
@@ -54,6 +62,7 @@ function parseArgs(argv: string[]): Args {
     else if (a === '--no-interpret') { args.interpret = false; }
     else if (a === '--fresh') { args.fresh = true; }
     else if (a === '--port') { args.port = Number(rest[++i] ?? 7777); }
+    else if (a === '--state') { args.state = rest[++i] ?? null; }
     else if (a === '--model') { args.model = rest[++i] ?? DEFAULT_MODEL; }
     else if (!a.startsWith('-')) { args.target = a; }
   }
@@ -106,6 +115,7 @@ async function main(): Promise<void> {
   if (args.command === 'serve' || args.command === 'app') {
     const server = new RepoTourServer({
       port: args.port, model: args.model, interpret: args.interpret,
+      ...(args.state ? { statePath: args.state } : {}),
     });
     const { port } = await server.listen();
     const url = `http://127.0.0.1:${port}`;
@@ -154,7 +164,7 @@ async function main(): Promise<void> {
     console.log('usage: repo-tour digest <path> [--top N] [--view FILE] [--max-rows N] [--no-write] [--json]');
     console.log('       repo-tour tour <path> [--view FILE] [--no-write]        the repo page + a tour of the code');
     console.log('       repo-tour inspect <path> [--view FILE] [--top N]        the digest quality view (scores, signals)');
-    console.log('       repo-tour serve [--port N]                              THE APP: load repos, refresh to see changes');
+    console.log('       repo-tour serve [--port N] [--state FILE]               THE APP: load repos, refresh to see changes');
     console.log('       repo-tour list                                          every tour you have made');
     console.log('       repo-tour open [id]                                     print the path of a saved tour');
     console.log('       repo-tour library                                       rebuild and print the index of all tours');

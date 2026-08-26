@@ -34,6 +34,28 @@ where the eye already is. Silent refusal reads as a dead button.**
 
 ---
 
+## Test servers must not write to the real state file (T-4, 2026-08-26)
+
+Evan, looking at the app: **"Did we lose the tours we made?"** His list showed one
+throwaway repo from my own testing and nothing else.
+
+The server persists its loaded repositories to `.cache/loaded.json`. Every throwaway server
+I started for a test wrote to that same file, and I had been clearing it between runs to get
+a clean slate — which meant my clean slate was HIS list.
+
+Nothing expensive was lost, and it is worth being precise about why: the interpretation cache
+is keyed by content hash and lives elsewhere (119 entries intact), and each repository's own
+`.repo-tour/` digest cache is inside that repository (autoSQL: 415 files). Re-adding autoSQL
+rebuilt it with **zero** interpretation calls. Only the LIST was destroyed, and a list is the
+cheapest thing to rebuild — which is exactly why it was easy not to notice.
+
+`--state <file>` now exists so a test server points somewhere disposable. **Any process
+started for a test that writes to a path a real user's data also lives at is one keystroke
+from destroying it, and the blast radius is invisible until someone looks at their own
+screen.**
+
+---
+
 ## Styles are a swappable layer, not decoration (T-5, 2026-08-26)
 
 Evan: **"the buttons are ugly. Check out the way the GLP-Strong-App has styles that can be
