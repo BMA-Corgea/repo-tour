@@ -31,6 +31,7 @@ import { buildArchitecture, architectureBrief } from './architecture.js';
 import { interpretStops, applyMeanings, interpretArchitecture, DEFAULT_MODEL } from './interpret.js';
 import { renderRepoView } from './repoview.js';
 import { baseCss, alternateCss, skinPicker, skinScript } from './skins.js';
+import { surveyProviders, resolveChoice, providerById, type LlmChoice } from './llm.js';
 
 export interface LoadedRepo {
   path: string;
@@ -314,6 +315,8 @@ export function fingerprint(repoPath: string): string {
 }
 
 export interface ServerOptions {
+  /** which model writes the explanations; overrides the stored choice when given */
+  llm?: Partial<LlmChoice>;
   /**
    * Default 7788, recorded in ../PROJECT_PORTS.md.
    *
@@ -343,14 +346,21 @@ export class RepoTourServer {
   private cache = new Map<string, Rendered>();
   private jobs = new Map<string, Job>();
   private readonly statePath: string;
-  private readonly model: string;
   private readonly interpret: boolean;
+  /**
+   * Which model writes the explanations.
+   *
+   * A property of the APP, not of a browser tab: it decides what a build costs and where the
+   * source of somebody's private repository is sent, so it is stored on the server beside
+   * the loaded-repo list rather than in localStorage.
+   */
+  private choice: LlmChoice;
 
   constructor(private opts: ServerOptions = {}) {
     this.statePath = opts.statePath
       ?? path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.cache', 'loaded.json');
-    this.model = opts.model ?? DEFAULT_MODEL;
     this.interpret = opts.interpret !== false;
+    this.choice = resolveChoice(opts.llm ?? this.loadChoice());
     this.load();
     this.resumeInterrupted();
   }
@@ -370,6 +380,26 @@ export class RepoTourServer {
       const job = this.startJob(r.path);
       job.lines.unshift('resuming a build the last run did not finish…');
     }
+  }
+
+  private choicePath(): string {
+    return path.join(path.dirname(this.statePath), 'llm.json');
+  }
+
+  private loadChoice(): Partial<LlmChoice> | null {
+    try { return JSON.parse(fs.readFileSync(this.choicePath(), 'utf8')) as Partial<LlmChoice>; }
+    catch { return null; }
+  }
+
+  getChoice(): LlmChoice { return this.choice; }
+
+  setChoice(next: Partial<LlmChoice>): LlmChoice {
+    this.choice = resolveChoice(next);
+    try {
+      fs.mkdirSync(path.dirname(this.choicePath()), { recursive: true });
+      fs.writeFileSync(this.choicePath(), JSON.stringify(this.choice, null, 2));
+    } catch { /* an unwritable setting lasts this run, which is better than refusing it */ }
+    return this.choice;
   }
 
   private load(): void {
@@ -446,7 +476,10 @@ export class RepoTourServer {
     const plan = buildCodeTour(result);
     const arch = buildArchitecture(result);
     const name = path.basename(repoPath) || repoPath;
-    const io = { model: this.model, cachedOnly: !this.interpret, onProgress: onLine };
+    const io = {
+      provider: this.choice.provider, model: this.choice.model,
+      cachedOnly: !this.interpret, onProgress: onLine,
+    };
 
     const archSteps = arch.subsystems.length > 1
       ? buildArchitectureSteps(arch, name, result.inventory.files.length)
@@ -566,6 +599,18 @@ export class RepoTourServer {
       }
 
       if (route === '/api/version') return this.json(res, 200, { bootId: this.bootId });
+
+      if (route === '/api/llm') {
+        return this.json(res, 200, { chosen: this.choice, providers: await surveyProviders() });
+      }
+
+      if (route === '/api/llm-set' && req.method === 'POST') {
+        const body = JSON.parse(await this.readBody(req)) as Partial<LlmChoice>;
+        if (body.provider && !providerById(body.provider)) {
+          return this.json(res, 400, { error: `no such provider: ${body.provider}` });
+        }
+        return this.json(res, 200, { chosen: this.setChoice(body) });
+      }
 
       if (route === '/api/repos') return this.json(res, 200, { repos: this.listRepos() });
 
@@ -793,6 +838,27 @@ footer{margin-top:42px;padding-top:22px;border-top:1px solid var(--line)}
 .notegrid b{color:var(--ink);font-weight:600}
 .said{color:var(--muted);font-size:12px}
 a{color:var(--accent)}
+
+/* ── who writes the explanations ─────────────────────────────────────────────────────────── */
+.llm{margin-bottom:34px}
+.llmgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:10px}
+.prov{
+  border:1px solid var(--line);border-radius:10px;padding:13px 15px;background:var(--bg);
+  cursor:pointer;transition:border-color .14s ease
+}
+.prov:hover{border-color:var(--btn-edge-hover)}
+.prov.on{border-color:var(--accent);box-shadow:inset 3px 0 0 var(--accent)}
+.prov.off{opacity:.55;cursor:default}
+.prov.off:hover{border-color:var(--line)}
+.prov .ptop{display:flex;align-items:center;gap:8px}
+.prov h4{margin:0;font-size:14px;font-weight:600;flex:1}
+.prov .pnote{color:var(--muted);font-size:12px;line-height:1.6;margin:6px 0 0}
+.prov .pdetail{
+  color:var(--muted);font-size:11px;margin-top:7px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;word-break:break-all
+}
+.prov select{margin-top:9px;width:100%;font-size:12px}
+.llmnote{margin-top:12px;line-height:1.7;max-width:74ch}
 `;
 
 /**
@@ -842,6 +908,20 @@ function renderHome(): string {
 </header>
 
 <main class="wrap">
+  <section class="llm" id="llm">
+    <div class="secthead">
+      <h2>Who writes the explanations</h2>
+      <span class="said" id="llmnow"></span>
+    </div>
+    <div class="llmgrid" id="llmgrid"></div>
+    <p class="said llmnote">
+      Everything else about a tour is worked out on this machine by parsers and git. This one
+      stage reads your source and writes prose about it, so it is the only place a choice of
+      model matters — for what a build costs, for how good the explanations are, and for where
+      the code goes. Work already explained by one model is kept, so switching back finds it.
+    </p>
+  </section>
+
   <div class="secthead">
     <h2>Your repositories</h2>
     <span class="said" id="count"></span>
@@ -921,6 +1001,48 @@ function poll(p, el) {
   }, 900);
 }
 
+function llmCard(p, chosen) {
+  var usable = p.availability.ok;
+  var picked = p.id === chosen.provider;
+  var models = p.models.map(function (m) {
+    return '<option value="' + esc(m) + '"' + (picked && m === chosen.model ? ' selected' : '') + '>' + esc(m) + '</option>';
+  }).join('');
+  return '<div class="prov ' + (picked ? 'on ' : '') + (usable ? '' : 'off') + '" data-prov="' + esc(p.id) + '">' +
+    '<div class="ptop"><h4>' + esc(p.label) + '</h4>' +
+      (usable ? (picked ? '<span class="tag ok">in use</span>' : '') : '<span class="tag">unavailable</span>') +
+    '</div>' +
+    '<p class="pnote">' + esc(p.note) + '</p>' +
+    '<div class="pdetail">' + esc(p.availability.detail) + '</div>' +
+    (usable && p.models.length > 1 ? '<select data-model>' + models + '</select>' : '') +
+  '</div>';
+}
+
+function refreshLlm() {
+  fetch('/api/llm').then(function (r) { return r.json(); }).then(function (d) {
+    document.getElementById('llmnow').textContent = d.chosen.provider + ' · ' + d.chosen.model;
+    document.getElementById('llmgrid').innerHTML =
+      d.providers.map(function (p) { return llmCard(p, d.chosen); }).join('');
+  });
+}
+
+document.getElementById('llmgrid').addEventListener('change', function (e) {
+  var sel = e.target.closest('[data-model]');
+  if (!sel) return;
+  var card = sel.closest('.prov');
+  fetch('/api/llm-set', { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ provider: card.getAttribute('data-prov'), model: sel.value }) })
+    .then(refreshLlm);
+});
+
+document.getElementById('llmgrid').addEventListener('click', function (e) {
+  var card = e.target.closest('.prov');
+  if (!card || card.classList.contains('off') || e.target.closest('[data-model]')) return;
+  var sel = card.querySelector('[data-model]');
+  fetch('/api/llm-set', { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ provider: card.getAttribute('data-prov'), model: sel ? sel.value : undefined }) })
+    .then(refreshLlm);
+});
+
 function refresh() {
   fetch('/api/repos').then(function (r) { return r.json(); }).then(function (d) {
     var list = document.getElementById('list');
@@ -971,6 +1093,7 @@ document.getElementById('list').addEventListener('click', function (e) {
 });
 
 refresh();
+refreshLlm();
 setInterval(refresh, 4000);
 </script>
 </body></html>`;

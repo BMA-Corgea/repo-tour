@@ -359,6 +359,47 @@ bottom — because that ordering is the one thing a folder listing can never sho
 
 ---
 
+## The LLM is a choice, and adding one is a single entry (T-1, 2026-08-26)
+
+Evan: **"Abstract it one level up so it's not just runClaude, but that you can choose which
+LLM you're using and make it easy to add another one."**
+
+`src/llm.ts` is ported from GONS's `backend/app/llm_adapter.py`, which had already solved the
+awkward parts. Three of them worth keeping:
+
+1. **Providers are CLI shapes, not API clients.** `claude -p`, `codex exec --output-last-message`,
+   or an HTTP POST to Ollama. That is what a subscription-based toolchain actually looks like.
+2. **Binary resolution is env → PATH → a long list of known install locations.** The length of
+   that list is the point: a globally installed node CLI lands in whichever of a dozen places
+   the toolchain preferred, and a server started from a desktop launcher often has a PATH
+   containing none of them. An explicit-but-broken override does NOT fall through — a typo in
+   a path should fail loudly, not quietly use something else.
+3. **An unavailable provider is a state, not a crash.** Availability is asked and displayed.
+
+Two places repo-tour needed more than GONS:
+
+- **The reply carries usage and cost**, because "cost is reported, not hidden" is an
+  acceptance criterion. A provider that cannot report usage says so with `metered: false`
+  rather than returning a zero that reads as free.
+- **`runLlm` throws instead of returning `""`.** GONS returns an empty string on every
+  failure; repo-tour shows per-file failures, so it needs the reason — and an empty string
+  would be indistinguishable from a model with nothing to say.
+
+**The cache key had to learn who wrote the answer.** A local 7B model and Sonnet do not
+produce interchangeable prose, and serving one as the other would be a lie about the page. But
+naively appending the writer would have discarded 119 explanations already paid for — so the
+DEFAULT writer is absent from the key, keeping it byte-identical to the original format.
+Switching provider builds a second cache alongside; switching back finds the first intact.
+
+**And one bug the refactor created.** The in-memory results map was keyed the same way as the
+cache filename, so once the key included the provider, `applyMeanings` — which recomputes keys
+and has no business knowing which provider ran — silently failed to find anything a non-default
+provider had written. The map is keyed by LOCATION now and the writer lives only in the
+filename. **A cache key and a lookup key are not the same thing the moment one of them learns
+something the other cannot know.**
+
+---
+
 ## Interpretation runs through the local `claude` CLI, not an API (T-1, 2026-08-26)
 
 There is no API key in this project and there is not meant to be. Evan has a Claude

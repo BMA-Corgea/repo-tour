@@ -20,6 +20,7 @@ import { renderRepoView } from './repoview.js';
 import { interpretStops, applyMeanings, interpretArchitecture, DEFAULT_MODEL } from './interpret.js';
 import { saveTour, listTours, findTour, newestFor, renderLibrary } from './library.js';
 import { RepoTourServer } from './server.js';
+import { surveyProviders } from './llm.js';
 import { execFileSync } from 'node:child_process';
 import type { RankedFile } from './types.js';
 
@@ -36,6 +37,8 @@ interface Args {
   port: number;
   /** rebuild even when a tour for this exact commit already exists */
   fresh: boolean;
+  /** which LLM writes the explanations; null uses the stored choice */
+  provider: string | null;
   /**
    * Where the app keeps its list of loaded repositories.
    *
@@ -49,7 +52,7 @@ interface Args {
 function parseArgs(argv: string[]): Args {
   const args: Args = {
     command: argv[0] ?? 'help', target: '.', top: 25, write: true, json: false,
-    view: null, maxRows: 750, interpret: true, model: DEFAULT_MODEL, fresh: false, port: 7788, state: null,
+    view: null, maxRows: 750, interpret: true, model: DEFAULT_MODEL, fresh: false, port: 7788, state: null, provider: null,
   };
   const rest = argv.slice(1);
   for (let i = 0; i < rest.length; i++) {
@@ -64,6 +67,7 @@ function parseArgs(argv: string[]): Args {
     else if (a === '--port') { args.port = Number(rest[++i] ?? 7788); }
     else if (a === '--state') { args.state = rest[++i] ?? null; }
     else if (a === '--model') { args.model = rest[++i] ?? DEFAULT_MODEL; }
+    else if (a === '--provider') { args.provider = rest[++i] ?? null; }
     else if (!a.startsWith('-')) { args.target = a; }
   }
   return args;
@@ -114,8 +118,11 @@ async function main(): Promise<void> {
   // ---- the app: repositories stay loaded, and a refresh re-reads them
   if (args.command === 'serve' || args.command === 'app') {
     const server = new RepoTourServer({
-      port: args.port, model: args.model, interpret: args.interpret,
+      port: args.port, interpret: args.interpret,
       ...(args.state ? { statePath: args.state } : {}),
+      ...(args.provider || args.model !== DEFAULT_MODEL
+        ? { llm: { ...(args.provider ? { provider: args.provider } : {}), model: args.model } }
+        : {}),
     });
     const { port } = await server.listen();
     const url = `http://127.0.0.1:${port}`;
@@ -126,6 +133,18 @@ async function main(): Promise<void> {
   }
 
   // ---- verbs that read the library rather than a repository
+  if (args.command === 'providers') {
+    const survey = await surveyProviders();
+    console.log('');
+    for (const p of survey) {
+      console.log(`  ${p.availability.ok ? '✓' : '✗'} ${pad(p.id, 10)} ${pad(p.label, 16)} ${p.availability.detail}`);
+      console.log(`    ${' '.repeat(10)} ${p.note}`);
+      console.log(`    ${' '.repeat(10)} models: ${p.models.join(', ')}`);
+    }
+    console.log('');
+    return;
+  }
+
   if (args.command === 'list' || args.command === 'open' || args.command === 'library') {
     const tours = listTours();
 
@@ -165,6 +184,7 @@ async function main(): Promise<void> {
     console.log('       repo-tour tour <path> [--view FILE] [--no-write]        the repo page + a tour of the code');
     console.log('       repo-tour inspect <path> [--view FILE] [--top N]        the digest quality view (scores, signals)');
     console.log('       repo-tour serve [--port N] [--state FILE]               THE APP: load repos, refresh to see changes');
+    console.log('       repo-tour providers                                     which LLMs can write explanations here');
     console.log('       repo-tour list                                          every tour you have made');
     console.log('       repo-tour open [id]                                     print the path of a saved tour');
     console.log('       repo-tour library                                       rebuild and print the index of all tours');
@@ -202,6 +222,7 @@ async function main(): Promise<void> {
   if (codeTour) {
     const opts = {
       model: args.model,
+      ...(args.provider ? { provider: args.provider } : {}),
       cachedOnly: !args.interpret,
       onProgress: (msg: string) => console.log(`  ${msg}`),
     };

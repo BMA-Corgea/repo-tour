@@ -19,43 +19,13 @@
  * subscription tool, not an API-key tool.
  */
 
-import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { CodeStep } from './codetour.js';
 import type { FileExtract, FileRecord } from './types.js';
-
-/**
- * Run the local `claude` CLI headlessly, feeding the prompt on stdin.
- *
- * stdin rather than argv on purpose: a prompt carrying a few hundred lines of source
- * would blow past the shell's argument limit on a large file.
- */
-function runClaude(args: string[], input: string, cwd: string, timeoutMs = 300_000): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const child = spawn('claude', args, { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
-    let out = '';
-    let err = '';
-    const timer = setTimeout(() => {
-      child.kill('SIGKILL');
-      reject(new Error(`timed out after ${Math.round(timeoutMs / 1000)}s`));
-    }, timeoutMs);
-
-    child.stdout.on('data', (d: Buffer) => { out += d.toString(); });
-    child.stderr.on('data', (d: Buffer) => { err += d.toString(); });
-    child.on('error', (e) => { clearTimeout(timer); reject(e); });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      if (code === 0) resolve(out);
-      else reject(new Error(`claude exited ${code}: ${err.trim().slice(0, 200)}`));
-    });
-
-    child.stdin.write(input);
-    child.stdin.end();
-  });
-}
+import { runLlm, resolveChoice, type LlmChoice } from './llm.js';
 
 /** Bump when the prompt changes — old cached answers were produced by a different question. */
 export const PROMPT_VERSION = 4;
@@ -70,6 +40,10 @@ export interface StopMeaning {
 }
 
 export interface InterpretCost {
+  /** the provider that did the work, so a cost of zero can be read correctly */
+  provider: string;
+  /** false when the provider cannot report usage — the token counts are unknowns, not zeros */
+  metered: boolean;
   calls: number;
   cachedStops: number;
   interpretedStops: number;
@@ -81,18 +55,44 @@ export interface InterpretCost {
 }
 
 export interface InterpretResult {
-  /** keyed by the stable content key of each stop */
+  /**
+   * Keyed by LOCATION — `file:start-end` — not by the cache key.
+   *
+   * The cache FILENAME encodes the writer, because who wrote an explanation is part of what
+   * it is. This map does not, and must not: `applyMeanings` recomputes keys to look them up
+   * and has no business knowing which provider ran. Keying both the same way meant every
+   * explanation written by a non-default provider was cached correctly and then silently
+   * failed to be found.
+   */
   meanings: Map<string, StopMeaning>;
   cost: InterpretCost;
+}
+
+/** Where a stop is. The identity `applyMeanings` can compute on its own. */
+export function stepKey(file: string, startLine: number, endLine: number): string {
+  return `${file}:${startLine}-${endLine}`;
 }
 
 /**
  * A stop's identity is its CONTENT, not its location: the file's content hash plus the
  * line range plus the prompt version. Same code, same answer, wherever it lives.
  */
-export function stopKey(fileSha: string, startLine: number, endLine: number): string {
+export function stopKey(
+  fileSha: string, startLine: number, endLine: number, choice?: LlmChoice,
+): string {
+  // Who wrote an explanation is part of what it IS: a local 7B model and Sonnet do not
+  // produce interchangeable prose, and silently serving one as the other would be a lie
+  // about the page. So the writer is part of the key.
+  //
+  // The default writer is deliberately absent from it, keeping the key byte-identical to
+  // the original format — otherwise adding this would have thrown away every explanation
+  // already paid for. Switching provider builds a second cache alongside the first, and
+  // switching back finds the first still there.
+  const writer = !choice || (choice.provider === 'claude' && choice.model === DEFAULT_MODEL)
+    ? ''
+    : `:${choice.provider}/${choice.model}`;
   return createHash('sha256')
-    .update(`${PROMPT_VERSION}:${fileSha}:${startLine}-${endLine}`)
+    .update(`${PROMPT_VERSION}:${fileSha}:${startLine}-${endLine}${writer}`)
     .digest('hex')
     .slice(0, 32);
 }
@@ -109,7 +109,8 @@ function numberedSlice(lines: string[], from: number, to: number): string {
 interface FileJob {
   file: string;
   sha: string;
-  stops: Array<{ step: CodeStep; key: string; index: number }>;
+  /** `key` is the cache filename (writer-aware); `at` is the location the map is keyed by */
+  stops: Array<{ step: CodeStep; key: string; at: string; index: number }>;
 }
 
 const SYSTEM = [
@@ -191,6 +192,8 @@ function parseAnswer(raw: string, expected: number): Array<{ n: number; what: st
 
 export interface InterpretOptions {
   model?: string;
+  /** which provider writes the explanations; defaults to Claude */
+  provider?: string;
   cacheDir?: string;
   /** skip the model entirely and only use what is already cached */
   cachedOnly?: boolean;
@@ -220,9 +223,11 @@ export async function interpretStops(
   for (const e of edges) importerCount.set(e.to, (importerCount.get(e.to) ?? 0) + 1);
 
   const meanings = new Map<string, StopMeaning>();
+  const choice = resolveChoice({ provider: opts.provider, model: opts.model });
   const cost: InterpretCost = {
+    provider: choice.provider, metered: true,
     calls: 0, cachedStops: 0, interpretedStops: 0,
-    inputTokens: 0, outputTokens: 0, usd: 0, model, failures: [],
+    inputTokens: 0, outputTokens: 0, usd: 0, model: choice.model, failures: [],
   };
 
   // Group the stops by file: one call per file, not one per stop.
@@ -231,12 +236,14 @@ export async function interpretStops(
     if (step.synthetic) return; // the tour's own words, not code to explain
     const f = fileByPath.get(step.file);
     if (!f) return;
-    const key = stopKey(f.sha256, step.startLine, step.endLine);
+    const key = stopKey(f.sha256, step.startLine, step.endLine, choice);
+
+    const at = stepKey(step.file, step.startLine, step.endLine);
 
     const cachePath = path.join(cacheDir, `${key}.json`);
     if (fs.existsSync(cachePath)) {
       try {
-        meanings.set(key, JSON.parse(fs.readFileSync(cachePath, 'utf8')) as StopMeaning);
+        meanings.set(at, JSON.parse(fs.readFileSync(cachePath, 'utf8')) as StopMeaning);
         cost.cachedStops++;
         return;
       } catch { /* corrupt cache entry — fall through and re-earn it */ }
@@ -244,7 +251,7 @@ export async function interpretStops(
     if (opts.cachedOnly) return;
 
     if (!jobs.has(step.file)) jobs.set(step.file, { file: step.file, sha: f.sha256, stops: [] });
-    jobs.get(step.file)!.stops.push({ step, key, index });
+    jobs.get(step.file)!.stops.push({ step, key, at, index });
   });
 
   for (const job of jobs.values()) {
@@ -260,27 +267,20 @@ export async function interpretStops(
 
     opts.onProgress?.(`interpreting ${job.file} (${job.stops.length} excerpt${job.stops.length === 1 ? '' : 's'})…`);
 
-    let stdout: string;
+    let reply;
     try {
-      stdout = await runClaude(
-        ['-p', '--model', model, '--output-format', 'json', '--allowedTools', ''],
-        prompt, root,
-      );
+      reply = await runLlm(prompt, choice, root);
     } catch (e) {
       cost.failures.push(`${job.file}: ${(e as Error).message.slice(0, 160)}`);
       continue;
     }
     cost.calls++;
+    cost.inputTokens += reply.inputTokens;
+    cost.outputTokens += reply.outputTokens;
+    cost.usd += reply.usd;
+    if (!reply.metered) cost.metered = false;
 
-    let envelope: { result?: string; usage?: { input_tokens?: number; output_tokens?: number }; total_cost_usd?: number };
-    try { envelope = JSON.parse(stdout) as typeof envelope; }
-    catch { cost.failures.push(`${job.file}: could not parse the CLI envelope`); continue; }
-
-    cost.inputTokens += envelope.usage?.input_tokens ?? 0;
-    cost.outputTokens += envelope.usage?.output_tokens ?? 0;
-    cost.usd += envelope.total_cost_usd ?? 0;
-
-    const answers = parseAnswer(envelope.result ?? '', job.stops.length);
+    const answers = parseAnswer(reply.text, job.stops.length);
     if (!answers) {
       cost.failures.push(`${job.file}: the reply was not the JSON that was asked for`);
       continue;
@@ -290,7 +290,7 @@ export async function interpretStops(
       const slot = job.stops[a.n - 1];
       if (!slot) continue;
       const meaning: StopMeaning = { what: a.what.trim(), why: (a.why ?? '').trim() };
-      meanings.set(slot.key, meaning);
+      meanings.set(slot.at, meaning);
       cost.interpretedStops++;
       try {
         fs.writeFileSync(path.join(cacheDir, `${slot.key}.json`), JSON.stringify(meaning, null, 2));
@@ -317,14 +317,12 @@ function clamp(text: string, max: number): string {
 /** Merge interpretations into the tour, leaving deterministic text where none exists. */
 export function applyMeanings(
   steps: CodeStep[],
-  files: FileRecord[],
+  _files: FileRecord[],
   meanings: Map<string, StopMeaning>,
 ): Array<CodeStep & { interpreted: boolean }> {
-  const shaByPath = new Map(files.map((f) => [f.path, f.sha256] as const));
   return steps.map((s) => {
     if (s.synthetic) return { ...s, interpreted: false };
-    const sha = shaByPath.get(s.file);
-    const m = sha ? meanings.get(stopKey(sha, s.startLine, s.endLine)) : undefined;
+    const m = meanings.get(stepKey(s.file, s.startLine, s.endLine));
     if (!m) return { ...s, interpreted: false };
     const why = m.why && m.why.length > 2 ? ` ${m.why}` : '';
     // Defensive: a model that over-runs the word budget must not produce an unreadable
@@ -367,16 +365,18 @@ export async function interpretArchitecture(
   brief: string,
   opts: InterpretOptions = {},
 ): Promise<{ meaning: ArchitectureMeaning | null; cost: InterpretCost }> {
-  const model = opts.model ?? DEFAULT_MODEL;
   const cacheDir = opts.cacheDir ?? defaultCacheDir();
   fs.mkdirSync(cacheDir, { recursive: true });
 
+  const choice = resolveChoice({ provider: opts.provider, model: opts.model });
   const cost: InterpretCost = {
+    provider: choice.provider, metered: true,
     calls: 0, cachedStops: 0, interpretedStops: 0,
-    inputTokens: 0, outputTokens: 0, usd: 0, model, failures: [],
+    inputTokens: 0, outputTokens: 0, usd: 0, model: choice.model, failures: [],
   };
 
-  const key = createHash('sha256').update(`arch:${PROMPT_VERSION}:${brief}`).digest('hex').slice(0, 32);
+  const writer = choice.provider === 'claude' && choice.model === DEFAULT_MODEL ? '' : `:${choice.provider}/${choice.model}`;
+  const key = createHash('sha256').update(`arch:${PROMPT_VERSION}:${brief}${writer}`).digest('hex').slice(0, 32);
   const cachePath = path.join(cacheDir, `${key}.json`);
   if (fs.existsSync(cachePath)) {
     try {
@@ -388,27 +388,20 @@ export async function interpretArchitecture(
 
   opts.onProgress?.('interpreting the system as a whole…');
 
-  let stdout: string;
+  let reply;
   try {
-    stdout = await runClaude(
-      ['-p', '--model', model, '--output-format', 'json', '--allowedTools', ''],
-      `${brief}\n\n${ARCH_SYSTEM}`, root,
-    );
+    reply = await runLlm(`${brief}\n\n${ARCH_SYSTEM}`, choice, root);
   } catch (e) {
     cost.failures.push(`architecture: ${(e as Error).message.slice(0, 160)}`);
     return { meaning: null, cost };
   }
   cost.calls = 1;
+  cost.inputTokens = reply.inputTokens;
+  cost.outputTokens = reply.outputTokens;
+  cost.usd = reply.usd;
+  cost.metered = reply.metered;
 
-  let envelope: { result?: string; usage?: { input_tokens?: number; output_tokens?: number }; total_cost_usd?: number };
-  try { envelope = JSON.parse(stdout) as typeof envelope; }
-  catch { cost.failures.push('architecture: could not parse the CLI envelope'); return { meaning: null, cost }; }
-
-  cost.inputTokens = envelope.usage?.input_tokens ?? 0;
-  cost.outputTokens = envelope.usage?.output_tokens ?? 0;
-  cost.usd = envelope.total_cost_usd ?? 0;
-
-  const raw = envelope.result ?? '';
+  const raw = reply.text;
   const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(raw);
   const body = fenced ? fenced[1]! : raw;
   const start = body.indexOf('{');

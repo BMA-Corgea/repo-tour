@@ -43,7 +43,7 @@ will be overwritten.
 
 ## src/interpret.ts
 
-- Exports: DEFAULT_MODEL, PROMPT_VERSION, applyMeanings, defaultCacheDir, interpretArchitecture, interpretStops, stopKey
+- Exports: DEFAULT_MODEL, PROMPT_VERSION, applyMeanings, defaultCacheDir, interpretArchitecture, interpretStops, stepKey, stopKey
 - Imports: (none)
 
 ## src/inventory.ts
@@ -54,6 +54,11 @@ will be overwritten.
 ## src/library.ts
 
 - Exports: findTour, listTours, newestFor, registryPath, renderLibrary, saveTour, toursDir
+- Imports: (none)
+
+## src/llm.ts
+
+- Exports: DEFAULT_PROVIDER, PROVIDERS, providerById, resolveBin, resolveChoice, runLlm, surveyProviders
 - Imports: (none)
 
 ## src/rank.ts

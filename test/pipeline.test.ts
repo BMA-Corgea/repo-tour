@@ -1207,3 +1207,69 @@ describe('a cached page carries the renderer that made it', () => {
     }
   });
 });
+
+describe('the LLM is a choice, not a hardcoded binary', () => {
+  it('registers providers with models and an availability check', async () => {
+    const { PROVIDERS, surveyProviders, providerById } = await import('../src/llm.js');
+
+    expect(PROVIDERS.length).toBeGreaterThanOrEqual(3);
+    for (const p of PROVIDERS) {
+      expect(p.id, 'a provider needs an id').toBeTruthy();
+      expect(p.models.length, `${p.id} must offer at least one model`).toBeGreaterThan(0);
+      expect(typeof p.run).toBe('function');
+      expect(typeof p.available).toBe('function');
+    }
+    expect(providerById('claude')).not.toBeNull();
+    expect(providerById('nope')).toBeNull();
+
+    // Availability is asked, never assumed: an absent provider is a state, not a crash.
+    const survey = await surveyProviders();
+    expect(survey.length).toBe(PROVIDERS.length);
+    for (const p of survey) expect(typeof p.availability.detail).toBe('string');
+  });
+
+  it('falls back to a real choice rather than trusting stored junk', async () => {
+    const { resolveChoice, DEFAULT_PROVIDER } = await import('../src/llm.js');
+
+    expect(resolveChoice(null).provider).toBe(DEFAULT_PROVIDER);
+    expect(resolveChoice({ provider: 'does-not-exist' }).provider).toBe(DEFAULT_PROVIDER);
+    // A model the provider does not offer falls back to that provider's own default.
+    const odd = resolveChoice({ provider: 'claude', model: 'gpt-9' });
+    expect(odd.provider).toBe('claude');
+    expect(odd.model).not.toBe('gpt-9');
+  });
+
+  it('keys cached explanations by WHO wrote them, without discarding old ones', async () => {
+    const { stopKey, DEFAULT_MODEL } = await import('../src/interpret.js');
+
+    const sha = 'a'.repeat(64);
+    const plain = stopKey(sha, 10, 20);
+
+    // The default writer is absent from the key, so every explanation already paid for
+    // under the original format is still found.
+    expect(stopKey(sha, 10, 20, { provider: 'claude', model: DEFAULT_MODEL })).toBe(plain);
+
+    // Any other writer gets its own cache alongside, because a local 7B model and Sonnet
+    // do not produce interchangeable prose.
+    expect(stopKey(sha, 10, 20, { provider: 'codex', model: 'default' })).not.toBe(plain);
+    expect(stopKey(sha, 10, 20, { provider: 'claude', model: 'claude-opus-5' })).not.toBe(plain);
+  });
+
+  it('remembers the choice on the server, not in a browser', async () => {
+    const { RepoTourServer } = await import('../src/server.js');
+    const own = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-llm-'));
+    try {
+      const state = path.join(own, 'state.json');
+      const first = new RepoTourServer({ statePath: state });
+      expect(first.getChoice().provider).toBe('claude');
+
+      // It decides what a build costs and where source is sent — a property of the app,
+      // not of whichever tab happens to be open.
+      first.setChoice({ provider: 'codex' });
+      const second = new RepoTourServer({ statePath: state });
+      expect(second.getChoice().provider).toBe('codex');
+    } finally {
+      fs.rmSync(own, { recursive: true, force: true });
+    }
+  });
+});

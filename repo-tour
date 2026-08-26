@@ -216,11 +216,20 @@ cmd_doctor() {
   # login as your terminal. Without it a tour still builds, but every stop falls back to
   # structural narration, so a doctor that stays silent about it reports a health it has not
   # checked.
-  if command -v claude >/dev/null 2>&1; then
-    _ok "claude CLI $(claude --version 2>/dev/null | head -1 | awk '{print $1}')"
+  # Interpretation can run through any of several LLM providers; the doctor asks the same
+  # registry the app does, so adding one shows up here without touching this script.
+  local provsurvey; provsurvey="$( cd "$ROOT" && npx tsx src/cli.ts providers 2>/dev/null )"
+  if printf '%s' "$provsurvey" | grep -q '✓'; then
+    printf '%s\n' "$provsurvey" | grep '✓\|✗' | while read -r line; do
+      case "$line" in
+        *✓*) _ok "${line#*✓ }" ;;
+        *)   printf '  %s·%s %s\n' "$C_DIM" "$C_0" "${line#*✗ }" ;;
+      esac
+    done
   else
-    _warn "claude CLI not found — tours will build, but every stop falls back to structural"
-    _warn "  facts instead of an explanation. Install it, or pass --no-interpret to say so."
+    _warn "no LLM provider available — tours will build, but every stop falls back to"
+    _warn "  structural facts instead of an explanation. Install the claude CLI, run"
+    _warn "  ollama, or pass --no-interpret to say you meant it."
     bad=1
   fi
 
