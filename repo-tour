@@ -212,6 +212,18 @@ cmd_doctor() {
   if [ -d "$ROOT/node_modules/web-tree-sitter" ]; then _ok "web-tree-sitter installed"
   else _warn "dependencies not installed — run: npm install"; bad=1; fi
 
+  # The interpret stage shells out to the local `claude` CLI — the same binary and the same
+  # login as your terminal. Without it a tour still builds, but every stop falls back to
+  # structural narration, so a doctor that stays silent about it reports a health it has not
+  # checked.
+  if command -v claude >/dev/null 2>&1; then
+    _ok "claude CLI $(claude --version 2>/dev/null | head -1 | awk '{print $1}')"
+  else
+    _warn "claude CLI not found — tours will build, but every stop falls back to structural"
+    _warn "  facts instead of an explanation. Install it, or pass --no-interpret to say so."
+    bad=1
+  fi
+
   local g="$ROOT/node_modules/tree-sitter-wasms/out"
   local missing=""
   for lang in python javascript typescript tsx; do

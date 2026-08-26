@@ -359,6 +359,33 @@ bottom — because that ordering is the one thing a folder listing can never sho
 
 ---
 
+## Interpretation runs through the local `claude` CLI, not an API (T-1, 2026-08-26)
+
+There is no API key in this project and there is not meant to be. Evan has a Claude
+subscription, so stage 4 spawns the `claude` binary from `PATH` — the same binary and the
+same login as his terminal:
+
+    claude -p --model claude-sonnet-5 --output-format json --allowedTools ''
+
+Four choices worth keeping:
+
+- **The prompt goes in on STDIN, never argv.** A prompt carrying a few hundred lines of
+  source blows past the shell's argument limit on a large file.
+- **`--output-format json`** returns an envelope with `usage` and `total_cost_usd`, which is
+  where cost reporting comes from. It is measured, never estimated.
+- **`--allowedTools ''`** — it gets the excerpt and answers about the excerpt. A stage that
+  can read files and run commands is a different, much larger trust question.
+- **Failure degrades rather than breaks.** A missing binary, a non-zero exit, an unparseable
+  envelope, a reply that is not the JSON asked for — each is recorded per file and that file
+  falls back to structural narration. A thin tour, not a crash.
+
+**The gap that answering this exposed:** `doctor` checked node, git, dependencies and
+grammars but not `claude`, so it could report "ready" while the one thing that makes a tour
+explanatory was missing. Explaining a mechanism out loud is a decent way to find what nobody
+verifies.
+
+---
+
 ## Stage 4 is the product, and there is no template that substitutes for it (T-1, 2026-08-26)
 
 Shown a tour stop on `main` that read *"A function at line 71. 95 lines. It is private to
