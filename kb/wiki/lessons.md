@@ -34,6 +34,27 @@ where the eye already is. Silent refusal reads as a dead button.**
 
 ---
 
+## The button was not buried — the PAGE was scrolled (T-4, 2026-08-26)
+
+Evan, twice: **"the tour button needs to be scrolled up to"**, then **"the green button is
+still tucked in there"** after it had been moved into the sticky header.
+
+Moving it was treating a symptom. `open()` kept the selected file-tree row visible with
+`scrollIntoView({ block: 'nearest' })` — and **scrollIntoView scrolls every scrollable
+ancestor, including the document.** The page opened already scrolled 58px, so the sticky
+header sat over the bars beneath it. The button looked buried wherever it was put, because
+the page had moved, not the button.
+
+Measured: `window.scrollY === 58` immediately after load; the header's bottom edge overlapped
+the next bar by exactly 58px. After scrolling the tree container by hand instead, scrollY is
+0 on open and stays 0 when clicking a file far down the tree.
+
+**The lesson beyond this bug: when a fix does not take, re-measure instead of adjusting the
+fix.** The second report was the signal that the diagnosis, not the patch, was wrong. A test
+now asserts the client script never calls scrollIntoView at all — container scrolling only.
+
+---
+
 ## Put the primary action in the sticky header (T-4, 2026-08-26)
 
 "Take the tour" sat in a bar under the sticky page header. Scroll at all and it slid

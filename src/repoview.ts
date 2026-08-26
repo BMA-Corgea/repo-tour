@@ -477,8 +477,20 @@ const APP = `
 
       var rows2 = treeEl.querySelectorAll('.row');
       for (var j = 0; j < rows2.length; j++) rows2[j].classList.toggle('on', rows2[j].getAttribute('data-p') === p);
+      // Scroll the TREE, never the page.
+      //
+      // scrollIntoView walks every scrollable ancestor, so keeping the selected row in
+      // view also scrolled the document — the page opened 58px down with the header, the
+      // stop counts and the snapshot line already tucked under the sticky bar. The button
+      // looked buried no matter where it was put, because the page had moved, not the
+      // button. Doing the arithmetic by hand touches one element and nothing else.
       var on = treeEl.querySelector('.row.on');
-      if (on && on.scrollIntoView) on.scrollIntoView({ block: 'nearest' });
+      if (on) {
+        var boxT = treeEl.getBoundingClientRect();
+        var boxR = on.getBoundingClientRect();
+        if (boxR.top < boxT.top) treeEl.scrollTop -= (boxT.top - boxR.top);
+        else if (boxR.bottom > boxT.bottom) treeEl.scrollTop += (boxR.bottom - boxT.bottom);
+      }
     }
     if (opts && opts.from) mark(opts.from, opts.to);
   }

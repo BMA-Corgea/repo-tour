@@ -810,3 +810,19 @@ describe('the rendered page is well-formed enough to drive', () => {
     }
   });
 });
+
+describe('the page never scrolls itself', () => {
+  it('uses no scrollIntoView anywhere in the client script', async () => {
+    // scrollIntoView scrolls EVERY scrollable ancestor, so keeping a file-tree row visible
+    // also scrolled the document: the page opened 58px down, with the header bars already
+    // hidden under the sticky top bar. The tour button looked buried wherever it was put,
+    // because the page had moved rather than the button. Container scrolling only.
+    const r = await digest(root, { write: false });
+    const plan = buildCodeTour(r);
+    const html = renderRepoView(r, { steps: plan.steps, itinerary: plan.itinerary });
+
+    const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]!).join('\n');
+    // A CALL, not the word — the comment explaining why we avoid it mentions it by name.
+    expect(scripts).not.toMatch(/scrollIntoView\s*\(/);
+  });
+});
