@@ -17,6 +17,9 @@
 # `path` defaults to the current directory. With no path and an interactive terminal,
 # `tour` and `digest` ask which repo you mean, so a double-click is a complete flow.
 #
+# Port 7788 — recorded in ../PROJECT_PORTS.md. Override with --port. NOT 7777: see the
+# `7777 is a trap` section there.
+#
 # There is no daemon and nothing to stop. A digest writes a `.repo-tour/` cache INTO the
 # repo it scanned — that cache is what makes a re-digest cost only the diff. Pass
 # `--no-write` to leave the target untouched, and `--view <file>` to put the page
@@ -152,12 +155,12 @@ cmd_open() {
 
 cmd_serve() {
   _need_node; _need_deps
-  local port=7777
+  local port=7788
   local -a passthru=()
   local watch=1
   while [ $# -gt 0 ]; do
     case "$1" in
-      --port) port="${2:-7777}"; passthru+=("$1" "$2"); shift 2 ;;
+      --port) port="${2:-7788}"; passthru+=("$1" "$2"); shift 2 ;;
       --no-watch) watch=0; shift ;;
       *) passthru+=("$1"); shift ;;
     esac

@@ -229,6 +229,16 @@ export function fingerprint(repoPath: string): string {
 }
 
 export interface ServerOptions {
+  /**
+   * Default 7788, recorded in ../PROJECT_PORTS.md.
+   *
+   * NOT 7777, which was the obvious pick and is a trap: GUTS's
+   * `.claude/skills/gons-pr-integration/reference/integrate.sh` health-checks guts-bridge on
+   * 7777 (the bridge itself binds 7681 — that default is simply wrong). With nothing
+   * listening there the check failed, which was at least honest. A server answering 200 on
+   * that port would report the Bridge healthy while it is down, and a false green is worse
+   * than a red.
+   */
   port?: number;
   model?: string;
   interpret?: boolean;
@@ -532,7 +542,7 @@ export class RepoTourServer {
   };
 
   listen(): Promise<{ port: number; close: () => void }> {
-    const port = this.opts.port ?? 7777;
+    const port = this.opts.port ?? 7788;
     const server = http.createServer((req, res) => { void this.handler(req, res); });
     return new Promise((resolve, reject) => {
       server.on('error', reject);

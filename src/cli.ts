@@ -49,7 +49,7 @@ interface Args {
 function parseArgs(argv: string[]): Args {
   const args: Args = {
     command: argv[0] ?? 'help', target: '.', top: 25, write: true, json: false,
-    view: null, maxRows: 750, interpret: true, model: DEFAULT_MODEL, fresh: false, port: 7777, state: null,
+    view: null, maxRows: 750, interpret: true, model: DEFAULT_MODEL, fresh: false, port: 7788, state: null,
   };
   const rest = argv.slice(1);
   for (let i = 0; i < rest.length; i++) {
@@ -61,7 +61,7 @@ function parseArgs(argv: string[]): Args {
     else if (a === '--max-rows') { args.maxRows = Number(rest[++i] ?? 750); }
     else if (a === '--no-interpret') { args.interpret = false; }
     else if (a === '--fresh') { args.fresh = true; }
-    else if (a === '--port') { args.port = Number(rest[++i] ?? 7777); }
+    else if (a === '--port') { args.port = Number(rest[++i] ?? 7788); }
     else if (a === '--state') { args.state = rest[++i] ?? null; }
     else if (a === '--model') { args.model = rest[++i] ?? DEFAULT_MODEL; }
     else if (!a.startsWith('-')) { args.target = a; }
