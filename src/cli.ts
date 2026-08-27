@@ -27,6 +27,7 @@ import { resolvePr, diffSet, lineCounts, hunks, PrResolutionError, type Hunk } f
 import { loadCheckpoint, sideAt, staleness, NoCheckpointError } from './checkpoint.js';
 import { fileDelta, ripple, orderByMeaning, type FileDelta } from './delta.js';
 import { buildPrTour, band } from './prtour.js';
+import { adjudicate, type Adjudication } from './adjudicate.js';
 import type { StopMeaning } from './interpret.js';
 
 interface Args {
@@ -222,6 +223,27 @@ async function runPrMode(args: Args): Promise<void> {
     const beforeExtracts = new Map(beforeSide.extracts.map((e) => [e.path, e] as const));
     const afterExtracts = new Map(afterSide.extracts.map((e) => [e.path, e] as const));
 
+    // Ask the model the actual question, per changed file: did what this code is FOR
+    // change? See adjudicate.ts — comparing two free-prose interpretations scored a pure
+    // variable rename at 0.47, and no tuning of that comparison recovers a signal the
+    // inputs do not carry.
+    const verdicts = new Map<string, Adjudication>();
+    if (args.interpret) {
+      const readSide = (dir: string, rel: string): string => {
+        try { return fs.readFileSync(path.join(dir, rel), 'utf8'); } catch { return ''; }
+      };
+      let judged = 0;
+      let reused = 0;
+      for (const c of changes) {
+        const v = await adjudicate(c.path, readSide(beforeSide.dir, c.path), readSide(afterSide.dir, c.path), {
+          model: args.model, provider: args.provider ?? undefined, cwd: root,
+        });
+        verdicts.set(c.path, v);
+        if (v.source === 'cache') reused++; else if (v.source === 'model') judged++;
+      }
+      console.log(`  judged             ${judged} files compared before/after, ${reused} reused from cache`);
+    }
+
     const deltas: FileDelta[] = changes.map((c) => {
       const collect = (m: Map<string, StopMeaning>, p: string) =>
         [...m.entries()].filter(([k]) => k.startsWith(`${p}:`)).map(([, v]) => v);
@@ -233,6 +255,7 @@ async function runPrMode(args: Args): Promise<void> {
         after: collect(afterMeanings, c.path),
         beforeExtract: beforeExtracts.get(c.path),
         afterExtract: afterExtracts.get(c.path),
+        adjudication: verdicts.get(c.path),
       });
     });
 
@@ -249,10 +272,10 @@ async function runPrMode(args: Args): Promise<void> {
     fs.writeFileSync(out, html);
 
     const ordered = orderByMeaning(deltas);
-    console.log(`\n  ${pad('meaning', 9)}${pad('lines', 7)}${pad('band', 9)}path`);
-    console.log(`  ${'-'.repeat(70)}`);
+    console.log(`\n  ${pad('meaning', 9)}${pad('lines', 7)}${pad('band', 9)}${pad('basis', 13)}path`);
+    console.log(`  ${'-'.repeat(78)}`);
     for (const d of ordered.slice(0, 20)) {
-      console.log(`  ${pad(d.meaningDelta.toFixed(2), 9)}${pad(String(d.linesChanged), 7)}${pad(band(d.meaningDelta), 9)}${d.path}`);
+      console.log(`  ${pad(d.meaningDelta.toFixed(2), 9)}${pad(String(d.linesChanged), 7)}${pad(band(d.meaningDelta), 9)}${pad(d.basis, 13)}${d.path}`);
     }
     console.log(`\n  ripple             ${rip.reinterpret.length} re-interpreted (one hop), ${rip.structuralOnly.length} reachable beyond and NOT re-interpreted`);
     console.log(`  tour               ${plan.steps.length} stops`);

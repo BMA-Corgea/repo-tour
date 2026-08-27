@@ -244,6 +244,8 @@ export interface FileDelta {
   interpreted: boolean;
   /** plain language: why this scored what it did, so the ordering can be argued with */
   reason: string;
+  /** how the score was reached, so a tour never implies more confidence than it has */
+  basis: 'adjudicated' | 'claims' | 'structure' | 'status';
   /** true when this file did not change but its meaning may have — a ripple (spec §5) */
   ripple?: boolean;
 }
@@ -256,6 +258,15 @@ export interface DeltaInput {
   after: StopMeaning[];
   beforeExtract?: FileExtract;
   afterExtract?: FileExtract;
+  /**
+   * A direct verdict from something that read BOTH versions of the file.
+   *
+   * When present this drives the score, because it answers the question the claim
+   * comparison can only approximate. See adjudicate.ts for the measurement that made this
+   * necessary: comparing two free-prose interpretations scored a pure local-variable
+   * rename at 0.47, because the model wrote a different essay rather than a paraphrase.
+   */
+  adjudication?: { magnitude: number; headline: string; kind: string; source: string };
 }
 
 function joinMeanings(ms: StopMeaning[]): string {
@@ -276,13 +287,20 @@ export function fileDelta(input: DeltaInput): FileDelta {
 
   let score = 0;
   let reason: string;
+  let basis: FileDelta['basis'] = 'structure';
 
   if (input.status === 'A') {
     score = 1;
     reason = 'new file — all of it is new meaning';
+    basis = 'status';
   } else if (input.status === 'D') {
     score = 1;
     reason = 'deleted — whatever this meant is gone';
+    basis = 'status';
+  } else if (input.adjudication && input.adjudication.source !== 'unavailable') {
+    score = input.adjudication.magnitude;
+    reason = input.adjudication.headline;
+    basis = 'adjudicated';
   } else if (interpreted) {
     const symbols = input.afterExtract?.symbols ?? input.beforeExtract?.symbols ?? [];
     const vocab = vocabularyOf(
@@ -299,6 +317,7 @@ export function fileDelta(input: DeltaInput): FileDelta {
         : score < 0.45
           ? 'parts of the explanation changed; the subject is broadly the same'
           : 'the explanation is about something different now';
+    basis = 'claims';
   } else {
     // No interpretation on one side. Say so rather than scoring zero and implying calm.
     score = surfaceCount > 0 ? 0.5 : 0.25;
@@ -326,6 +345,7 @@ export function fileDelta(input: DeltaInput): FileDelta {
     surface,
     interpreted,
     reason,
+    basis,
   };
 }
 
