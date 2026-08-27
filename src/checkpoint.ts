@@ -18,7 +18,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { CACHE_DIR, type DigestManifest, type DigestResult } from './digest.js';
+import { CACHE_DIR, SCHEMA_VERSION, type DigestManifest, type DigestResult } from './digest.js';
 import { extract } from './extract.js';
 import { inventory } from './inventory.js';
 import type { FileExtract, FileRecord, ImportGraph, RankedFile } from './types.js';
@@ -86,6 +86,13 @@ export function loadCheckpoint(root: string, outDir?: string): Checkpoint {
   }
 
   const manifest = readJson<DigestManifest>(path.join(dir, 'digest.json'));
+  if (manifest.schemaVersion !== SCHEMA_VERSION) {
+    throw new NoCheckpointError(
+      `the digest on disk is schema v${manifest.schemaVersion}; this build reads v${SCHEMA_VERSION}.\n` +
+        '  Comparing against a digest written by a different shape of this tool would produce\n' +
+        '  differences that are the format moving, not the code. Run:  repo-tour digest .',
+    );
+  }
   const index = readJson<Array<{ path: string; sha256: string }>>(path.join(dir, 'inventory.json'));
   const graph = readJson<ImportGraph>(path.join(dir, 'graph.json'));
   const ranked = readJson<RankedFile[]>(path.join(dir, 'ranked.json'));
@@ -204,7 +211,20 @@ export interface Side {
  * A second copy of those rules would drift from the digest's, and a PR tour that disagrees
  * with the repo tour about what a file even is would be worse than no PR tour.
  */
-export async function sideAt(root: string, sha: string, paths: string[]): Promise<Side> {
+export async function sideAt(
+  root: string,
+  sha: string,
+  paths: string[],
+  /**
+   * For a rename, the path to READ at this commit, keyed by the path to REPORT it under.
+   *
+   * Without this a rename reads as "the new path did not exist here", the base side comes
+   * back empty, and every symbol in the file looks newly added — which scored a pure
+   * rename of skins.ts -> themes.ts at 1.00 "meaning moved" with ZERO lines changed. A
+   * rename is the one change git tells us is not a change at all.
+   */
+  readAs: Map<string, string> = new Map(),
+): Promise<Side> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `repo-tour-${sha.slice(0, 8)}-`));
   const dispose = () => {
     try {
@@ -221,9 +241,10 @@ export async function sideAt(root: string, sha: string, paths: string[]): Promis
       // where it stops — one run would not show us the bug.
       if (rel === CACHE_DIR || rel.startsWith(`${CACHE_DIR}/`)) continue;
 
+      const source = readAs.get(rel) ?? rel;
       let content: Buffer;
       try {
-        content = execFileSync('git', ['-C', root, 'show', `${sha}:${rel}`], {
+        content = execFileSync('git', ['-C', root, 'show', `${sha}:${source}`], {
           stdio: ['ignore', 'pipe', 'ignore'],
           maxBuffer: 64 * 1024 * 1024,
         });

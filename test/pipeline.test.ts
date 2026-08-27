@@ -27,7 +27,8 @@ import { applyMeanings, fullText, stepKey, SUMMARY_MAX } from '../src/interpret.
 import { narrate, compress } from '../src/narrate.js';
 import { meaningDistance, vocabularyOf, fileDelta, orderByMeaning, ripple, type FileDelta } from '../src/delta.js';
 import { buildPrTour, whyFor, band } from '../src/prtour.js';
-import { issueRefs } from '../src/pr.js';
+import { issueRefs, resolvePr } from '../src/pr.js';
+import { loadCheckpoint } from '../src/checkpoint.js';
 import type { FileExtract, SymbolRecord } from '../src/types.js';
 
 let root: string;
@@ -1661,5 +1662,48 @@ describe('issue links are read from the description, not asked of gh', () => {
   });
   it('a description with no references yields none', () => {
     expect(issueRefs('No links here. A #tag mid-word like a#9 does not count.')).toEqual([]);
+  });
+});
+
+describe('the three defects the review found', () => {
+  it('a rename is not a new file — its base side is read from the OLD path', () => {
+    // Before the fix, the base side came back empty for a renamed path, every symbol
+    // looked newly added, and the surface floor scored a ZERO-line rename at 1.00.
+    const symbols = [sym('baseCss'), sym('alternateCss'), sym('skinPicker')];
+    const asNewFile = fileDelta({
+      path: 'src/themes.ts', status: 'R', linesChanged: 0,
+      before: [], after: [],
+      beforeExtract: undefined,
+      afterExtract: asExtract('src/themes.ts', symbols),
+    });
+    expect(asNewFile.surface.added).toHaveLength(3);
+    expect(asNewFile.meaningDelta).toBeGreaterThanOrEqual(0.7);
+
+    const readFromOldPath = fileDelta({
+      path: 'src/themes.ts', status: 'R', linesChanged: 0,
+      before: [], after: [],
+      beforeExtract: asExtract('src/skins.ts', symbols),
+      afterExtract: asExtract('src/themes.ts', symbols),
+    });
+    expect(readFromOldPath.surface.added).toEqual([]);
+    expect(readFromOldPath.meaningDelta).toBeLessThan(0.5);
+  });
+
+  it('a ref that starts with a dash is refused, never passed to git', () => {
+    expect(() => resolvePr(root, { base: '--upload-pack=touch /tmp/pwned', head: 'HEAD' }))
+      .toThrow(/refusing a base that starts with/);
+  });
+
+  it('a checkpoint written by a different schema is refused, not misread', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-schema-'));
+    fs.writeFileSync(path.join(dir, 'digest.json'), JSON.stringify({ schemaVersion: 99, repos: [], root: dir }));
+    expect(() => loadCheckpoint(dir, dir)).toThrow(/schema v99/);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('no checkpoint at all is a refusal that says what to run', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-nockpt-'));
+    expect(() => loadCheckpoint(dir, dir)).toThrow(/repo-tour digest/);
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 });

@@ -66,6 +66,11 @@ function tryGit(root: string, ...args: string[]): string | null {
 
 /** Resolve one ref, or refuse. Never falls back to HEAD, main, or anything else. */
 function resolveRef(root: string, ref: string, role: string): string {
+  // A ref beginning with "-" would reach git as an OPTION, not a revision. git has options
+  // that read and write files, so this is refused rather than escaped.
+  if (ref.startsWith('-')) {
+    throw new PrResolutionError(`refusing a ${role} that starts with "-": ${ref}`);
+  }
   const sha = tryGit(root, 'rev-parse', '--verify', `${ref}^{commit}`);
   if (!sha) {
     throw new PrResolutionError(

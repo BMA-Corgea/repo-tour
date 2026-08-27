@@ -186,7 +186,11 @@ async function runPrMode(args: Args): Promise<void> {
   }
 
   // Both sides of the changed files. Nothing is checked out; this is the diff on disk.
-  const beforeSide = await sideAt(root, refs.baseSha, paths);
+  // A renamed file lives under its OLD path at the base, so it is read from there and
+  // reported under the new one — otherwise a rename looks like a whole new file.
+  const renamedFrom = new Map<string, string>();
+  for (const c of changes) if (c.status === 'R' && c.from) renamedFrom.set(c.path, c.from);
+  const beforeSide = await sideAt(root, refs.baseSha, paths, renamedFrom);
   const afterSide = await sideAt(root, refs.headSha, paths);
 
   try {
