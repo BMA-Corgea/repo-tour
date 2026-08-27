@@ -111,6 +111,19 @@ function ghJson(root: string, args: string[], run?: ResolveOptions['gh']): unkno
   return JSON.parse(raw) as unknown;
 }
 
+/**
+ * Issue references a description links, as `#n`.
+ *
+ * Read from the body rather than asked for as a field: see the note at the gh call. Closing
+ * keywords come first because "closes #12" is a stronger claim than a passing mention.
+ */
+export function issueRefs(body: string): string[] {
+  const out = new Set<string>();
+  for (const m of body.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/gi)) out.add(`#${m[1]}`);
+  for (const m of body.matchAll(/(?:^|\s)#(\d+)\b/g)) out.add(`#${m[1]}`);
+  return [...out];
+}
+
 /** `owner/name` from the origin remote, or null when there is no GitHub remote. */
 export function repoSlug(root: string): string | null {
   const url = tryGit(root, 'remote', 'get-url', 'origin');
@@ -145,7 +158,11 @@ export function resolvePr(root: string, opts: ResolveOptions): PrRefs {
     try {
       raw = ghJson(
         root,
-        ['pr', 'view', String(opts.pr), '--json', 'headRefOid,headRefName,baseRefName,title,body,commits,closingIssuesReferences'],
+        // `closingIssuesReferences` is not available on every gh (absent in 2.45), and a
+        // field the local gh does not know fails the WHOLE call rather than omitting one
+        // key. Ask only for fields that have been there for years and read issue links out
+        // of the body, which is where they are written anyway.
+        ['pr', 'view', String(opts.pr), '--json', 'headRefOid,headRefName,baseRefName,title,body,commits'],
         opts.gh,
       );
     } catch (err) {
@@ -161,7 +178,6 @@ export function resolvePr(root: string, opts: ResolveOptions): PrRefs {
       title?: string;
       body?: string;
       commits?: Array<{ oid?: string; messageHeadline?: string; messageBody?: string }>;
-      closingIssuesReferences?: Array<{ number?: number }>;
     };
     if (!pr.headRefOid || !pr.baseRefName) {
       throw new PrResolutionError(`PR #${opts.pr} did not report a head commit and a base branch.`);
@@ -175,9 +191,7 @@ export function resolvePr(root: string, opts: ResolveOptions): PrRefs {
         sha: c.oid ?? '',
         message: [c.messageHeadline ?? '', c.messageBody ?? ''].join('\n').trim(),
       })),
-      issues: (pr.closingIssuesReferences ?? [])
-        .map((i) => (typeof i.number === 'number' ? `#${i.number}` : ''))
-        .filter(Boolean),
+      issues: issueRefs(pr.body ?? ''),
       source: 'github',
     });
   }

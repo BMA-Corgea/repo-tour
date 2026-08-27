@@ -27,6 +27,7 @@ import { applyMeanings, fullText, stepKey, SUMMARY_MAX } from '../src/interpret.
 import { narrate, compress } from '../src/narrate.js';
 import { meaningDistance, vocabularyOf, fileDelta, orderByMeaning, ripple, type FileDelta } from '../src/delta.js';
 import { buildPrTour, whyFor, band } from '../src/prtour.js';
+import { issueRefs } from '../src/pr.js';
 import type { FileExtract, SymbolRecord } from '../src/types.js';
 
 let root: string;
@@ -1651,5 +1652,14 @@ describe('a direct verdict beats a guess from two summaries', () => {
     const why = whyFor(refs, 'src/rank.ts');
     expect(why!.text).toBe('damp test files harder in rank.ts');
     expect(why!.source).toMatch(/^commit cccccccc/);
+  });
+});
+
+describe('issue links are read from the description, not asked of gh', () => {
+  it('closing keywords and bare references both count', () => {
+    expect(issueRefs('Closes #12 and mentions #34.\nAlso fixes #7')).toEqual(['#12', '#7', '#34']);
+  });
+  it('a description with no references yields none', () => {
+    expect(issueRefs('No links here. A #tag mid-word like a#9 does not count.')).toEqual([]);
   });
 });
