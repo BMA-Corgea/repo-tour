@@ -10,7 +10,6 @@ here and found via the reference table below.
 <!-- What is in motion right now: one line per active ticket/effort —
      what, why, where it stands, what is next. Never pruned while live. -->
 
-- **T-1** (feature) — The digest engine: all 9 acceptance criteria met, on `main`, 32 tests
   green. Still at **uat** awaiting Evan's `accept` gate.
 - **The product surface was rebuilt** after Evan rejected the first demo ("there's no code
   on the screen"). `repo-tour tour` is now a GitHub-shaped repo page walking the ACTUAL
@@ -18,21 +17,32 @@ here and found via the reference table below.
   This was outside T-1's spec — T-1 never included a tour (spec §9 defers it to T-2) — so
   it is not blocking T-1's acceptance either way. **Next:** Evan's call on both.
 
+  the checkpoint, not by narrating its diff. Opened 2026-08-27 on Evan's ask to expand
+  beyond repo tours. Spec written (`.autodev/specs/T-5-pr-mode.md`, 10 testable criteria).
+  Now at the **spec_ready** gate awaiting Evan. **Next:** his read of the spec.
+- **T-5** (feature) — PR mode: tour a pull request by diffing its interpretation against the checkpoi… — gate
+
 
 ## Waiting on
 
 <!-- Holds: "waiting at <gate> on <keyholder> since <date>, ping sent to
      <channel>" — no session should discover a hold by archaeology (ruling 24). -->
 
-- **T-1** — waiting at the `accept` gate on `human:owner` (Evan) since 2026-08-26. The
   question that gate asks is not "does it match the spec" but "is this what you actually
   meant, and would you show it to someone?" Nothing is blocked behind it except T-1 itself.
+
+- **T-5** — waiting at spec_ready on human:owner since 2026-08-27
+  code exists yet and none will until he clears it. The open question in the spec is the
+  descope: T-5 makes a PR *readable*, not *reviewable* — the notes panel that turns a tour
+  into a filable review is still T-3.
+- **T-5** — waiting at spec_ready on human:owner since 2026-08-27
 
 ## Recent past (~15 items / ~30 days)
 
 <!-- One line per completed item, WITH the why. Newest first. Prune from the
      bottom; the permanent record lives in tickets, events.jsonl, and wiki. -->
 
+- 2026-08-27 **T-1 COMPLETE** — The digest engine: deterministic extraction with rollup and incremental re-dige…
 - **2026-08-26** — Product surface rebuilt on Evan's rejection of the metrics demo. Why it
   went wrong: the ranking signals are how the engine picks what to show, not what a reader
   wants; putting them on screen showed the rubric instead of the repo. Now: repo page with

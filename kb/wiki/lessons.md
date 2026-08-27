@@ -651,3 +651,24 @@ repo — worth doing after every classifier change.
 commits out of 1,701 across all 8 repos. `churnByFile` runs one `git log --name-only` per
 discovered repo root and maps results back to scan-root-relative paths. A repo with no
 commits yet yields zero churn for its files, which is true rather than an error.
+
+## Ask git what it already knows about identity — never infer it from paths
+
+**2026-08-27, T-5.** PR mode scored a pure file rename (`skins.ts` → `themes.ts`, zero
+lines changed) at **1.00 "meaning moved"** — the maximum. It had read the base side at the
+NEW path, found nothing there, concluded every symbol in the file was newly added, and let
+the public-surface floor do the rest.
+
+A rename is the one change git explicitly tells you is *not* a change: `git diff -M`
+reports it as `R` with both paths. The tool asked for the diff, received that answer, and
+then went and looked up the file by path anyway.
+
+**The rule:** when a tool compares two versions of a tree, file IDENTITY comes from git's
+own rename detection, not from matching path strings. Anywhere you resolve "the same file
+on the other side", the old path is data you were already given.
+
+**Why it stayed invisible:** every unit test constructed both sides directly, so no test
+ever exercised a path that exists on one side and not the other. It surfaced only by
+running the tool against a branch built to contain exactly one rename. Sibling of the T-1
+lesson: a tool that reads a tree needs a fixture shaped like the case you are afraid of,
+because the ordinary run will not show you.
