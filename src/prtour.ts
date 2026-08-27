@@ -69,6 +69,21 @@ function sentence(text: string): string {
 }
 
 /**
+ * Capitalise a sentence — unless it opens on an identifier.
+ *
+ * `churnByFile renames five locals` became `ChurnByFile renames five locals`, which names
+ * a symbol that does not exist. In a tool whose entire claim is precision about code, a
+ * silently mis-cased identifier is worse than an uncapitalised sentence.
+ */
+function opener(text: string): string {
+  const t = text.trim();
+  if (!t) return '';
+  const first = t.split(/\s/)[0] ?? '';
+  const looksLikeCode = /[a-z][A-Z]|[_.]|\(\)/.test(first);
+  return looksLikeCode ? t : t.charAt(0).toUpperCase() + t.slice(1);
+}
+
+/**
  * The sources §7 allows for a claim about why.
  *
  * Ordered by how specific they are: a commit that touched this exact file beats the PR
@@ -134,7 +149,7 @@ function fileStop(
   const detail = [
     `${d.status === 'A' ? 'Added' : d.status === 'D' ? 'Deleted' : d.status === 'R' ? 'Renamed' : 'Modified'}.`,
     `Meaning delta ${d.meaningDelta.toFixed(2)} (${b}); ${n(d.linesChanged)} ${d.linesChanged === 1 ? 'line' : 'lines'} changed across ${n(hunks.length)} ${hunks.length === 1 ? 'hunk' : 'hunks'}.`,
-    sentence(d.reason.charAt(0).toUpperCase() + d.reason.slice(1)),
+    sentence(opener(d.reason)),
     surfaceBits ? `Public surface: ${surfaceBits}` : 'Public surface unchanged.',
     d.interpreted ? '' : 'This file was not interpreted on both sides, so its score rests on structure alone.',
     whySentence(refs, d.path),

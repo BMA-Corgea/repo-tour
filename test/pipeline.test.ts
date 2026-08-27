@@ -1707,3 +1707,44 @@ describe('the three defects the review found', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe('verify-stage findings', () => {
+  const base = {
+    refs: {
+      headSha: 'a'.repeat(40), baseSha: 'b'.repeat(40), forkSha: null,
+      baseLabel: 'main', headLabel: 'fx', baseAhead: 0,
+      prose: { title: null, body: null, commits: [], issues: [], source: 'git-only' as const },
+    },
+    ripple: { reinterpret: [], structuralOnly: [], reachable: 0 },
+    staleness: { sha: 'b'.repeat(40), behind: 0, overlap: [], current: true },
+    hunksByFile: new Map(),
+  };
+
+  it('a reason opening on an identifier is not re-cased into a symbol that does not exist', () => {
+    const plan = buildPrTour({
+      ...base,
+      deltas: [{
+        path: 'src/rank.ts', status: 'M', linesChanged: 16, meaningDelta: 0,
+        surface: { added: [], removed: [], changed: [] }, interpreted: true,
+        reason: 'churnByFile renames local variables with no logic change',
+        basis: 'adjudicated',
+      }],
+    });
+    const stop = plan.steps.find((s) => !s.synthetic)!;
+    expect(stop.text).toContain('churnByFile renames');
+    expect(stop.text).not.toContain('ChurnByFile');
+  });
+
+  it('an ordinary sentence is still capitalised', () => {
+    const plan = buildPrTour({
+      ...base,
+      deltas: [{
+        path: 'src/rank.ts', status: 'M', linesChanged: 4, meaningDelta: 0.6,
+        surface: { added: [], removed: [], changed: [] }, interpreted: true,
+        reason: 'the test multiplier dropped from 0.5 to 0.05', basis: 'adjudicated',
+      }],
+    });
+    const stop = plan.steps.find((s) => !s.synthetic)!;
+    expect(stop.text).toContain('The test multiplier dropped');
+  });
+});

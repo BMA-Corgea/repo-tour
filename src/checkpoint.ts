@@ -226,13 +226,25 @@ export async function sideAt(
   readAs: Map<string, string> = new Map(),
 ): Promise<Side> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `repo-tour-${sha.slice(0, 8)}-`));
+  let disposed = false;
   const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    process.off('exit', dispose);
+    process.off('SIGINT', dispose);
+    process.off('SIGTERM', dispose);
     try {
       fs.rmSync(dir, { recursive: true, force: true });
     } catch {
       /* a temp directory we cannot remove is not worth failing a tour over */
     }
   };
+  // A tour interrupted part-way through a model call used to leave its temp tree in
+  // /tmp. try/finally covers a throw, not a Ctrl-C or a timeout kill, and a tool that
+  // litters when you interrupt it is a tool you stop trusting with your disk.
+  process.once('exit', dispose);
+  process.once('SIGINT', dispose);
+  process.once('SIGTERM', dispose);
 
   try {
     for (const rel of paths) {
