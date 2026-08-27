@@ -259,3 +259,53 @@ export function diffSet(
   }
   return out;
 }
+
+export interface Hunk {
+  /** 1-indexed, inclusive, on the HEAD side */
+  start: number;
+  end: number;
+  added: number;
+  removed: number;
+}
+
+/**
+ * The changed line ranges on the head side, per file.
+ *
+ * A tour stop has to point at something, and pointing at line 1 of a 900-line file because
+ * "the file changed" is the kind of gesture that makes a tour feel generated. `-U0` gives
+ * the exact ranges; the tour pads them a little so a stop shows a change in its context
+ * rather than stripped of it.
+ */
+export function hunks(root: string, from: string, to: string, file: string): Hunk[] {
+  const raw = tryGit(root, 'diff', '-U0', `${from}..${to}`, '--', file);
+  if (!raw) return [];
+  const out: Hunk[] = [];
+  for (const line of raw.split('\n')) {
+    const m = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
+    if (!m) continue;
+    const start = Number(m[3]);
+    const count = m[4] === undefined ? 1 : Number(m[4]);
+    out.push({
+      start: Math.max(1, start),
+      end: Math.max(1, start + Math.max(0, count - 1)),
+      added: count,
+      removed: m[2] === undefined ? 1 : Number(m[2]),
+    });
+  }
+  return out;
+}
+
+/** Lines added + removed per file, the number GitHub sorts by and this tour does not. */
+export function lineCounts(root: string, from: string, to: string): Map<string, number> {
+  const raw = tryGit(root, 'diff', '--numstat', '-M', `${from}..${to}`);
+  const out = new Map<string, number>();
+  if (!raw) return out;
+  for (const line of raw.split('\n')) {
+    const [add, del, file] = line.split('\t');
+    if (!file) continue;
+    const a = add === '-' ? 0 : Number(add);
+    const d = del === '-' ? 0 : Number(del);
+    out.set(file.trim(), a + d);
+  }
+  return out;
+}

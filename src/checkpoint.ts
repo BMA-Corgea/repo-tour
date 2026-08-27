@@ -18,7 +18,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { CACHE_DIR, type DigestManifest } from './digest.js';
+import { CACHE_DIR, type DigestManifest, type DigestResult } from './digest.js';
 import { extract } from './extract.js';
 import { inventory } from './inventory.js';
 import type { FileExtract, FileRecord, ImportGraph, RankedFile } from './types.js';
@@ -34,6 +34,15 @@ export interface Checkpoint {
   /** the commit this digest represents, from the scan root's own repo */
   sha: string | null;
   generatedAt: string;
+  /**
+   * The checkpoint reassembled into the shape the renderer already understands.
+   *
+   * PR mode renders through `renderRepoView`, the same surface as a repo tour (criterion
+   * 9), and that function reads a DigestResult. Rebuilding one here is what lets the PR
+   * tour show the repository AROUND the change rather than a bare list of diffs — the
+   * whole reason the checkpoint is worth having.
+   */
+  result: DigestResult;
 }
 
 export class NoCheckpointError extends Error {}
@@ -100,6 +109,29 @@ export function loadCheckpoint(root: string, outDir?: string): Checkpoint {
     : [];
 
   const selfRepo = manifest.repos.find((r) => r.root === '') ?? manifest.repos[0];
+  const result: DigestResult = {
+    manifest,
+    inventory: {
+      root: manifest.root,
+      repos: manifest.repos,
+      files,
+      skipped: manifest.skipped,
+      stats: {
+        dirsWalked: 0,
+        filesSeen: files.length,
+        filesRecorded: files.length,
+        bytesRead: 0,
+        wallMs: 0,
+      },
+    },
+    extracts,
+    graph,
+    ranked,
+    deepSlice: ranked.filter((r) => r.score > 0).map((r) => r.path),
+    tiers,
+    plan: null,
+  };
+
   return {
     manifest,
     files,
@@ -109,6 +141,7 @@ export function loadCheckpoint(root: string, outDir?: string): Checkpoint {
     tiers,
     sha: selfRepo?.head ?? null,
     generatedAt: manifest.generatedAt,
+    result,
   };
 }
 
