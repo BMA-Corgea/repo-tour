@@ -708,3 +708,23 @@ get to them.
 path — the click, the command, the running server — not a unit test of the function behind
 it. If verification never left the test harness, the feature is unverified, whatever the
 count says.
+
+## Writing a lesson down does not prevent it — only a test does
+
+**2026-08-27, T-9.** On 2026-08-26 Evan rejected the first demo because it showed the
+ranking rubric instead of the repository. That lesson was written into this file the same
+day: *the signals are how the engine decides what to show you, not what you want to read.*
+
+Eight tickets later the PR tour shipped stops that opened `MEANING MOVED · 0.60 · 2 lines`.
+Same failure, same product, with the lesson already on the page.
+
+**The rule:** when a lesson describes something a future change could re-introduce, it is not
+recorded until something *fails* on it. T-9 ends with a test that fails if a stop opens with
+a number, and one that fails if an invented CSS token reaches a rendered page. Prose in a
+wiki is a reminder for whoever happens to read it; a red test is a reminder for whoever does
+not.
+
+**Corollary, from the same ticket.** A criterion about a *loading state* was marked PASS on
+the markup — the page did say "reading…". It said it forever, because the poll asked about a
+job key that did not exist. A criterion about something finishing must be tested by waiting
+for it to finish.

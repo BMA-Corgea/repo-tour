@@ -27,6 +27,23 @@ here and found via the reference table below.
 <!-- One line per completed item, WITH the why. Newest first. Prune from the
      bottom; the permanent record lives in tickets, events.jsonl, and wiki. -->
 
+- **2026-08-27** — **T-9 COMPLETE.** A real PR page: the PR's own files, the diff on screen
+  and syntax-highlighted, a link out to GitHub, and narration that says what the PR is doing
+  rather than reciting its score. Why the rebuild: the tour had been rendered through
+  `renderRepoView`, so it WAS the repo page — one decision that caused five of the six faults
+  Evan listed.
+- **2026-08-27** — The stop text had been opening with `MEANING MOVED · 0.60 · 2 lines`.
+  Why that matters more than the others: it is the same failure as the metrics demo rejected
+  on 2026-08-26, whose lesson was already in `kb/wiki/lessons.md`. Now enforced by a test
+  that fails if a stop opens with a number — prose in a wiki did not hold.
+- **2026-08-27** — The style did not follow through: `prview.ts` invented `--panel`,
+  `--hover`, `--fg` with DARK fallbacks, so a light skin got dark panels and grey-on-cream
+  text. Rebuilt on house tokens; a test fails if any of the three reappears.
+- **2026-08-27** — The building page hung while you watched it. Why: `building()` used one
+  argument as heading, polled job key AND destination, so a PR build polled a decorated
+  label, never resolved, and would have navigated to the repo tour anyway.
+
+- 2026-08-27 **T-9 COMPLETE** — A real PR view: the diff on screen, and narration about the change not the score
 - **2026-08-27** — **T-8 COMPLETE.** The app's "Pull requests" tab was a decorative span and
   PR mode only ran from the CLI, so Evan clicked it and nothing happened. Why it slipped
   through T-5: criterion 9 was verified by checking the PR tour renders through the same

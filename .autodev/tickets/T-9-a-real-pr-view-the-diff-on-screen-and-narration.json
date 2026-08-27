@@ -1,0 +1,218 @@
+{
+  "id": "T-9",
+  "slug": "a-real-pr-view-the-diff-on-screen-and-narration",
+  "type": "feature",
+  "title": "A real PR view: the diff on screen, and narration about the change not the score",
+  "stage": "monitor",
+  "status": "complete",
+  "spec": "",
+  "pipeline_version": "feature@v1",
+  "modifiers": [],
+  "pipeline": [
+    "intake",
+    "refine",
+    "queue",
+    "locate",
+    "plan",
+    "build",
+    "auto-review",
+    "gate",
+    "verify",
+    "uat",
+    "release",
+    "monitor"
+  ],
+  "passport": [
+    "2026-08-27 advanced verify → uat · verify on claude-opus-5[1m]",
+    "2026-08-27 advanced uat → release · uat on claude-opus-5[1m]",
+    "2026-08-27 gate deploy cleared by policy:unattended",
+    "2026-08-27 advanced release → monitor · release on claude-opus-5[1m]",
+    "2026-08-27 pipeline complete at monitor"
+  ],
+  "assignees": {},
+  "links": {},
+  "gates": {
+    "spec_ready": true,
+    "merge": true,
+    "accept": true,
+    "deploy": true,
+    "sp_decide": false,
+    "ex_decide": false,
+    "compliance": false
+  },
+  "overrides": {},
+  "risk": "medium",
+  "lean": false,
+  "loop": {
+    "validator_passed": true,
+    "attempts": 0,
+    "evidence": ".autodev/reports/T-9-monitor.md"
+  },
+  "history": [
+    {
+      "from": "intake",
+      "to": "refine",
+      "by": "agent:pm",
+      "at": "2026-08-27T19:46:01.453Z"
+    },
+    {
+      "from": "refine",
+      "to": "queue",
+      "by": "agent:claude(on-behalf:evan,GA-6)",
+      "at": "2026-08-27T19:46:01.547Z"
+    },
+    {
+      "from": "queue",
+      "to": "locate",
+      "by": "agent:pm",
+      "at": "2026-08-27T19:46:01.590Z"
+    },
+    {
+      "from": "locate",
+      "to": "plan",
+      "by": "agent:pm",
+      "at": "2026-08-27T19:46:53.222Z"
+    },
+    {
+      "from": "plan",
+      "to": "build",
+      "by": "agent:pm",
+      "at": "2026-08-27T19:46:53.275Z"
+    },
+    {
+      "from": "build",
+      "to": "auto-review",
+      "by": "agent:coder",
+      "at": "2026-08-27T20:21:13.386Z"
+    },
+    {
+      "from": "auto-review",
+      "to": "gate",
+      "by": "agent:reviewer",
+      "at": "2026-08-27T20:21:13.428Z"
+    },
+    {
+      "from": "gate",
+      "to": "verify",
+      "by": "agent:qa",
+      "at": "2026-08-27T20:22:32.874Z"
+    },
+    {
+      "from": "verify",
+      "to": "uat",
+      "by": "agent:pm",
+      "at": "2026-08-27T20:22:32.971Z"
+    },
+    {
+      "from": "uat",
+      "to": "release",
+      "by": "agent:pm",
+      "at": "2026-08-27T20:22:33.020Z"
+    },
+    {
+      "from": "release",
+      "to": "monitor",
+      "by": "agent:pm",
+      "at": "2026-08-27T20:22:33.065Z"
+    }
+  ],
+  "receipts": {
+    "intake": {
+      "evidence": ".autodev/tickets/T-9-a-real-pr-view-the-diff-on-screen-and-narration.json",
+      "kind": "file",
+      "fingerprint": "sha256:ef0380293ffc0bde",
+      "by": "agent:pm",
+      "at": "2026-08-27T19:46:01.452Z",
+      "model": "claude-opus-5[1m]"
+    },
+    "refine": {
+      "evidence": ".autodev/specs/T-9-pr-view.md",
+      "kind": "file",
+      "fingerprint": "sha256:7b90644d25e7928a",
+      "by": "agent:pm",
+      "at": "2026-08-27T19:46:01.498Z",
+      "model": "claude-opus-5[1m]"
+    },
+    "queue": {
+      "evidence": ".autodev/tickets/T-9-a-real-pr-view-the-diff-on-screen-and-narration.json",
+      "kind": "file",
+      "fingerprint": "sha256:38981a0b1f1e736b",
+      "by": "agent:pm",
+      "at": "2026-08-27T19:46:01.589Z",
+      "model": "claude-opus-5[1m]"
+    },
+    "locate": {
+      "evidence": ".autodev/reports/T-9-locate.md",
+      "kind": "file",
+      "fingerprint": "sha256:6de9128dceb778d8",
+      "by": "agent:pm",
+      "at": "2026-08-27T19:46:53.221Z",
+      "model": "claude-opus-5[1m]"
+    },
+    "plan": {
+      "evidence": ".autodev/reports/T-9-plan.md",
+      "kind": "file",
+      "fingerprint": "sha256:09983d626ee01ef8",
+      "by": "agent:pm",
+      "at": "2026-08-27T19:46:53.274Z",
+      "model": "claude-opus-5[1m]"
+    },
+    "build": {
+      "evidence": "commit 216a130 on t9-pr-view — prview.ts + diff.ts, adjudicator narrative with repo context, house-style restyle, building-page poll fix. 110 tests green.",
+      "kind": "other",
+      "fingerprint": "commit 216a130 on t9-pr-view — prview.ts + diff.ts, adjudicator narrative with repo context, house-style restyle, building-page poll fix. 110 tests green.",
+      "by": "agent:coder",
+      "at": "2026-08-27T20:21:13.385Z",
+      "model": "claude-opus-5[1m]"
+    },
+    "auto-review": {
+      "evidence": ".autodev/reports/T-9-auto-review.md",
+      "kind": "file",
+      "fingerprint": "sha256:217650795f0f673a",
+      "by": "agent:reviewer",
+      "at": "2026-08-27T20:21:13.428Z",
+      "model": "claude-opus-5[1m]"
+    },
+    "gate": {
+      "evidence": ".autodev/reports/T-9-verify.md",
+      "kind": "file",
+      "fingerprint": "sha256:6c7e32222904edb8",
+      "by": "agent:qa",
+      "at": "2026-08-27T20:22:32.873Z",
+      "model": "claude-opus-5[1m]"
+    },
+    "verify": {
+      "evidence": ".autodev/reports/T-9-vision-conformance.md",
+      "kind": "file",
+      "fingerprint": "sha256:c451ddf49ee3942f",
+      "by": "agent:pm",
+      "at": "2026-08-27T20:22:32.970Z",
+      "model": "claude-opus-5[1m]"
+    },
+    "uat": {
+      "evidence": ".autodev/reports/T-9-release.md",
+      "kind": "file",
+      "fingerprint": "sha256:72f716d3cf8d1640",
+      "by": "agent:pm",
+      "at": "2026-08-27T20:22:33.019Z",
+      "model": "claude-opus-5[1m]"
+    },
+    "release": {
+      "evidence": ".autodev/reports/T-9-monitor.md",
+      "kind": "file",
+      "fingerprint": "sha256:c555408321731d3a",
+      "by": "agent:pm",
+      "at": "2026-08-27T20:22:33.064Z",
+      "model": "claude-opus-5[1m]"
+    },
+    "monitor": {
+      "evidence": ".autodev/reports/T-9-monitor.md",
+      "kind": "file",
+      "fingerprint": "sha256:97289f333bc6ea04",
+      "by": "agent:pm",
+      "at": "2026-08-27T20:22:56.697Z",
+      "model": "claude-opus-5[1m]"
+    }
+  },
+  "completed": true
+}
