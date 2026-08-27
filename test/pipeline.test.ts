@@ -1972,3 +1972,77 @@ describe('the diff parser', () => {
     expect(parseUnified('a.ts', '').empty).toBe(true);
   });
 });
+
+describe('a build in progress polls the job it is actually waiting on', () => {
+  // Evan: "When I stayed on the page constructing the interpretation it hung. I left and
+  // came back and it was instantly done." The page polled a decorated LABEL as though it
+  // were a job key, matched nothing, read back `idle` forever, and would have navigated to
+  // the repo tour rather than the PR even if it had finished.
+  const own = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-poll-'));
+
+  afterAll(() => { fs.rmSync(own, { recursive: true, force: true }); });
+
+  it('a PR build page polls the PR job key and returns to the PR', async () => {
+    const { RepoTourServer } = await import('../src/server.js');
+    initRepo(own);
+    write(path.join(own, 'a.py'), 'def go(x):\n    """Do it."""\n    return x\n');
+    commitAll(own, 'init');
+
+    const server = new RepoTourServer({ statePath: path.join(own, 'state.json'), interpret: false });
+    server.addRepo(own);
+
+    let body = '';
+    const res = {
+      writeHead() { return this; },
+      end(chunk?: string) { if (typeof chunk === 'string') body = chunk; return this; },
+    } as unknown as import('node:http').ServerResponse;
+
+    await server.handler(
+      { url: `/pr?path=${encodeURIComponent(own)}&n=7`, method: 'GET' } as import('node:http').IncomingMessage,
+      res,
+    );
+
+    // it polls the job key, not a label
+    expect(body).toContain(`var jobKey = ${JSON.stringify(`${own}#pr-7`)}`);
+    expect(body).not.toMatch(/var jobKey = "[^"]*PR #7"/);
+    // and when it finishes it goes back to the PR, not to /r
+    expect(body).toContain(`var doneUrl = "/pr?path=${encodeURIComponent(own).replace(/%/g, '%')}&n=7"`);
+    expect(body).not.toMatch(/var doneUrl = "\/r\?/);
+    await settle(server);
+  });
+
+  it('a repo build page still polls the repo path and returns to /r', async () => {
+    const { RepoTourServer } = await import('../src/server.js');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-poll2-'));
+    try {
+      initRepo(dir);
+      write(path.join(dir, 'a.py'), 'def go(x):\n    return x\n');
+      commitAll(dir, 'init');
+      const server = new RepoTourServer({ statePath: path.join(dir, 'state.json'), interpret: false });
+      server.addRepo(dir);
+      // a marker makes the fresh server resume, so the page is the building one
+      const marker = path.join(dir, '.repo-tour', 'building.json');
+      fs.mkdirSync(path.dirname(marker), { recursive: true });
+      fs.writeFileSync(marker, JSON.stringify({ startedAt: new Date().toISOString(), lines: ['reading…'] }));
+      const fresh = new RepoTourServer({ statePath: path.join(dir, 'state.json'), interpret: false });
+
+      let body = '';
+      const res = {
+        writeHead() { return this; },
+        end(chunk?: string) { if (typeof chunk === 'string') body = chunk; return this; },
+      } as unknown as import('node:http').ServerResponse;
+      await fresh.handler(
+        { url: `/r?path=${encodeURIComponent(dir)}`, method: 'GET' } as import('node:http').IncomingMessage,
+        res,
+      );
+      if (body.includes('var jobKey')) {
+        expect(body).toContain(`var jobKey = ${JSON.stringify(dir)}`);
+        expect(body).toContain(`var doneUrl = "/r?path=`);
+      }
+      await settle(fresh);
+      await settle(server);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
