@@ -3,8 +3,8 @@
   "slug": "digest-engine",
   "type": "feature",
   "title": "The digest engine: deterministic extraction with rollup and incremental re-digest",
-  "stage": "uat",
-  "status": "acceptance",
+  "stage": "monitor",
+  "status": "complete",
   "spec": "",
   "pipeline_version": "feature@v1",
   "modifiers": [],
@@ -23,27 +23,28 @@
     "monitor"
   ],
   "passport": [
-    "2026-08-26 advanced build → auto-review · build on claude-opus-5[1m]",
-    "2026-08-26 advanced auto-review → gate · auto-review on claude-opus-5[1m]",
-    "2026-08-26 gate merge cleared by policy:unattended",
-    "2026-08-26 advanced gate → verify · gate on claude-opus-5[1m]",
-    "2026-08-26 advanced verify → uat · verify on claude-opus-5[1m]"
+    "2026-08-27 gate accept cleared by agent:claude(on-behalf:evan,GA-3) on go-ahead GA-3 (\"Let's go ahead and do T-1 and T-5\" / (scope echoed: T-1 acce\")",
+    "2026-08-27 advanced uat → release · uat on claude-opus-5[1m]",
+    "2026-08-27 gate deploy cleared by policy:unattended",
+    "2026-08-27 advanced release → monitor · release on claude-opus-5[1m]",
+    "2026-08-27 pipeline complete at monitor"
   ],
   "assignees": {},
   "links": {},
   "gates": {
     "spec_ready": true,
     "merge": true,
-    "accept": false,
-    "deploy": false,
+    "accept": true,
+    "deploy": true,
     "sp_decide": false,
     "ex_decide": false,
     "compliance": false
   },
   "overrides": {},
   "loop": {
-    "validator_passed": false,
-    "attempts": 0
+    "validator_passed": true,
+    "attempts": 0,
+    "evidence": ".autodev/reports/T-1-monitor.md"
   },
   "history": [
     {
@@ -117,6 +118,18 @@
       "to": "uat",
       "by": "agent:qa",
       "at": "2026-08-26T17:59:17.319Z"
+    },
+    {
+      "from": "uat",
+      "to": "release",
+      "by": "agent:pm",
+      "at": "2026-08-27T17:39:32.278Z"
+    },
+    {
+      "from": "release",
+      "to": "monitor",
+      "by": "agent:pm",
+      "at": "2026-08-27T17:40:07.828Z"
     }
   ],
   "receipts": {
@@ -191,7 +204,32 @@
       "by": "agent:qa",
       "at": "2026-08-26T17:59:17.318Z",
       "model": "claude-opus-5[1m]"
+    },
+    "uat": {
+      "evidence": ".autodev/reports/T-1-vision-conformance.md",
+      "kind": "file",
+      "fingerprint": "sha256:34a8bd4257a43337",
+      "by": "agent:pm",
+      "at": "2026-08-27T17:39:32.277Z",
+      "model": "claude-opus-5[1m]"
+    },
+    "release": {
+      "evidence": ".autodev/reports/T-1-release.md",
+      "kind": "file",
+      "fingerprint": "sha256:101d05f881fcfbaa",
+      "by": "agent:pm",
+      "at": "2026-08-27T17:40:07.826Z",
+      "model": "claude-opus-5[1m]"
+    },
+    "monitor": {
+      "evidence": ".autodev/reports/T-1-monitor.md",
+      "kind": "file",
+      "fingerprint": "sha256:130bdcbc5714fa61",
+      "by": "agent:pm",
+      "at": "2026-08-27T17:40:38.167Z",
+      "model": "claude-opus-5[1m]"
     }
   },
-  "bounces": {}
+  "bounces": {},
+  "completed": true
 }

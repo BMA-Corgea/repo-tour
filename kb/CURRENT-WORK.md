@@ -10,39 +10,43 @@ here and found via the reference table below.
 <!-- What is in motion right now: one line per active ticket/effort —
      what, why, where it stands, what is next. Never pruned while live. -->
 
-  green. Still at **uat** awaiting Evan's `accept` gate.
-- **The product surface was rebuilt** after Evan rejected the first demo ("there's no code
-  on the screen"). `repo-tour tour` is now a GitHub-shaped repo page walking the ACTUAL
-  code; the old metrics view survives as `repo-tour inspect` for judging digest quality.
-  This was outside T-1's spec — T-1 never included a tour (spec §9 defers it to T-2) — so
-  it is not blocking T-1's acceptance either way. **Next:** Evan's call on both.
-
-  the checkpoint, not by narrating its diff. Opened 2026-08-27 on Evan's ask to expand
-  beyond repo tours. Spec written (`.autodev/specs/T-5-pr-mode.md`, 10 testable criteria).
-  Now at the **spec_ready** gate awaiting Evan. **Next:** his read of the spec.
-- **T-5** (feature) — PR mode: tour a pull request by diffing its interpretation against the checkpoi… — gate
-
+  how many lines changed. Built, reviewed, **merged to `main` as `eef16f8`** (PR #1).
+  91 tests green. At **verify**, then Evan's `accept` gate.
+  `repo-tour pr <n>` — or `--base <ref> --head <ref>`, which needs no network.
+  **Next:** verify evidence, then show him the running thing.
 
 ## Waiting on
 
 <!-- Holds: "waiting at <gate> on <keyholder> since <date>, ping sent to
      <channel>" — no session should discover a hold by archaeology (ruling 24). -->
 
-  question that gate asks is not "does it match the spec" but "is this what you actually
-  meant, and would you show it to someone?" Nothing is blocked behind it except T-1 itself.
-
-- **T-5** — waiting at spec_ready on human:owner since 2026-08-27
-  code exists yet and none will until he clears it. The open question in the spec is the
-  descope: T-5 makes a PR *readable*, not *reviewable* — the notes panel that turns a tour
-  into a filable review is still T-3.
-- **T-5** — waiting at spec_ready on human:owner since 2026-08-27
+  stopped again mid-flight (GA-4, 2026-08-27): *"We can just observe the app and I'll tell
+  you what I want changed afterwards."* So that gate is a SHOW, not a question.
+  The descope still standing: T-5 makes a PR *readable*, not *reviewable* — the notes panel
+  that turns a tour into a filable review is still **T-3**.
 
 ## Recent past (~15 items / ~30 days)
 
 <!-- One line per completed item, WITH the why. Newest first. Prune from the
      bottom; the permanent record lives in tickets, events.jsonl, and wiki. -->
 
-- 2026-08-27 **T-1 COMPLETE** — The digest engine: deterministic extraction with rollup and incremental re-dige…
+- 2026-08-27 **T-5 COMPLETE** — PR mode: tour a pull request by diffing its interpretation against the checkpoi…
+- **2026-08-27** — **T-1 COMPLETE.** Accepted by Evan (GA-3), then release and monitor.
+  Both recorded honestly rather than faked green: there is no production service to deploy
+  to, so "released" means the tool builds and runs from a clean `main` — verified live.
+  BOTH tour kinds: a tweet-sized summary by default, the full text one press away. Why:
+  every stop was an 80–140 word paragraph, and skimming thirty of them to find the two that
+  mattered is the overwhelm Evan described.
+- **2026-08-27** — The central comparison was rebuilt mid-build after it failed on real
+  code. Why: diffing two free-prose interpretations scored a pure local-variable rename at
+  0.47 "meaning moved". The model had not paraphrased itself — it wrote a *different essay*
+  about the same code, ~50% overlap. Free prose is not stable enough to diff. `adjudicate.ts`
+  asks the model the question directly instead, and the same fixture scores 0.00.
+- **2026-08-27** — Review caught a rename scoring 1.00 with **zero** lines changed. Why: the
+  base side was read at the new path, so every symbol looked newly added. The general rule
+  is in `kb/wiki/lessons.md` — file identity comes from git's rename detection, never from
+  matching path strings.
+
 - **2026-08-26** — Product surface rebuilt on Evan's rejection of the metrics demo. Why it
   went wrong: the ranking signals are how the engine picks what to show, not what a reader
   wants; putting them on screen showed the rubric instead of the repo. Now: repo page with
