@@ -2137,3 +2137,33 @@ describe('T-3 — notes carry provenance, and the assistant can read them', () =
     expect(html).toContain('src/digest.ts');
   });
 });
+
+describe('the Ask panel is on the repo tour too', () => {
+  it('ships the pane, the tab, and the repo-scoped notes key', async () => {
+    const r = await digest(root, { write: false });
+    const plan = buildCodeTour(r, { maxFiles: 2, perFile: 2 });
+    const html = renderRepoView(r, { steps: plan.steps, itinerary: plan.itinerary });
+    expect(html).toContain('id="tab-ask"');
+    expect(html).toContain('id="ask"');
+    expect(html).toContain('id="asklog"');
+    // scoped to the repository, with no PR suffix — a repo tour is not a pull request
+    expect(html).toContain(`repotour:notes:${path.basename(root)}`);
+    expect(html).not.toMatch(/repotour:notes:[^"']*#pr-/);
+  });
+
+  it('hands the assistant what each file is for, and who imports it', async () => {
+    const r = await digest(root, { write: false });
+    const plan = buildCodeTour(r, { maxFiles: 3, perFile: 2 });
+    const html = renderRepoView(r, { steps: plan.steps, itinerary: plan.itinerary });
+    const payload = JSON.parse(/window\.__REPO__ = (\{.*?\});<\/script>/s.exec(html)![1]!) as {
+      meanings: Record<string, string>;
+      importers: Record<string, string[]>;
+    };
+    expect(Object.keys(payload.meanings).length).toBeGreaterThan(0);
+    // every meaning belongs to a file the tour actually visits
+    for (const f of Object.keys(payload.meanings)) expect(plan.itinerary).toContain(f);
+    // and the importer map is real edges, not empty scaffolding
+    const withImporters = Object.values(payload.importers).filter((v) => v.length > 0);
+    expect(withImporters.length).toBeGreaterThan(0);
+  });
+});
