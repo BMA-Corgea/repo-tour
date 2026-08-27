@@ -16,6 +16,7 @@ import type { DigestResult } from './digest.js';
 import type { CodeStep } from './codetour.js';
 import type { Architecture } from './architecture.js';
 import { baseCss, alternateCss, skinPicker, skinScript } from './skins.js';
+import { narrate } from './narrate.js';
 
 export interface RepoViewOptions {
   steps: Array<CodeStep & { interpreted?: boolean }>;
@@ -691,6 +692,8 @@ const TOUR_BOOTSTRAP = `
   var el = {
     step: document.getElementById('gstep'), title: document.getElementById('gtitle'),
     where: document.getElementById('gwhere'), text: document.getElementById('gtext'),
+    more: document.getElementById('gmore'), expand: document.getElementById('gexpand'),
+    full: document.getElementById('gfull'),
     bar: document.getElementById('gbar'), src: document.getElementById('gsrc'),
     back: document.getElementById('gback'), next: document.getElementById('gnext'),
     end: document.getElementById('gend'), skip: document.getElementById('gskip')
@@ -739,6 +742,7 @@ const TOUR_BOOTSTRAP = `
       window.__repo.open(s.file, { from: s.startLine, to: s.endLine });
     }
     if (window.__notes && window.__notes.followStop) window.__notes.followStop();
+    expandOne = false;
     var ci = chapterAt(n);
     var ch = chapters[ci];
     head.style.display = '';
@@ -751,8 +755,16 @@ const TOUR_BOOTSTRAP = `
     el.where.textContent = s.architecture
       ? (s.architecture.part ? 'a part of the system' : 'the system as a whole')
       : s.file + '  ·  lines ' + s.startLine + '\u2013' + s.endLine;
-    el.text.textContent = s.text;
+    // T-5 section 8: the DEFAULT level is the whole explanation compressed to a tweet or
+    // two. s.text is untouched and is what the press reveals - criterion 12 requires the
+    // expanded view to be byte-identical to what this page rendered before two-level
+    // narration existed, so nothing may be reformatted on the way out.
+    el.text.textContent = s.summary || s.text;
     el.text.classList.toggle('plain', !s.interpreted);
+    el.full.textContent = s.text;
+    el.full.classList.toggle('plain', !s.interpreted);
+    el.more.style.display = s.expandable ? '' : 'none';
+    applyExpansion();
     el.src.textContent = s.interpreted
       ? (s.architecture ? 'Written by reading the parts and how they import each other.' : 'Written by reading these lines.')
       : 'Structural facts only \u2014 this stop was not interpreted.';
@@ -761,6 +773,42 @@ const TOUR_BOOTSTRAP = `
     el.next.textContent = n === defs.length - 1 ? 'Finish' : (n === ch.to ? 'Next chapter' : 'Next');
     el.skip.style.display = ci === chapters.length - 1 ? 'none' : '';
   }
+
+  // ---- disclosure: per-stop press, plus a global toggle for deep-read mode
+  //
+  // expandAll is the reader's standing preference and survives moving between stops;
+  // expandOne is a single stop opened inside a collapsed tour and resets on navigation.
+  // Without that split, pressing expand on one stop would silently expand the whole tour,
+  // which is the opposite of what someone skimming asked for.
+  var expandAll = false;
+  var expandOne = false;
+
+  function applyExpansion() {
+    var open = expandAll || expandOne;
+    el.full.style.display = open ? '' : 'none';
+    el.text.style.display = open ? 'none' : '';
+    el.expand.textContent = open ? 'Show less' : 'Show the full explanation';
+  }
+
+  var depth = document.getElementById('gdepth');
+  if (depth) {
+    depth.addEventListener('change', function () { window.__tourExpandAll(depth.checked); });
+  }
+
+  if (el.expand) {
+    el.expand.addEventListener('click', function () {
+      if (expandAll) { expandAll = false; expandOne = false; if (depth) depth.checked = false; }
+      else expandOne = !expandOne;
+      applyExpansion();
+    });
+  }
+
+  window.__tourExpandAll = function (on) {
+    expandAll = !!on;
+    expandOne = false;
+    if (depth) depth.checked = expandAll;
+    applyExpansion();
+  };
 
   var idle = document.getElementById('gidle');
   var body = document.getElementById('gbody');
@@ -859,6 +907,15 @@ const TOUR_BOOTSTRAP = `
 `;
 
 export function renderRepoView(result: DigestResult, opts: RepoViewOptions): string {
+  // Every stop passes through the ONE narration builder on its way into the page,
+  // whichever tour kind produced it (T-5 criterion 14). Doing it here rather than in each
+  // builder means there is exactly one answer to "how long is the short version", and a
+  // stop from a PR tour is indistinguishable in shape from a stop on a repo tour.
+  const narratedSteps = opts.steps.map((s) => {
+    const n = narrate(s);
+    return { ...s, summary: n.summary, expandable: n.expandable };
+  });
+
   const m = result.manifest;
   const root = m.root;
   const repoName = path.basename(root) || root;
@@ -1010,7 +1067,16 @@ ${opts.servedBy ? `<script>${freshnessScript(opts.servedBy.repoPath, opts.served
       <h2 id="gtitle"></h2>
       <div class="gwhere" id="gwhere"></div>
       <div class="gtext" id="gtext"></div>
+      <div class="gmore" id="gmore" style="display:none">
+        <button class="btn tiny" id="gexpand" type="button">Show the full explanation</button>
+      </div>
+      <div class="gfull" id="gfull" style="display:none"></div>
       <div class="progress"><i id="gbar"></i></div>
+      <div class="gnav">
+        <label class="depthtoggle" title="Show every stop's full explanation, for reading rather than skimming">
+          <input type="checkbox" id="gdepth"> full detail
+        </label>
+      </div>
       <div class="gnav">
         <button class="btn" id="gback" type="button">Back</button>
         <button class="btn primary" id="gnext" type="button">Next</button>
@@ -1051,7 +1117,7 @@ ${opts.servedBy ? `<script>${freshnessScript(opts.servedBy.repoPath, opts.served
 </div>
 
 <script>window.__REPO__ = ${embedJson({ files: embedded, start, repo: { name: repoName, head: repo?.head ?? null, branch: repo?.branch ?? null } })};</script>
-<script>window.__STEPS__ = ${embedJson(opts.steps)};</script>
+<script>window.__STEPS__ = ${embedJson(narratedSteps)};</script>
 <script>window.__TOPFILE__ = ${embedJson(topFileOf)};</script>
 <script>${HIGHLIGHTER}</script>
 <script>${APP}</script>

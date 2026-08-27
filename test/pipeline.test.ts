@@ -23,6 +23,8 @@ import { buildCodeTour, buildArchitectureSteps } from '../src/codetour.js';
 import { buildArchitecture } from '../src/architecture.js';
 import { renderRepoView } from '../src/repoview.js';
 import { fingerprint } from '../src/server.js';
+import { applyMeanings, fullText, stepKey, SUMMARY_MAX } from '../src/interpret.js';
+import { narrate, compress } from '../src/narrate.js';
 
 let root: string;
 
@@ -1315,5 +1317,105 @@ describe('the app can be stopped', () => {
     const { killLlmChildren } = await import('../src/llm.js');
     expect(typeof killLlmChildren).toBe('function');
     expect(() => killLlmChildren()).not.toThrow();   // a no-op with nothing running
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T-5 §8 — two levels of explanation. Criteria 11-14.
+//
+// The rule these pin down is Evan's correction at the spec gate: the default level is the
+// whole explanation COMPRESSED, and the press restores the ORIGINAL. Criterion 12 is a
+// byte-identity requirement, which makes `fullText` a contract rather than an
+// implementation detail — these tests exist so nobody "tidies" it later.
+
+describe('every stop is tweet-sized by default, and expanding restores the original', () => {
+  const meaning = {
+    what:
+      'It walks the tree once, registering a repository at every .git it meets, and hashes ' +
+      'each file it keeps so a later run can tell what actually changed. The walk is ' +
+      'structural rather than git-driven because a nested repository is invisible to the ' +
+      'parent, and reporting only the parent would silently drop most of the code.',
+    why:
+      'Discovery had to survive repos-inside-repos, which is the shape the first real ' +
+      'target turned out to have.',
+    summary: 'Walks the tree, treating every nested .git as its own repo, and hashes files so later runs can tell what changed.',
+  };
+
+  it('criterion 11 — a written summary is used as-is and stays under the cap', () => {
+    const [step] = applyMeanings(
+      [{ file: 'a.ts', startLine: 1, endLine: 9, title: 'walk', text: 'deterministic' }],
+      [],
+      new Map([[stepKey('a.ts', 1, 9), meaning]]),
+    );
+    expect(step!.summary).toBe(meaning.summary);
+    expect(step!.summary!.length).toBeLessThanOrEqual(SUMMARY_MAX);
+  });
+
+  it('criterion 12 — the expanded text is exactly what the tour rendered before', () => {
+    // The pre-change formula, written out longhand. If someone changes `fullText`, this
+    // fails and they have to justify it against the criterion rather than discover it.
+    const expectedFull = `${meaning.what} ${meaning.why}`;
+    expect(fullText(meaning)).toBe(expectedFull);
+
+    const [step] = applyMeanings(
+      [{ file: 'a.ts', startLine: 1, endLine: 9, title: 'walk', text: 'deterministic' }],
+      [],
+      new Map([[stepKey('a.ts', 1, 9), meaning]]),
+    );
+    expect(step!.text).toBe(expectedFull);
+  });
+
+  it('criterion 11 — an uninterpreted stop still gets a summary, cut at a sentence', () => {
+    const long =
+      'This stop was never interpreted. It carries deterministic facts only. ' +
+      'x'.repeat(600);
+    const n = narrate({ text: long, summary: undefined });
+    expect(n.summary.length).toBeLessThanOrEqual(SUMMARY_MAX);
+    expect(n.summary).toBe('This stop was never interpreted. It carries deterministic facts only.');
+    expect(n.full).toBe(long);
+    expect(n.expandable).toBe(true);
+  });
+
+  it('a summary that already fits is never truncated or ellipsised', () => {
+    const short = 'Short enough to stand on its own.';
+    const n = narrate({ text: short, summary: undefined });
+    expect(n.summary).toBe(short);
+    expect(n.expandable).toBe(false);
+  });
+
+  it('a first sentence longer than the budget is cut on a word, never mid-word', () => {
+    const runOn = `${'alpha '.repeat(120)}end.`;
+    const out = compress(runOn);
+    expect(out.length).toBeLessThanOrEqual(SUMMARY_MAX);
+    expect(out.endsWith('…')).toBe(true);
+    expect(out).not.toMatch(/alph…$/);
+  });
+
+  it('criterion 14 — repo-tour steps reach the page through the shared narrator', async () => {
+    const result = await digest(root, { write: false });
+    const plan = buildCodeTour(result, { maxFiles: 3, perFile: 2 });
+    const html = renderRepoView(result, { steps: plan.steps, itinerary: plan.itinerary });
+
+    const embedded = /window\.__STEPS__ = (\[.*?\]);<\/script>/s.exec(html);
+    expect(embedded).not.toBeNull();
+    const steps = JSON.parse(embedded![1]!) as Array<{ summary?: string; text: string }>;
+    expect(steps.length).toBeGreaterThan(0);
+    for (const s of steps) {
+      expect(typeof s.summary).toBe('string');
+      expect(s.summary!.length).toBeGreaterThan(0);
+      expect(s.summary!.length).toBeLessThanOrEqual(SUMMARY_MAX);
+    }
+  });
+
+  it('the page ships both levels and a way to move between them', async () => {
+    const result = await digest(root, { write: false });
+    const plan = buildCodeTour(result, { maxFiles: 2, perFile: 2 });
+    const html = renderRepoView(result, { steps: plan.steps, itinerary: plan.itinerary });
+    expect(html).toContain('id="gfull"');
+    expect(html).toContain('id="gexpand"');
+    expect(html).toContain('id="gdepth"');
+    // the notes panel must capture the FULL explanation, not the compressed one: a note
+    // tagged against a blurb loses the provenance T-3 exists to provide
+    expect(html).toContain('explanation: step.text');
   });
 });
