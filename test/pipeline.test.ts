@@ -23,6 +23,13 @@ import { buildCodeTour, buildArchitectureSteps } from '../src/codetour.js';
 import { buildArchitecture } from '../src/architecture.js';
 import { renderRepoView } from '../src/repoview.js';
 import { fingerprint } from '../src/server.js';
+import { applyMeanings, fullText, stepKey, SUMMARY_MAX } from '../src/interpret.js';
+import { narrate, compress } from '../src/narrate.js';
+import { meaningDistance, vocabularyOf, fileDelta, orderByMeaning, ripple, type FileDelta } from '../src/delta.js';
+import { buildPrTour, whyFor, band } from '../src/prtour.js';
+import { issueRefs, resolvePr } from '../src/pr.js';
+import { loadCheckpoint } from '../src/checkpoint.js';
+import type { FileExtract, SymbolRecord } from '../src/types.js';
 
 let root: string;
 
@@ -1315,5 +1322,388 @@ describe('the app can be stopped', () => {
     const { killLlmChildren } = await import('../src/llm.js');
     expect(typeof killLlmChildren).toBe('function');
     expect(() => killLlmChildren()).not.toThrow();   // a no-op with nothing running
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T-5 §8 — two levels of explanation. Criteria 11-14.
+//
+// The rule these pin down is Evan's correction at the spec gate: the default level is the
+// whole explanation COMPRESSED, and the press restores the ORIGINAL. Criterion 12 is a
+// byte-identity requirement, which makes `fullText` a contract rather than an
+// implementation detail — these tests exist so nobody "tidies" it later.
+
+describe('every stop is tweet-sized by default, and expanding restores the original', () => {
+  const meaning = {
+    what:
+      'It walks the tree once, registering a repository at every .git it meets, and hashes ' +
+      'each file it keeps so a later run can tell what actually changed. The walk is ' +
+      'structural rather than git-driven because a nested repository is invisible to the ' +
+      'parent, and reporting only the parent would silently drop most of the code.',
+    why:
+      'Discovery had to survive repos-inside-repos, which is the shape the first real ' +
+      'target turned out to have.',
+    summary: 'Walks the tree, treating every nested .git as its own repo, and hashes files so later runs can tell what changed.',
+  };
+
+  it('criterion 11 — a written summary is used as-is and stays under the cap', () => {
+    const [step] = applyMeanings(
+      [{ file: 'a.ts', startLine: 1, endLine: 9, title: 'walk', text: 'deterministic' }],
+      [],
+      new Map([[stepKey('a.ts', 1, 9), meaning]]),
+    );
+    expect(step!.summary).toBe(meaning.summary);
+    expect(step!.summary!.length).toBeLessThanOrEqual(SUMMARY_MAX);
+  });
+
+  it('criterion 12 — the expanded text is exactly what the tour rendered before', () => {
+    // The pre-change formula, written out longhand. If someone changes `fullText`, this
+    // fails and they have to justify it against the criterion rather than discover it.
+    const expectedFull = `${meaning.what} ${meaning.why}`;
+    expect(fullText(meaning)).toBe(expectedFull);
+
+    const [step] = applyMeanings(
+      [{ file: 'a.ts', startLine: 1, endLine: 9, title: 'walk', text: 'deterministic' }],
+      [],
+      new Map([[stepKey('a.ts', 1, 9), meaning]]),
+    );
+    expect(step!.text).toBe(expectedFull);
+  });
+
+  it('criterion 11 — an uninterpreted stop still gets a summary, cut at a sentence', () => {
+    const long =
+      'This stop was never interpreted. It carries deterministic facts only. ' +
+      'x'.repeat(600);
+    const n = narrate({ text: long, summary: undefined });
+    expect(n.summary.length).toBeLessThanOrEqual(SUMMARY_MAX);
+    expect(n.summary).toBe('This stop was never interpreted. It carries deterministic facts only.');
+    expect(n.full).toBe(long);
+    expect(n.expandable).toBe(true);
+  });
+
+  it('a summary that already fits is never truncated or ellipsised', () => {
+    const short = 'Short enough to stand on its own.';
+    const n = narrate({ text: short, summary: undefined });
+    expect(n.summary).toBe(short);
+    expect(n.expandable).toBe(false);
+  });
+
+  it('a first sentence longer than the budget is cut on a word, never mid-word', () => {
+    const runOn = `${'alpha '.repeat(120)}end.`;
+    const out = compress(runOn);
+    expect(out.length).toBeLessThanOrEqual(SUMMARY_MAX);
+    expect(out.endsWith('…')).toBe(true);
+    expect(out).not.toMatch(/alph…$/);
+  });
+
+  it('criterion 14 — repo-tour steps reach the page through the shared narrator', async () => {
+    const result = await digest(root, { write: false });
+    const plan = buildCodeTour(result, { maxFiles: 3, perFile: 2 });
+    const html = renderRepoView(result, { steps: plan.steps, itinerary: plan.itinerary });
+
+    const embedded = /window\.__STEPS__ = (\[.*?\]);<\/script>/s.exec(html);
+    expect(embedded).not.toBeNull();
+    const steps = JSON.parse(embedded![1]!) as Array<{ summary?: string; text: string }>;
+    expect(steps.length).toBeGreaterThan(0);
+    for (const s of steps) {
+      expect(typeof s.summary).toBe('string');
+      expect(s.summary!.length).toBeGreaterThan(0);
+      expect(s.summary!.length).toBeLessThanOrEqual(SUMMARY_MAX);
+    }
+  });
+
+  it('the page ships both levels and a way to move between them', async () => {
+    const result = await digest(root, { write: false });
+    const plan = buildCodeTour(result, { maxFiles: 2, perFile: 2 });
+    const html = renderRepoView(result, { steps: plan.steps, itinerary: plan.itinerary });
+    expect(html).toContain('id="gfull"');
+    expect(html).toContain('id="gexpand"');
+    expect(html).toContain('id="gdepth"');
+    // the notes panel must capture the FULL explanation, not the compressed one: a note
+    // tagged against a blurb loses the provenance T-3 exists to provide
+    expect(html).toContain('explanation: step.text');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T-5 §2/§5 — the meaning delta. Criteria 3, 4, 5, 6.
+//
+// These are the ticket's proof. Spec §10 named the primary risk out loud: stage 4 is a
+// model, and if a model re-wording itself scored the same as a change of subject, the whole
+// premise collapses. Criterion 4 is the test that would catch that, so it is written to
+// FAIL loudly rather than to be satisfiable by a loose threshold.
+
+const sym = (name: string, kind: SymbolRecord['kind'] = 'function', exported = true): SymbolRecord =>
+  ({ name, kind, line: 1, endLine: 2, exported, doc: null });
+
+const asExtract = (p: string, symbols: SymbolRecord[], imports: string[] = []): FileExtract => ({
+  path: p,
+  language: 'typescript',
+  symbols,
+  imports: imports.map((raw, i) => ({ raw, resolved: raw, line: i + 1 })),
+  parseErrors: 0,
+});
+
+describe('the meaning delta separates a re-wording from a change of subject', () => {
+  const retryVocab = vocabularyOf([sym('retryBudget'), sym('spendRetry')], ['./transport.js']);
+
+  it('criterion 4 — a paraphrase of the same claim scores near zero', () => {
+    const d = meaningDistance(
+      'It manages the retry budget for outbound calls, spending from it on each failure and refusing once exhausted.',
+      'It handles the retry budget for outbound calls, drawing down on every failure and declining once it is used up.',
+      [sym('retryBudget')],
+      retryVocab,
+    );
+    expect(d).toBeLessThan(0.15);
+  });
+
+  it('criterion 4 — even an aggressive re-wording stays in the low band', () => {
+    // Every verb swapped: parses->reads, validates->checks, touches->gets. This is the
+    // worst realistic case for the comparison and it is deliberately kept as a test rather
+    // than tuned away, because the honest number matters more than a pretty one.
+    const loaderVocab = vocabularyOf([sym('parseManifest'), sym('validateEntry'), sym('loadSchema')], ['./schema.js']);
+    const d = meaningDistance(
+      'Parses the manifest and validates every entry against the schema before the loader touches it.',
+      'Reads the manifest and checks each entry against the schema before the loader gets to it.',
+      [sym('parseManifest')],
+      loaderVocab,
+    );
+    expect(d).toBeLessThan(0.45);
+  });
+
+  it('a changed subject scores high, and well clear of any re-wording', () => {
+    const d = meaningDistance(
+      'It manages the retry budget for outbound calls, spending from it on each failure and refusing once exhausted.',
+      'It manages the connection pool for outbound calls, leasing sockets and closing idle ones after a timeout.',
+      [sym('retryBudget')],
+      retryVocab,
+    );
+    expect(d).toBeGreaterThan(0.7);
+  });
+
+  it('criterion 4 — a refactor is reported as a refactor, in words', () => {
+    // A genuine paraphrase: the verbs move, the subjects do not.
+    const same = { what: 'Ranks files by churn, in-degree and size.', why: 'Size alone buries the important small files.', summary: 's' };
+    const reworded = { what: 'Orders files by churn, in-degree and size.', why: 'Size alone hides the important small files.', summary: 's' };
+    const d = fileDelta({
+      path: 'src/rank.ts', status: 'M', linesChanged: 900,
+      before: [same], after: [reworded],
+      // the vocabulary a real ranking module has — churn, in-degree and size are its
+      // subjects, and a paraphrase keeps every one of them
+      beforeExtract: asExtract('src/rank.ts', [sym('rank'), sym('churnFor'), sym('inDegree'), sym('sizeOf')]),
+      afterExtract: asExtract('src/rank.ts', [sym('rank'), sym('churnFor'), sym('inDegree'), sym('sizeOf')]),
+    });
+    expect(d.meaningDelta).toBeLessThan(0.15);
+    expect(d.reason).toMatch(/refactor/);
+  });
+
+  it('criterion 5 — a small semantic change outranks a large cosmetic one', () => {
+    const cosmetic = fileDelta({
+      path: 'src/big.ts', status: 'M', linesChanged: 900,
+      before: [{ what: 'Formats the report for the terminal.', why: 'Readability.', summary: 's' }],
+      after: [{ what: 'Formats the report for the terminal.', why: 'Readability.', summary: 's' }],
+      beforeExtract: asExtract('src/big.ts', [sym('formatReport')]),
+      afterExtract: asExtract('src/big.ts', [sym('formatReport')]),
+    });
+    const semantic = fileDelta({
+      path: 'src/small.ts', status: 'M', linesChanged: 12,
+      before: [{ what: 'Caches digests keyed by content hash.', why: 'Renames stay free.', summary: 's' }],
+      after: [{ what: 'Caches digests keyed by file path.', why: 'Simpler invalidation for the watcher.', summary: 's' }],
+      beforeExtract: asExtract('src/small.ts', [sym('cacheKey')]),
+      afterExtract: asExtract('src/small.ts', [sym('cacheKey')]),
+    });
+    expect(semantic.meaningDelta).toBeGreaterThan(cosmetic.meaningDelta);
+    const ordered = orderByMeaning([cosmetic, semantic]);
+    expect(ordered[0]!.path).toBe('src/small.ts');
+    // criterion 3: the ordering is NOT the diff's ordering
+    expect(ordered.map((d) => d.linesChanged)).toEqual([12, 900]);
+  });
+
+  it('a public surface change is a floor the prose cannot talk down', () => {
+    const d = fileDelta({
+      path: 'src/api.ts', status: 'M', linesChanged: 3,
+      before: [{ what: 'Exposes the client.', why: 'Entry point.', summary: 's' }],
+      after: [{ what: 'Exposes the client.', why: 'Entry point.', summary: 's' }],
+      beforeExtract: asExtract('src/api.ts', [sym('connect'), sym('disconnect')]),
+      afterExtract: asExtract('src/api.ts', [sym('connect')]),
+    });
+    expect(d.surface.removed).toEqual(['disconnect']);
+    expect(d.meaningDelta).toBeGreaterThanOrEqual(0.5);
+    expect(d.reason).toMatch(/public surface/);
+  });
+
+  it('criterion 6 — the ripple is one hop of meaning and N hops of structure, both counted', () => {
+    const graph = {
+      nodes: ['a.ts', 'b.ts', 'c.ts', 'd.ts'],
+      edges: [
+        { from: 'b.ts', to: 'a.ts' }, // b imports a  -> first hop
+        { from: 'c.ts', to: 'b.ts' }, // c imports b  -> second hop
+        { from: 'd.ts', to: 'c.ts' }, // d imports c  -> third hop
+      ],
+      inDegree: {},
+      coverage: { totalImports: 3, resolvedInternal: 3, leftTheTree: 0, filesParsed: 4, filesWithParseErrors: 0 },
+    };
+    const r = ripple(graph, ['a.ts']);
+    expect(r.reinterpret).toEqual(['b.ts']);
+    expect(r.structuralOnly).toEqual(['c.ts', 'd.ts']);
+    expect(r.reachable).toBe(3);
+  });
+
+  it('an uninterpreted side is said out loud, not scored as calm', () => {
+    const d = fileDelta({
+      path: 'src/x.ts', status: 'M', linesChanged: 40,
+      before: [], after: [{ what: 'Does a thing.', why: '', summary: 's' }],
+    });
+    expect(d.interpreted).toBe(false);
+    expect(d.reason).toMatch(/not interpreted/);
+    expect(d.meaningDelta).toBeGreaterThan(0);
+  });
+});
+
+describe('a direct verdict beats a guess from two summaries', () => {
+  it('an adjudicated file scores from the verdict, and says so', () => {
+    const d = fileDelta({
+      path: 'src/rank.ts', status: 'M', linesChanged: 16,
+      // the interpretations genuinely differ - this is the real failure that forced
+      // adjudicate.ts to exist, kept here so a regression cannot pass quietly
+      before: [{ what: 'Counts commit touches per file across every repo, tallying git log output into a churn map.', why: 'Churn is a ranking signal.', summary: 's' }],
+      after: [{ what: 'Walks each repo history, shelling out to git log and normalising paths via path.posix.normalize into one unified map.', why: 'Heavily edited files are hotter.', summary: 's' }],
+      beforeExtract: asExtract('src/rank.ts', [sym('churnByFile')]),
+      afterExtract: asExtract('src/rank.ts', [sym('churnByFile')]),
+      adjudication: { magnitude: 0, headline: 'Five local variables renamed; behaviour unchanged.', kind: 'refactor', source: 'model' },
+    });
+    expect(d.meaningDelta).toBe(0);
+    expect(d.basis).toBe('adjudicated');
+    expect(d.reason).toMatch(/renamed/);
+  });
+
+  it('without a verdict the same input scores high — which is why the verdict exists', () => {
+    const d = fileDelta({
+      path: 'src/rank.ts', status: 'M', linesChanged: 16,
+      before: [{ what: 'Counts commit touches per file across every repo, tallying git log output into a churn map.', why: 'Churn is a ranking signal.', summary: 's' }],
+      after: [{ what: 'Walks each repo history, shelling out to git log and normalising paths via path.posix.normalize into one unified map.', why: 'Heavily edited files are hotter.', summary: 's' }],
+      beforeExtract: asExtract('src/rank.ts', [sym('churnByFile')]),
+      afterExtract: asExtract('src/rank.ts', [sym('churnByFile')]),
+    });
+    expect(d.basis).toBe('claims');
+    expect(d.meaningDelta).toBeGreaterThan(0.3);
+  });
+
+  it('an unreachable model is a gap, never a quiet zero', () => {
+    const d = fileDelta({
+      path: 'src/x.ts', status: 'M', linesChanged: 4,
+      before: [], after: [],
+      adjudication: { magnitude: 0.5, headline: 'Could not judge this file.', kind: 'unclear', source: 'unavailable' },
+    });
+    expect(d.basis).not.toBe('adjudicated');
+    expect(d.meaningDelta).toBeGreaterThan(0);
+  });
+
+  it('criterion 13 — a moved stop says so in its summary, before any press', () => {
+    const refs = {
+      headSha: 'a'.repeat(40), baseSha: 'b'.repeat(40), forkSha: null,
+      baseLabel: 'main', headLabel: 'feature', baseAhead: 0,
+      prose: { title: 'A change', body: null, commits: [], issues: [], source: 'git-only' as const },
+    };
+    const deltas: FileDelta[] = [
+      { path: 'src/rank.ts', status: 'M', linesChanged: 2, meaningDelta: 0.6, surface: { added: [], removed: [], changed: [] }, interpreted: true, reason: 'the test multiplier dropped from 0.5 to 0.05', basis: 'adjudicated' },
+      { path: 'src/rollup.ts', status: 'M', linesChanged: 40, meaningDelta: 0, surface: { added: [], removed: [], changed: [] }, interpreted: true, reason: 'documentation only', basis: 'adjudicated' },
+    ];
+    const plan = buildPrTour({
+      refs, deltas,
+      ripple: { reinterpret: [], structuralOnly: [], reachable: 0 },
+      staleness: { sha: 'b'.repeat(40), behind: 0, overlap: [], current: true },
+      hunksByFile: new Map(),
+    });
+    const moved = plan.steps.find((s) => s.file === 'src/rank.ts' && !s.synthetic);
+    expect(moved!.summary).toMatch(/MEANING MOVED/);
+    // criterion 3: the smaller diff comes first because its meaning moved further
+    const order = plan.steps.filter((s) => !s.synthetic).map((s) => s.file);
+    expect(order.indexOf('src/rank.ts')).toBeLessThan(order.indexOf('src/rollup.ts'));
+  });
+
+  it('criterion 8 — a why with no source is admitted, never invented', () => {
+    const refs = {
+      headSha: 'a'.repeat(40), baseSha: 'b'.repeat(40), forkSha: null,
+      baseLabel: 'main', headLabel: 'feature', baseAhead: 0,
+      prose: { title: 'A change', body: null, commits: [], issues: [], source: 'github' as const },
+    };
+    expect(whyFor(refs, 'src/rank.ts')).toBeNull();
+    const plan = buildPrTour({
+      refs,
+      deltas: [{ path: 'src/rank.ts', status: 'M', linesChanged: 2, meaningDelta: 0.6, surface: { added: [], removed: [], changed: [] }, interpreted: true, reason: 'r', basis: 'adjudicated' }],
+      ripple: { reinterpret: [], structuralOnly: [], reachable: 0 },
+      staleness: { sha: 'b'.repeat(40), behind: 0, overlap: [], current: true },
+      hunksByFile: new Map(),
+    });
+    const stop = plan.steps.find((s) => s.file === 'src/rank.ts' && !s.synthetic);
+    expect(stop!.text).toMatch(/recorded no reason/);
+  });
+
+  it('a why that IS sourced cites where it came from', () => {
+    const refs = {
+      headSha: 'a'.repeat(40), baseSha: 'b'.repeat(40), forkSha: null,
+      baseLabel: 'main', headLabel: 'feature', baseAhead: 0,
+      prose: {
+        title: 'A change', body: null,
+        commits: [{ sha: 'c'.repeat(40), message: 'damp test files harder in rank.ts\n\nthey were crowding out real code' }],
+        issues: [], source: 'github' as const,
+      },
+    };
+    const why = whyFor(refs, 'src/rank.ts');
+    expect(why!.text).toBe('damp test files harder in rank.ts');
+    expect(why!.source).toMatch(/^commit cccccccc/);
+  });
+});
+
+describe('issue links are read from the description, not asked of gh', () => {
+  it('closing keywords and bare references both count', () => {
+    expect(issueRefs('Closes #12 and mentions #34.\nAlso fixes #7')).toEqual(['#12', '#7', '#34']);
+  });
+  it('a description with no references yields none', () => {
+    expect(issueRefs('No links here. A #tag mid-word like a#9 does not count.')).toEqual([]);
+  });
+});
+
+describe('the three defects the review found', () => {
+  it('a rename is not a new file — its base side is read from the OLD path', () => {
+    // Before the fix, the base side came back empty for a renamed path, every symbol
+    // looked newly added, and the surface floor scored a ZERO-line rename at 1.00.
+    const symbols = [sym('baseCss'), sym('alternateCss'), sym('skinPicker')];
+    const asNewFile = fileDelta({
+      path: 'src/themes.ts', status: 'R', linesChanged: 0,
+      before: [], after: [],
+      beforeExtract: undefined,
+      afterExtract: asExtract('src/themes.ts', symbols),
+    });
+    expect(asNewFile.surface.added).toHaveLength(3);
+    expect(asNewFile.meaningDelta).toBeGreaterThanOrEqual(0.7);
+
+    const readFromOldPath = fileDelta({
+      path: 'src/themes.ts', status: 'R', linesChanged: 0,
+      before: [], after: [],
+      beforeExtract: asExtract('src/skins.ts', symbols),
+      afterExtract: asExtract('src/themes.ts', symbols),
+    });
+    expect(readFromOldPath.surface.added).toEqual([]);
+    expect(readFromOldPath.meaningDelta).toBeLessThan(0.5);
+  });
+
+  it('a ref that starts with a dash is refused, never passed to git', () => {
+    expect(() => resolvePr(root, { base: '--upload-pack=touch /tmp/pwned', head: 'HEAD' }))
+      .toThrow(/refusing a base that starts with/);
+  });
+
+  it('a checkpoint written by a different schema is refused, not misread', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-schema-'));
+    fs.writeFileSync(path.join(dir, 'digest.json'), JSON.stringify({ schemaVersion: 99, repos: [], root: dir }));
+    expect(() => loadCheckpoint(dir, dir)).toThrow(/schema v99/);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('no checkpoint at all is a refusal that says what to run', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-nockpt-'));
+    expect(() => loadCheckpoint(dir, dir)).toThrow(/repo-tour digest/);
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 });

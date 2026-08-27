@@ -28,15 +28,29 @@ import type { FileExtract, FileRecord } from './types.js';
 import { runLlm, resolveChoice, type LlmChoice } from './llm.js';
 
 /** Bump when the prompt changes — old cached answers were produced by a different question. */
-export const PROMPT_VERSION = 4;
+export const PROMPT_VERSION = 5;
 
 export const DEFAULT_MODEL = 'claude-sonnet-5';
+
+/** The longest a default-level summary may be. A tweet or two — see spec T-5 §8. */
+export const SUMMARY_MAX = 400;
 
 export interface StopMeaning {
   /** what this code does, in plain language */
   what: string;
   /** why it exists / what it is in aid of — or an honest admission that it is not inferable */
   why: string;
+  /**
+   * The whole explanation compressed to what a skimmer actually needs — a tweet or two.
+   *
+   * This is NOT `what` with `why` withheld. A stop's essential fact lives in `why` about
+   * as often as it lives in `what`, and choosing one field would hide the best sentence on
+   * the page half the time. The model is asked to compress BOTH into one short passage, in
+   * the same call, so the default level is a summary rather than a selection.
+   *
+   * The full text is untouched and one press away; nothing here replaces it.
+   */
+  summary: string;
 }
 
 export interface InterpretCost {
@@ -128,12 +142,17 @@ const SYSTEM = [
   '  yourself — but every sentence must earn its place. Do not pad, and do not walk the',
   '  code line by line; explain the job it does and the shape of how it does it.',
   '- "why": 1-2 sentences on why this exists or what it protects against.',
+  '- "summary": the SAME explanation compressed for someone skimming — at most 400',
+  '  characters, two or three sentences. Strip everything inessential and keep the one',
+  '  thing they most need to know. It must stand alone: a reader who never expands the',
+  '  full text should still come away with the point. Do NOT simply copy the first',
+  '  sentence of "what", and do NOT drop the "why" if the why is the essential part.',
   '- If the reason genuinely cannot be inferred from what you were shown, say so in "why"',
   '  in one short sentence. Never invent history, tickets, incidents or motivations.',
   '- Name concrete identifiers from the code when they help.',
   '',
   'Reply with ONLY a JSON array, one object per excerpt, in order:',
-  '[{"n":1,"what":"...","why":"..."}]',
+  '[{"n":1,"what":"...","why":"...","summary":"..."}]',
   'No prose before or after the JSON. No code fences.',
 ].join('\n');
 
@@ -170,7 +189,10 @@ function buildPrompt(
   return parts.join('\n');
 }
 
-function parseAnswer(raw: string, expected: number): Array<{ n: number; what: string; why: string }> | null {
+function parseAnswer(
+  raw: string,
+  expected: number,
+): Array<{ n: number; what: string; why: string; summary: string }> | null {
   // The model was told to return bare JSON; be forgiving about fences and stray prose.
   const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(raw);
   const body = fenced ? fenced[1]! : raw;
@@ -181,9 +203,19 @@ function parseAnswer(raw: string, expected: number): Array<{ n: number; what: st
     const parsed = JSON.parse(body.slice(start, end + 1)) as unknown;
     if (!Array.isArray(parsed)) return null;
     const out = parsed
-      .filter((x): x is { n: number; what: string; why: string } =>
+      .filter((x): x is { n: number; what: string; why: string; summary?: string } =>
         typeof x === 'object' && x !== null && typeof (x as { what?: unknown }).what === 'string')
-      .map((x, i) => ({ n: typeof x.n === 'number' ? x.n : i + 1, what: x.what, why: typeof x.why === 'string' ? x.why : '' }));
+      .map((x, i) => ({
+        n: typeof x.n === 'number' ? x.n : i + 1,
+        what: x.what,
+        why: typeof x.why === 'string' ? x.why : '',
+        // A model that skips or over-runs the field must not produce an empty default
+        // bubble: fall back to compressing what it did give us.
+        summary: clamp(
+          typeof x.summary === 'string' && x.summary.trim().length > 0 ? x.summary : x.what,
+          SUMMARY_MAX,
+        ),
+      }));
     return out.length === expected ? out : out.length > 0 ? out : null;
   } catch {
     return null;
@@ -243,7 +275,11 @@ export async function interpretStops(
     const cachePath = path.join(cacheDir, `${key}.json`);
     if (fs.existsSync(cachePath)) {
       try {
-        meanings.set(at, JSON.parse(fs.readFileSync(cachePath, 'utf8')) as StopMeaning);
+        const cached = JSON.parse(fs.readFileSync(cachePath, 'utf8')) as StopMeaning;
+        // stopKey includes PROMPT_VERSION, so a v4 answer cannot be read here — but a
+        // hand-edited or truncated cache file must degrade, not throw.
+        if (!cached.summary) cached.summary = clamp(cached.what ?? '', SUMMARY_MAX);
+        meanings.set(at, cached);
         cost.cachedStops++;
         return;
       } catch { /* corrupt cache entry — fall through and re-earn it */ }
@@ -289,7 +325,11 @@ export async function interpretStops(
     for (const a of answers) {
       const slot = job.stops[a.n - 1];
       if (!slot) continue;
-      const meaning: StopMeaning = { what: a.what.trim(), why: (a.why ?? '').trim() };
+      const meaning: StopMeaning = {
+        what: a.what.trim(),
+        why: (a.why ?? '').trim(),
+        summary: clamp((a.summary ?? a.what).trim(), SUMMARY_MAX),
+      };
       meanings.set(slot.at, meaning);
       cost.interpretedStops++;
       try {
@@ -315,6 +355,21 @@ function clamp(text: string, max: number): string {
 }
 
 /** Merge interpretations into the tour, leaving deterministic text where none exists. */
+/**
+ * The full-text formula, isolated so it can be pinned by a test.
+ *
+ * T-5 criterion 12 requires the EXPANDED view to be byte-identical to what the tour
+ * rendered before the two-level split existed. That makes this function's output a
+ * contract, not an implementation detail: it must not be tidied, re-worded or re-clamped
+ * while the summary work happens around it.
+ */
+export function fullText(m: StopMeaning): string {
+  const why = m.why && m.why.length > 2 ? ` ${m.why}` : '';
+  // Defensive: a model that over-runs the word budget must not produce an unreadable
+  // bubble. Trim at a sentence boundary rather than mid-word.
+  return clamp(`${m.what}${why}`, 1400);
+}
+
 export function applyMeanings(
   steps: CodeStep[],
   _files: FileRecord[],
@@ -324,10 +379,12 @@ export function applyMeanings(
     if (s.synthetic) return { ...s, interpreted: false };
     const m = meanings.get(stepKey(s.file, s.startLine, s.endLine));
     if (!m) return { ...s, interpreted: false };
-    const why = m.why && m.why.length > 2 ? ` ${m.why}` : '';
-    // Defensive: a model that over-runs the word budget must not produce an unreadable
-    // bubble. Trim at a sentence boundary rather than mid-word.
-    return { ...s, text: clamp(`${m.what}${why}`, 1400), interpreted: true };
+    return {
+      ...s,
+      text: fullText(m),
+      summary: clamp(m.summary && m.summary.trim().length > 0 ? m.summary : m.what, SUMMARY_MAX),
+      interpreted: true,
+    };
   });
 }
 

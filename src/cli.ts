@@ -23,6 +23,12 @@ import { RepoTourServer } from './server.js';
 import { surveyProviders } from './llm.js';
 import { execFileSync } from 'node:child_process';
 import type { RankedFile } from './types.js';
+import { resolvePr, diffSet, lineCounts, hunks, PrResolutionError, type Hunk } from './pr.js';
+import { loadCheckpoint, sideAt, staleness, NoCheckpointError } from './checkpoint.js';
+import { fileDelta, ripple, orderByMeaning, type FileDelta } from './delta.js';
+import { buildPrTour, band } from './prtour.js';
+import { adjudicate, type Adjudication } from './adjudicate.js';
+import type { StopMeaning } from './interpret.js';
 
 interface Args {
   command: string;
@@ -47,12 +53,20 @@ interface Args {
    * someone had actually loaded. A test server points this somewhere disposable.
    */
   state: string | null;
+  /** PR mode: the GitHub pull request number */
+  pr: number | null;
+  /** PR mode: explicit refs, the path that needs no network */
+  base: string | null;
+  head: string | null;
+  /** PR mode: refuse to proceed when there is no checkpoint, rather than explaining how to make one */
+  noCold: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
   const args: Args = {
     command: argv[0] ?? 'help', target: '.', top: 25, write: true, json: false,
     view: null, maxRows: 750, interpret: true, model: DEFAULT_MODEL, fresh: false, port: 7788, state: null, provider: null,
+    pr: null, base: null, head: null, noCold: false,
   };
   const rest = argv.slice(1);
   for (let i = 0; i < rest.length; i++) {
@@ -68,6 +82,11 @@ function parseArgs(argv: string[]): Args {
     else if (a === '--state') { args.state = rest[++i] ?? null; }
     else if (a === '--model') { args.model = rest[++i] ?? DEFAULT_MODEL; }
     else if (a === '--provider') { args.provider = rest[++i] ?? null; }
+    else if (a === '--base') { args.base = rest[++i] ?? null; }
+    else if (a === '--head') { args.head = rest[++i] ?? null; }
+    else if (a === '--no-cold') { args.noCold = true; }
+    else if (a === '--pr') { args.pr = Number(rest[++i] ?? NaN); }
+    else if (args.command === 'pr' && args.pr === null && /^\d+$/.test(a)) { args.pr = Number(a); }
     else if (!a.startsWith('-')) { args.target = a; }
   }
   return args;
@@ -112,8 +131,172 @@ function isDirty(repoPath: string): boolean {
   } catch { return false; }
 }
 
+
+/**
+ * PR mode.
+ *
+ * The checkpoint is free — it is the digest already on disk. Only the changed files are
+ * read out of git and interpreted, so the cost of touring a pull request is the size of
+ * the pull request, not the size of the repository.
+ */
+async function runPrMode(args: Args): Promise<void> {
+  const root = path.resolve(args.target);
+
+  let refs;
+  try {
+    refs = resolvePr(root, { pr: args.pr ?? undefined, base: args.base ?? undefined, head: args.head ?? undefined });
+  } catch (err) {
+    if (err instanceof PrResolutionError) {
+      console.error(`\nrepo-tour pr: ${err.message}\n`);
+      process.exit(2);
+    }
+    throw err;
+  }
+
+  let checkpoint;
+  try {
+    checkpoint = loadCheckpoint(root);
+  } catch (err) {
+    if (err instanceof NoCheckpointError) {
+      if (args.noCold) process.exit(3);
+      console.error(`\nrepo-tour pr: ${err.message}\n`);
+      process.exit(3);
+    }
+    throw err;
+  }
+
+  const changes = diffSet(root, refs.baseSha, refs.headSha).filter((c) => !c.path.startsWith(`${CACHE_DIR}/`));
+  if (changes.length === 0) {
+    console.log('\n  nothing changed between those two commits.\n');
+    return;
+  }
+  const lines = lineCounts(root, refs.baseSha, refs.headSha);
+  const paths = changes.map((c) => c.path);
+
+  console.log(`\nrepo-tour — pull request`);
+  console.log(`  head               ${refs.headSha.slice(0, 12)}  ${refs.headLabel}`);
+  console.log(`  base               ${refs.baseSha.slice(0, 12)}  ${refs.baseLabel}`);
+  if (refs.forkSha) console.log(`  forked at          ${refs.forkSha.slice(0, 12)}  (base has moved ${refs.baseAhead} since)`);
+  console.log(`  checkpoint         ${checkpoint.sha?.slice(0, 12) ?? 'unrecorded'}  taken ${checkpoint.generatedAt.slice(0, 16).replace('T', ' ')}`);
+  console.log(`  changed            ${changes.length} files`);
+
+  const stale = staleness(root, checkpoint.sha, refs.baseSha, paths);
+  if (stale.overlap.length) {
+    console.log(`  ⚠ checkpoint is ${stale.behind} commits behind, and ${stale.overlap.length} of the files it missed are touched here`);
+  }
+
+  // Both sides of the changed files. Nothing is checked out; this is the diff on disk.
+  // A renamed file lives under its OLD path at the base, so it is read from there and
+  // reported under the new one — otherwise a rename looks like a whole new file.
+  const renamedFrom = new Map<string, string>();
+  for (const c of changes) if (c.status === 'R' && c.from) renamedFrom.set(c.path, c.from);
+  const beforeSide = await sideAt(root, refs.baseSha, paths, renamedFrom);
+  const afterSide = await sideAt(root, refs.headSha, paths);
+
+  try {
+    const hunksByFile = new Map<string, Hunk[]>();
+    for (const p of paths) hunksByFile.set(p, hunks(root, refs.baseSha, refs.headSha, p));
+
+    const stopsFor = (side: typeof beforeSide) =>
+      side.files.map((f) => {
+        const hs = hunksByFile.get(f.path) ?? [];
+        const first = hs[0];
+        const last = hs[hs.length - 1];
+        return {
+          file: f.path,
+          startLine: first ? Math.max(1, first.start - 3) : 1,
+          endLine: Math.min(f.loc || 1, last ? last.end + 3 : 60),
+          title: path.basename(f.path),
+          text: '',
+        };
+      });
+
+    let beforeMeanings = new Map<string, StopMeaning>();
+    let afterMeanings = new Map<string, StopMeaning>();
+    if (args.interpret) {
+      console.log(`  interpreting       ${beforeSide.files.length} files, both sides`);
+      const b = await interpretStops(beforeSide.dir, stopsFor(beforeSide), beforeSide.files, beforeSide.extracts, [], { model: args.model, provider: args.provider ?? undefined });
+      const a = await interpretStops(afterSide.dir, stopsFor(afterSide), afterSide.files, afterSide.extracts, [], { model: args.model, provider: args.provider ?? undefined });
+      beforeMeanings = b.meanings;
+      afterMeanings = a.meanings;
+      console.log(`  interpreted        ${a.cost.interpretedStops + b.cost.interpretedStops} stops, ${a.cost.cachedStops + b.cost.cachedStops} reused from cache`);
+    } else {
+      console.log('  interpreting       skipped (--no-interpret) — scores rest on structure alone');
+    }
+
+    const beforeExtracts = new Map(beforeSide.extracts.map((e) => [e.path, e] as const));
+    const afterExtracts = new Map(afterSide.extracts.map((e) => [e.path, e] as const));
+
+    // Ask the model the actual question, per changed file: did what this code is FOR
+    // change? See adjudicate.ts — comparing two free-prose interpretations scored a pure
+    // variable rename at 0.47, and no tuning of that comparison recovers a signal the
+    // inputs do not carry.
+    const verdicts = new Map<string, Adjudication>();
+    if (args.interpret) {
+      const readSide = (dir: string, rel: string): string => {
+        try { return fs.readFileSync(path.join(dir, rel), 'utf8'); } catch { return ''; }
+      };
+      let judged = 0;
+      let reused = 0;
+      for (const c of changes) {
+        const v = await adjudicate(c.path, readSide(beforeSide.dir, c.path), readSide(afterSide.dir, c.path), {
+          model: args.model, provider: args.provider ?? undefined, cwd: root,
+        });
+        verdicts.set(c.path, v);
+        if (v.source === 'cache') reused++; else if (v.source === 'model') judged++;
+      }
+      console.log(`  judged             ${judged} files compared before/after, ${reused} reused from cache`);
+    }
+
+    const deltas: FileDelta[] = changes.map((c) => {
+      const collect = (m: Map<string, StopMeaning>, p: string) =>
+        [...m.entries()].filter(([k]) => k.startsWith(`${p}:`)).map(([, v]) => v);
+      return fileDelta({
+        path: c.path,
+        status: c.status,
+        linesChanged: lines.get(c.path) ?? 0,
+        before: collect(beforeMeanings, c.path),
+        after: collect(afterMeanings, c.path),
+        beforeExtract: beforeExtracts.get(c.path),
+        afterExtract: afterExtracts.get(c.path),
+        adjudication: verdicts.get(c.path),
+      });
+    });
+
+    const movedPaths = deltas.filter((d) => band(d.meaningDelta) === 'moved').map((d) => d.path);
+    const rip = ripple(checkpoint.graph, movedPaths);
+
+    const plan = buildPrTour({ refs, deltas, ripple: rip, staleness: stale, hunksByFile });
+
+    // The tour renders through the SAME surface as a repo tour (criterion 9), over the
+    // checkpoint's digest so the page has the repository around the change.
+    const html = renderRepoView(checkpoint.result, { steps: plan.steps, itinerary: plan.itinerary });
+    const out = args.view ?? path.join(root, CACHE_DIR, `pr-${refs.headSha.slice(0, 8)}.html`);
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.writeFileSync(out, html);
+
+    const ordered = orderByMeaning(deltas);
+    console.log(`\n  ${pad('meaning', 9)}${pad('lines', 7)}${pad('band', 9)}${pad('basis', 13)}path`);
+    console.log(`  ${'-'.repeat(78)}`);
+    for (const d of ordered.slice(0, 20)) {
+      console.log(`  ${pad(d.meaningDelta.toFixed(2), 9)}${pad(String(d.linesChanged), 7)}${pad(band(d.meaningDelta), 9)}${pad(d.basis, 13)}${d.path}`);
+    }
+    console.log(`\n  ripple             ${rip.reinterpret.length} re-interpreted (one hop), ${rip.structuralOnly.length} reachable beyond and NOT re-interpreted`);
+    console.log(`  tour               ${plan.steps.length} stops`);
+    console.log(`  page               ${out}\n`);
+  } finally {
+    beforeSide.dispose();
+    afterSide.dispose();
+  }
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+
+  if (args.command === 'pr') {
+    await runPrMode(args);
+    return;
+  }
 
   // ---- the app: repositories stay loaded, and a refresh re-reads them
   if (args.command === 'serve' || args.command === 'app') {

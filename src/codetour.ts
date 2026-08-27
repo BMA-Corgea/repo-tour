@@ -29,6 +29,14 @@ export interface CodeStep {
   title: string;
   text: string;
   /**
+   * The default-level text: the whole explanation compressed to a tweet or two (T-5 §8).
+   *
+   * `text` is never replaced by this — it stays exactly what it was and becomes what the
+   * reader sees when they expand a stop. A stop with no summary falls back to `text`,
+   * which is what an uninterpreted (deterministic) stop does.
+   */
+  summary?: string;
+  /**
    * A stop the tour wrote about itself rather than about the code under it — the closing
    * summary. Stage 4 must skip these: it anchors to the entry file's first few lines, and
    * interpreting them would replace "that is the spine of this repo" with an explanation

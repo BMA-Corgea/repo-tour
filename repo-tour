@@ -7,12 +7,18 @@
 #
 #   ./repo-tour serve  [--port N] [--no-watch]  THE APP: load repos, refresh to see changes (default)
 #   ./repo-tour tour   [path] [--flags]   one-off: digest a repo and open a static tour page
+#   ./repo-tour pr     <number> | --base <ref> --head <ref>
+#                                       tour a PULL REQUEST: what changed and what it MEANS
 #   ./repo-tour digest [path] [--flags]   digest a repo and open the plain browsable view
 #   ./repo-tour open   [path|id]          re-open a saved tour WITHOUT re-digesting
 #   ./repo-tour tours                     the library: every tour you have made, pick one
 #   ./repo-tour doctor                    check node, deps and parser grammars
 #   ./repo-tour build                     compile src/ to dist/
 #   ./repo-tour test                      run the acceptance suite
+#
+# `pr` compares a change against the digest you already have (the checkpoint), so run
+# `digest` once first. Nothing is ever checked out; only the changed files are read out of
+# git. `--no-cold` exits quietly when there is no checkpoint instead of explaining.
 #
 # `path` defaults to the current directory. With no path and an interactive terminal,
 # `tour` and `digest` ask which repo you mean, so a double-click is a complete flow.
@@ -250,7 +256,41 @@ cmd_build() { _need_node; _need_deps; ( cd "$ROOT" && npx tsc -p tsconfig.json )
 cmd_test()  { _need_node; _need_deps; ( cd "$ROOT" && npx vitest run ); }
 
 usage() {
-  sed -n '3,27p' "$ROOT/repo-tour" | sed 's/^# \{0,1\}//'
+  sed -n '3,32p' "$ROOT/repo-tour" | sed 's/^# \{0,1\}//'
+}
+
+cmd_pr() { # cmd_pr [<number>] [--base R --head R] [flags...]
+  _need_node
+  _need_deps
+
+  local target=""
+  local -a flags=()
+  local expect_value=0
+  for arg in "$@"; do
+    if [ $expect_value -eq 1 ]; then flags+=("$arg"); expect_value=0; continue; fi
+    case "$arg" in
+      --base|--head|--view|--model|--provider) flags+=("$arg"); expect_value=1 ;;
+      -*)                                      flags+=("$arg") ;;
+      # a bare number is the PR; anything else is the repository to read it in
+      *[!0-9]*)                                [ -z "$target" ] && target="$arg" || flags+=("$arg") ;;
+      *)                                       flags+=("$arg") ;;
+    esac
+  done
+
+  target="$(_resolve_target "$target")"
+  [ -d "$target" ] || _die "not a directory: $target"
+
+  printf '\n%srepo-tour%s %s%s%s\n' "$C_B" "$C_0" "$C_DIM" "$(cd "$target" && pwd)" "$C_0"
+  printf '%scomparing the change against the interpretation you already have.%s\n' "$C_DIM" "$C_0"
+
+  ( cd "$ROOT" && npx tsx src/cli.ts pr "$target" "${flags[@]+"${flags[@]}"}" )
+  local rc=$?
+  [ $rc -eq 0 ] || return $rc
+
+  local page
+  page="$(ls -t "$target/.repo-tour"/pr-*.html 2>/dev/null | head -1)"
+  [ -n "$page" ] && _open_view "$page"
+  return 0
 }
 
 # ── dispatch ────────────────────────────────────────────────────────────────
@@ -258,6 +298,7 @@ cmd="${1:-serve}"
 case "$cmd" in
   serve|app)       shift || true; cmd_serve "$@" ;;
   tour)            shift || true; cmd_run tour "$@" ;;
+  pr)              shift || true; cmd_pr "$@" ;;
   digest)          shift || true; cmd_run digest "$@" ;;
   open)            shift || true; cmd_open "$@" ;;
   tours|library)   cmd_tours ;;
