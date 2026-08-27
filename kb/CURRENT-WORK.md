@@ -14,7 +14,6 @@ here and found via the reference table below.
   91 tests green. At **verify**, then Evan's `accept` gate.
   `repo-tour pr <n>` — or `--base <ref> --head <ref>`, which needs no network.
   **Next:** verify evidence, then show him the running thing.
-- **T-8** (feature) — PR mode in the app: make the Pull requests tab live — auto-review
 
 ## Waiting on
 
@@ -25,13 +24,13 @@ here and found via the reference table below.
   you what I want changed afterwards."* So that gate is a SHOW, not a question.
   The descope still standing: T-5 makes a PR *readable*, not *reviewable* — the notes panel
   that turns a tour into a filable review is still **T-3**.
-- **T-8** — waiting at spec_ready on human:owner since 2026-08-27
 
 ## Recent past (~15 items / ~30 days)
 
 <!-- One line per completed item, WITH the why. Newest first. Prune from the
      bottom; the permanent record lives in tickets, events.jsonl, and wiki. -->
 
+- 2026-08-27 **T-8 COMPLETE** — PR mode in the app: make the Pull requests tab live
 - 2026-08-27 **T-5 COMPLETE** — PR mode: tour a pull request by diffing its interpretation against the checkpoi…
 - **2026-08-27** — **T-1 COMPLETE.** Accepted by Evan (GA-3), then release and monitor.
   Both recorded honestly rather than faked green: there is no production service to deploy

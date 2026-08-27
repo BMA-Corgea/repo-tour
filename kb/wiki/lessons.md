@@ -689,3 +689,22 @@ not just the ones that were convenient to write.
 Only the running server had a cache in front of it, and no test ran the server. Sibling of
 the T-1 self-scan lesson and the T-5 rename lesson: three times now, the defect lived in
 the gap between what the tests construct and what a person actually touches.
+
+## A feature is not verified until someone has reached it the way a user would
+
+**2026-08-27, T-8.** Three for three now.
+
+- **T-1** — the digest scanned its own cache. One run could not show it.
+- **T-5** — a rename scored 1.00 with zero lines changed. Every test built both sides by hand,
+  so no test ever had a path that existed on one side and not the other.
+- **T-8** — a new control shipped behind a cache no test ran, over a two-dot diff no test
+  exercised, through a `gh` call no test made.
+
+Every one of these lived in the gap between what the tests **construct** and what a person
+**touches**. A green suite says the pieces behave; it says nothing about whether anyone can
+get to them.
+
+**The rule:** for anything a person is meant to use, the acceptance test is the user's own
+path — the click, the command, the running server — not a unit test of the function behind
+it. If verification never left the test harness, the feature is unverified, whatever the
+count says.
