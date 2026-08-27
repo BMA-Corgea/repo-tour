@@ -9,24 +9,36 @@ here and found via the reference table below.
 
 <!-- What is in motion right now: one line per active ticket/effort —
      what, why, where it stands, what is next. Never pruned while live. -->
-- Nothing in flight. **T-1, T-5 and T-8 are all complete.** The next move is Evan's.
+
+- Nothing in flight. **Five of the six pieces Evan described on day one are shipped.**
+  The one left is **T-7, GONS integration** — always the endgame rather than the product.
 
 ## Waiting on
 
 <!-- Holds: "waiting at <gate> on <keyholder> since <date>, ping sent to
      <channel>" — no session should discover a hold by archaeology (ruling 24). -->
 
-- Nothing is held. Every gate was cleared; the three `accept`/`spec_ready` gates that are
-  Evan's were spent on his own recorded go-aheads (GA-3, GA-4, GA-5) because he asked not to
-  be stopped: *"We can just observe the app and I'll tell you what I want changed
-  afterwards."* **He has not yet said what he wants changed.** That is the open loop and it
-  is his — a session picking this up should not invent work, it should ask him.
+- Nothing is held. Every gate that is Evan's was spent on his own recorded go-aheads
+  (GA-3 through GA-7) because he asked not to be stopped mid-flight. **The open loop is his
+  read of the notes + Ask panels**, which he has not used yet at the time of writing.
 
 ## Recent past (~15 items / ~30 days)
 
 <!-- One line per completed item, WITH the why. Newest first. Prune from the
      bottom; the permanent record lives in tickets, events.jsonl, and wiki. -->
 
+- **2026-08-27** — **T-3 COMPLETE**, the oldest ask on the project: notes carrying which stop
+  inspired them, and an assistant that reads them. Why it took until now: it was deferred at
+  every gate since the first spec on the reasoning that a tour has to be worth taking notes
+  on before notes are worth having. A note records the NARRATIVE that was on screen, not just
+  the location — that is what makes it readable a week later.
+- **2026-08-27** — The Ask panel follows sql-gauntlet's tutor, which Evan pointed at: a
+  persona plus a labelled context block, over the local `claude` CLI. Why labelled: the notes
+  are the human's and the meaning is the machine's, and an answer confusing the two would be
+  worse than none. Asked about `src/server.ts` from a summary alone, it named "loosen the
+  fingerprint check → serve stale pages" as a risk — which is exactly the T-8 defect.
+
+- 2026-08-27 **T-3 COMPLETE** — Notes with provenance on a PR, and an AI that reads them
 - **2026-08-27** — **T-9 COMPLETE.** A real PR page: the PR's own files, the diff on screen
   and syntax-highlighted, a link out to GitHub, and narration that says what the PR is doing
   rather than reciting its score. Why the rebuild: the tour had been rendered through
