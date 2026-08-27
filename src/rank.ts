@@ -21,7 +21,7 @@ export const WEIGHTS = { churn: 0.45, inDegree: 0.35, size: 0.2 } as const;
 export const MULTIPLIER: Record<Classification, number> = {
   structural: 1.4,
   source: 1.0,
-  test: 0.5,
+  test: 0.05,
   data: 0.3,
   generated: 0,
   vendored: 0,
