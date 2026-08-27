@@ -32,6 +32,9 @@ import { interpretStops, applyMeanings, interpretArchitecture, DEFAULT_MODEL } f
 import { renderRepoView } from './repoview.js';
 import { baseCss, alternateCss, skinPicker, skinScript } from './skins.js';
 import { surveyProviders, resolveChoice, providerById, killLlmChildren, type LlmChoice } from './llm.js';
+import { listPrs, PrResolutionError, type PrListResult } from './pr.js';
+import { NoCheckpointError } from './checkpoint.js';
+import { runPrFlow } from './prflow.js';
 
 export interface LoadedRepo {
   path: string;
@@ -528,6 +531,43 @@ export class RepoTourServer {
     return rendered;
   }
 
+  /** Finished PR tours, keyed `<repo>#pr-<n>`. Cleared when the app restarts, like the jobs. */
+  private prTours = new Map<string, { html: string }>();
+
+  /**
+   * Build one PR tour in the background.
+   *
+   * Deliberately NOT keyed by repo path alone: a person can be reading a repo tour while a
+   * PR tour builds, and one job slot per repository would have them evict each other.
+   */
+  private startPrJob(repoPath: string, n: number): Job {
+    const key = `${repoPath}#pr-${n}`;
+    const running = this.jobs.get(key);
+    if (running?.state === 'running') return running;
+
+    const job: Job = { repo: key, state: 'running', lines: [`reading PR #${n}`], startedAt: Date.now() };
+    this.jobs.set(key, job);
+
+    void runPrFlow(repoPath, { pr: n, onProgress: (line) => job.lines.push(line) })
+      .then((result) => {
+        this.prTours.set(key, { html: result.html });
+        job.state = 'done';
+        job.lines.push('ready');
+      })
+      .catch((e: unknown) => {
+        job.state = 'failed';
+        // A resolution failure or a missing checkpoint carries a message written for a
+        // person and naming the remedy. Show THAT, not a stack.
+        job.lines.push(
+          e instanceof PrResolutionError || e instanceof NoCheckpointError
+            ? e.message
+            : e instanceof Error ? e.message : String(e),
+        );
+      });
+
+    return job;
+  }
+
   private startJob(repoPath: string): Job {
     const running = this.jobs.get(repoPath);
     if (running?.state === 'running') return running;
@@ -647,6 +687,35 @@ export class RepoTourServer {
       }
 
       // The live tour. Refreshing this re-checks the repository and rebuilds if it moved.
+      // ---- pull requests, in the app rather than on a file path
+      //
+      // T-8: the repo page has always had a "Pull requests" tab and it was a dead span.
+      // A PR tour spends model calls, so it gets the same treatment a repo tour gets —
+      // a background job and the building page — rather than holding a request open.
+      if (route === '/prs') {
+        const p = url.searchParams.get('path') ?? '';
+        if (!this.repos.some((r) => r.path === p)) return this.html(res, 404, notFound(p));
+        return this.html(res, 200, prList(p, listPrs(p)));
+      }
+
+      if (route === '/pr') {
+        const p = url.searchParams.get('path') ?? '';
+        const n = Number(url.searchParams.get('n') ?? NaN);
+        if (!this.repos.some((r) => r.path === p)) return this.html(res, 404, notFound(p));
+        if (!Number.isInteger(n) || n <= 0) return this.html(res, 404, notFound(p));
+
+        const key = `${p}#pr-${n}`;
+        const done = this.prTours.get(key);
+        if (done?.html) return this.html(res, 200, done.html);
+
+        const job = this.jobs.get(key);
+        if (job?.state === 'running') return this.html(res, 200, building(`${p} — PR #${n}`, job.lines));
+        if (job?.state === 'failed') return this.html(res, 200, prFailed(p, n, job.lines));
+
+        this.startPrJob(p, n);
+        return this.html(res, 200, building(`${p} — PR #${n}`, [`starting PR #${n}`]));
+      }
+
       if (route === '/r') {
         const p = url.searchParams.get('path') ?? '';
         if (!this.repos.some((r) => r.path === p)) return this.html(res, 404, notFound(p));
@@ -654,7 +723,20 @@ export class RepoTourServer {
         const fp = fingerprint(p);
         const cached = this.lookup(p, fp);
 
-        if (cached) return this.html(res, 200, cached.html);
+        if (cached) {
+          // T-8: the cache is keyed on the TREE, so a page whose code has not changed was
+          // served forever even after the renderer changed underneath it. That is how a new
+          // control can ship and stay invisible: the reader updates, their fingerprint still
+          // matches, and they keep getting the page that predates the feature.
+          //
+          // Re-render behind them on a presentation change and serve the current copy now.
+          // It costs no tokens — interpretation is cached by content — and the freshness
+          // chip already offers the result when it lands.
+          if (cached.presentation !== presentationVersion() && job?.state !== 'running') {
+            this.startJob(p);
+          }
+          return this.html(res, 200, cached.html);
+        }
 
         // The tree has moved since the last build. Serve that build anyway — it is still the
         // truth about the commit it describes, and making it unreachable turns every edit
@@ -1197,6 +1279,74 @@ tick();
  * deliberately present: someone about to spend minutes deserves to know that is the shape
  * of it before they press the button, not after.
  */
+
+/**
+ * The pull-request list — what the tab now opens.
+ *
+ * The three ways this can be empty are kept distinct on the page (no open PRs / no gh /
+ * gh cannot answer), because an empty list and a broken tool look identical otherwise, and
+ * "your repo is quiet" is a bad thing to tell someone whose tooling is misconfigured.
+ */
+function prList(repoPath: string, result: PrListResult): string {
+  const esc = (x: string): string => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+  const name = path.basename(repoPath);
+  const back = `/r?path=${encodeURIComponent(repoPath)}`;
+
+  const body = !result.ok
+    ? `<div class="sub"><b>${esc(result.reason)}.</b><br>${esc(result.remedy)}</div>`
+    : result.prs.length === 0
+      ? `<div class="sub">No open pull requests on this repository right now.</div>`
+      : `<div class="sub">Pick one. A tour reads both sides of the change and works out what
+           actually moved in MEANING, not just what moved in lines — so it takes a few
+           minutes the first time and you can leave the page while it runs.</div>
+         <ul class="prlist">${result.prs.map((p) => `
+           <li>
+             <a href="/pr?path=${encodeURIComponent(repoPath)}&amp;n=${p.number}">
+               <span class="prnum">#${p.number}</span>
+               <span class="prtitle">${esc(p.title)}${p.draft ? ' <em>(draft)</em>' : ''}</span>
+             </a>
+             <div class="prmeta">${esc(p.author)} · <code>${esc(p.headRefName)}</code></div>
+           </li>`).join('')}</ul>`;
+
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${esc(name)} — pull requests</title><style>${SHELL_STYLE}</style>
+<style>
+  .prlist { list-style:none; padding:0; margin:18px 0 0; }
+  .prlist li { padding:12px 0; border-bottom:1px solid var(--line,#2a2f3a); }
+  .prlist a { text-decoration:none; display:flex; gap:10px; align-items:baseline; }
+  .prnum { opacity:.6; font-variant-numeric:tabular-nums; }
+  .prtitle { font-weight:600; }
+  .prmeta { opacity:.6; font-size:12px; margin-top:4px; }
+</style>
+<script>${skinScript()}</script></head>
+<body>${navBar('building')}<div class="buildwrap">
+<h1>Pull requests — ${esc(name)}</h1>
+${body}
+<footer style="margin-top:24px"><a href="${back}">← back to ${esc(name)}</a> · <a href="/">All repositories</a></footer>
+</div></body></html>`;
+}
+
+/** A PR tour that could not be built — showing the reason it gave, which names a remedy. */
+function prFailed(repoPath: string, n: number, lines: string[]): string {
+  const esc = (x: string): string => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+  const why = lines[lines.length - 1] ?? 'no reason recorded';
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PR #${n} — could not build</title><style>${SHELL_STYLE}</style>
+<script>${skinScript()}</script></head>
+<body>${navBar('building')}<div class="buildwrap">
+<h1>PR #${n} could not be toured</h1>
+<div class="log">${esc(why)}</div>
+<footer style="margin-top:24px">
+  <a href="/prs?path=${encodeURIComponent(repoPath)}">← pull requests</a> ·
+  <a href="/r?path=${encodeURIComponent(repoPath)}">${esc(path.basename(repoPath))}</a>
+</footer>
+</div></body></html>`;
+}
+
 function notBuilt(repoPath: string): string {
   const esc = (x: string): string => x.replace(/</g, '&lt;').replace(/"/g, '&quot;');
   return `<!doctype html>

@@ -328,3 +328,74 @@ export function lineCounts(root: string, from: string, to: string): Map<string, 
   }
   return out;
 }
+
+export interface PrSummary {
+  number: number;
+  title: string;
+  author: string;
+  headRefName: string;
+  draft: boolean;
+}
+
+/**
+ * Why a PR list is empty.
+ *
+ * Three outcomes that look identical on screen if you let them: a repository with no open
+ * pull requests, a `gh` that is not installed, and a `gh` that is installed but not logged
+ * in. Collapsing those into "no pull requests" tells someone their repo is quiet when
+ * really the tool is broken — so the reason travels with the (empty) list and the page
+ * prints it.
+ */
+export type PrListResult =
+  | { ok: true; prs: PrSummary[] }
+  | { ok: false; reason: string; remedy: string };
+
+export function listPrs(root: string): PrListResult {
+  const slug = repoSlug(root);
+  if (!slug) {
+    return {
+      ok: false,
+      reason: 'this repository has no GitHub remote',
+      remedy: 'Tour a change from the command line instead: repo-tour pr --base <ref> --head <ref>',
+    };
+  }
+  let raw: string;
+  try {
+    raw = execFileSync('gh', ['-R', slug, 'pr', 'list', '--state', 'open', '--limit', '50',
+      '--json', 'number,title,author,headRefName,isDraft'], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 8 * 1024 * 1024,
+    });
+  } catch (err) {
+    const message = (err as Error).message ?? '';
+    const notInstalled = /ENOENT|not found/i.test(message);
+    return {
+      ok: false,
+      reason: notInstalled
+        ? 'the gh command-line tool is not installed'
+        : `gh could not list pull requests for ${slug}`,
+      remedy: notInstalled
+        ? 'Install GitHub CLI (https://cli.github.com), or use: repo-tour pr --base <ref> --head <ref>'
+        : 'Check `gh auth status`, or use: repo-tour pr --base <ref> --head <ref>',
+    };
+  }
+  try {
+    const parsed = JSON.parse(raw) as Array<{
+      number?: number; title?: string; headRefName?: string; isDraft?: boolean;
+      author?: { login?: string };
+    }>;
+    return {
+      ok: true,
+      prs: parsed
+        .filter((p) => typeof p.number === 'number')
+        .map((p) => ({
+          number: p.number!,
+          title: p.title ?? '(no title)',
+          author: p.author?.login ?? 'unknown',
+          headRefName: p.headRefName ?? '',
+          draft: p.isDraft === true,
+        })),
+    };
+  } catch {
+    return { ok: false, reason: 'gh returned something this build could not read', remedy: 'Try `gh pr list` directly to see what it said.' };
+  }
+}

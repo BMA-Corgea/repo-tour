@@ -364,3 +364,9 @@ input:focus, select:focus, textarea:focus {
 #guide .btn.tiny:hover { opacity:1; }
 #guide .depthtoggle { font-size:11px; color:var(--muted); display:flex; align-items:center; gap:5px; cursor:pointer; user-select:none; }
 #guide .depthtoggle input { margin:0; }
+
+/* T-8: the Pull requests tab is a real link when the app can serve one. It keeps the
+   inactive-tab look — it is not the current page — but takes a pointer and lights up,
+   so it reads as reachable rather than as decoration. */
+.tab.live { cursor:pointer; text-decoration:none; }
+.tab.live:hover { color:var(--fg); border-bottom-color:var(--accent,#4c8dff); }

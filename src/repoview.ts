@@ -17,6 +17,7 @@ import type { CodeStep } from './codetour.js';
 import type { Architecture } from './architecture.js';
 import { baseCss, alternateCss, skinPicker, skinScript } from './skins.js';
 import { narrate } from './narrate.js';
+import { repoSlug } from './pr.js';
 
 export interface RepoViewOptions {
   steps: Array<CodeStep & { interpreted?: boolean }>;
@@ -919,6 +920,20 @@ export function renderRepoView(result: DigestResult, opts: RepoViewOptions): str
   const m = result.manifest;
   const root = m.root;
   const repoName = path.basename(root) || root;
+
+  // T-8: this tab was a dead decorative span. It is a real link when the app is serving
+  // the page AND the repository has a GitHub remote to list from — and an inert tab that
+  // SAYS WHY otherwise, because a control that does nothing and explains nothing is worse
+  // than no control at all.
+  const prTab = (() => {
+    if (!opts.servedBy) {
+      return '<span class="tab off" title="This is an exported page. Pull requests need the running app: repo-tour serve">Pull requests</span>';
+    }
+    if (!repoSlug(root)) {
+      return '<span class="tab off" title="No GitHub remote on this repository. Tour a change directly: repo-tour pr --base &lt;ref&gt; --head &lt;ref&gt;">Pull requests</span>';
+    }
+    return `<a class="tab off live" href="/prs?path=${encodeURIComponent(opts.servedBy.repoPath)}">Pull requests</a>`;
+  })();
   const maxFiles = opts.maxFiles ?? 160;
   const maxBytes = opts.maxBytes ?? 3_500_000;
 
@@ -997,7 +1012,7 @@ ${opts.servedBy ? `<script>${freshnessScript(opts.servedBy.repoPath, opts.served
   <div class="tabs">
     <span class="tab on">Code</span>
     <span class="tab off">Issues</span>
-    <span class="tab off">Pull requests</span>
+    ${prTab}
     <span class="tab off">Actions</span>
   </div>
 </div>
