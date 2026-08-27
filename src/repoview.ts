@@ -18,6 +18,8 @@ import type { Architecture } from './architecture.js';
 import { baseCss, alternateCss, skinPicker, skinScript } from './skins.js';
 import { narrate } from './narrate.js';
 import { repoSlug } from './pr.js';
+import { askPanelScript, askPanelHtml, ASK_CSS } from './askpanel.js';
+import { notesKey } from './notes.js';
 
 export interface RepoViewOptions {
   steps: Array<CodeStep & { interpreted?: boolean }>;
@@ -676,8 +678,16 @@ const TOUR_BOOTSTRAP = `
   if (!layout) return;
 
   // --- tabs (available whether or not a tour is running)
-  var panes = { guide: document.getElementById('guide'), notes: document.getElementById('notes') };
-  var tabs = { guide: document.getElementById('tab-guide'), notes: document.getElementById('tab-notes') };
+  var panes = {
+    guide: document.getElementById('guide'),
+    notes: document.getElementById('notes'),
+    ask: document.getElementById('ask')
+  };
+  var tabs = {
+    guide: document.getElementById('tab-guide'),
+    notes: document.getElementById('tab-notes'),
+    ask: document.getElementById('tab-ask')
+  };
   window.openPane = function (name) {
     for (var k in panes) {
       panes[k].classList.toggle('on', k === name);
@@ -686,6 +696,30 @@ const TOUR_BOOTSTRAP = `
   };
   tabs.guide.addEventListener('click', function () { window.openPane('guide'); });
   tabs.notes.addEventListener('click', function () { window.openPane('notes'); });
+  tabs.ask.addEventListener('click', function () { window.openPane('ask'); });
+
+  /**
+   * What the Ask panel is allowed to know on a repo tour.
+   *
+   * No diff here — this is a repository, not a change — so the context is the file on
+   * screen, what the digest worked out it is for, who imports it, and whatever stop the
+   * reader is on. The notes are added by the panel itself from localStorage.
+   */
+  window.__askContext = function () {
+    var R = window.__REPO__ || {};
+    var file = (window.__repo && window.__repo.current()) || null;
+    var stop = (window.__tour && window.__tour.step()) || null;
+    var meaning = null;
+    if (file && R.meanings) meaning = R.meanings[file] || null;
+    return {
+      repo: (R.repo && R.repo.name) || null,
+      file: file,
+      fileMeaning: meaning,
+      stopTitle: stop ? stop.title : null,
+      stopText: stop ? stop.text : null,
+      importers: (file && R.importers && R.importers[file]) || []
+    };
+  };
 
   window.__tour = { step: function () { return null; }, index: function () { return -1; } };
   if (!defs.length || !btn) return;
@@ -1019,6 +1053,19 @@ export function renderRepoView(result: DigestResult, opts: RepoViewOptions): str
   const shown = embedded.length;
   const total = result.inventory.files.length;
 
+  // What the tour says about each file, keyed by path — the first stop that talks about a
+  // file is the one that introduces it, so that is the one worth handing the assistant.
+  const fileMeanings: Record<string, string> = {};
+  for (const step of narratedSteps) {
+    if (!step.file || step.synthetic) continue;
+    if (!fileMeanings[step.file]) fileMeanings[step.file] = step.text;
+  }
+
+  const importersByFile: Record<string, string[]> = {};
+  for (const e of result.graph.edges) {
+    (importersByFile[e.to] ??= []).push(e.from);
+  }
+
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -1027,6 +1074,7 @@ export function renderRepoView(result: DigestResult, opts: RepoViewOptions): str
 <title>${escapeHtml(repoName)} — repo-tour</title>
 <style>${baseCss()}</style>
 <style>${alternateCss()}</style>
+<style>${ASK_CSS}</style>
 <script>${skinScript()}</script>
 ${opts.servedBy ? `<script>${liveReloadScript()}</script>` : ''}
 ${opts.servedBy ? `<script>${freshnessScript(opts.servedBy.repoPath, opts.servedBy.builtAt)}</script>` : ''}
@@ -1095,7 +1143,10 @@ ${opts.servedBy ? `<script>${prTabScript(opts.servedBy.repoPath)}</script>` : ''
     <div class="tabsrow">
       <button class="stab on" id="tab-guide" data-pane="guide" type="button">The tour</button>
       <button class="stab" id="tab-notes" data-pane="notes" type="button">Notes<span class="pill" id="ncount">0</span></button>
+      <button class="stab" id="tab-ask" data-pane="ask" type="button">Ask</button>
     </div>
+
+  <div id="ask">${askPanelHtml()}</div>
 
   <div id="guide" class="on">
     <button class="chaphead" id="chaphead" type="button" style="display:none">
@@ -1167,13 +1218,23 @@ ${opts.servedBy ? `<script>${prTabScript(opts.servedBy.repoPath)}</script>` : ''
   </div>
 </div>
 
-<script>window.__REPO__ = ${embedJson({ files: embedded, start, repo: { name: repoName, head: repo?.head ?? null, branch: repo?.branch ?? null } })};</script>
+<script>window.__REPO__ = ${embedJson({
+  files: embedded,
+  start,
+  repo: { name: repoName, head: repo?.head ?? null, branch: repo?.branch ?? null },
+  // For the Ask panel: what the tour worked out each file is for, and who leans on it.
+  // Taken from the stops rather than recomputed, so the assistant and the page cannot
+  // disagree about what this repository contains.
+  meanings: fileMeanings,
+  importers: importersByFile,
+})};</script>
 <script>window.__STEPS__ = ${embedJson(narratedSteps)};</script>
 <script>window.__TOPFILE__ = ${embedJson(topFileOf)};</script>
 <script>${HIGHLIGHTER}</script>
 <script>${APP}</script>
 <script>${TOUR_BOOTSTRAP}</script>
 <script>${NOTES}</script>
+<script>${askPanelScript(notesKey(repoName))}</script>
 </body>
 </html>`;
 }

@@ -27,9 +27,17 @@ import type { PrRefs } from './pr.js';
 import type { Adjudication } from './adjudicate.js';
 import { band } from './prtour.js';
 import { HIGHLIGHTER } from './repoview.js';
+import { askPanelScript, askPanelHtml, ASK_CSS } from './askpanel.js';
+import { notesPanelScript, notesPanelHtml, notesKey, NOTES_CSS } from './notes.js';
 
 export interface PrViewOptions {
   refs: PrRefs;
+  /** the repository's name — the notes storage key hangs off it */
+  repoName?: string;
+  /** the digest's own reading of each changed file, for the Ask panel's context */
+  meanings?: Map<string, string>;
+  /** who imports each changed file, likewise */
+  importers?: Map<string, string[]>;
   deltas: FileDelta[];
   diffs: Map<string, FileDiff>;
   steps: CodeStep[];
@@ -173,6 +181,29 @@ export function renderPrView(opts: PrViewOptions): string {
     return null;
   };
 
+  const repoName = opts.repoName ?? 'repo';
+
+  // Exactly what the notes and Ask panels are allowed to know: per file, what the tour is
+  // saying about it, what the digest worked out it is for, and who imports it. Assembled
+  // here rather than re-derived in the browser so the page and the assistant cannot
+  // disagree about what is on screen.
+  const meta = {
+    repo: repoName,
+    pr: refs.number,
+    title: refs.prose.title,
+    body: refs.prose.body,
+    head: refs.headSha,
+    headLabel: refs.headLabel,
+    baseLabel: refs.baseLabel,
+    files: Object.fromEntries(deltas.map((d, i) => [d.path, {
+      index: i,
+      title: d.path,
+      narrative: verdicts.get(d.path)?.narrative ?? d.reason,
+      meaning: opts.meanings?.get(d.path) ?? null,
+      importers: opts.importers?.get(d.path) ?? [],
+    }])),
+  };
+
   const files = deltas.map((d) => fileRow(d, diffs.get(d.path), verdicts.get(d.path))).join('\n');
 
   const payload: Record<string, DiffPayload | null> = {};
@@ -220,6 +251,7 @@ export function renderPrView(opts: PrViewOptions): string {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)} — pull request</title>
 <style>${baseCss()}</style><style>${alternateCss()}</style><style>${VIEW_CSS}</style>
+<style>${NOTES_CSS}</style><style>${ASK_CSS}</style><style>${PANE_CSS}</style>
 <script>${skinScript()}</script></head>
 <body>
 
@@ -246,9 +278,15 @@ export function renderPrView(opts: PrViewOptions): string {
     <div class="filehead"><span class="crumb" id="dhead"></span><span class="chip" id="dcount"></span></div>
     <div class="diffbody" id="diffbody"></div>
   </div>
-  <div class="panel">
-    <h3>What this changes <span class="chip">in the order meaning moved</span></h3>
-    <div class="stops">${stops}${rippleStop}</div>
+  <div class="panel rightcol">
+    <div class="tabsrow">
+      <button class="stab on" data-pane="stops" type="button">What this changes</button>
+      <button class="stab" data-pane="notes" type="button">Notes<span class="chip" id="ncount">0</span></button>
+      <button class="stab" data-pane="ask" type="button">Ask</button>
+    </div>
+    <div class="pane on" id="pane-stops"><div class="stops">${stops}${rippleStop}</div></div>
+    <div class="pane" id="pane-notes">${notesPanelHtml()}</div>
+    <div class="pane" id="pane-ask">${askPanelHtml()}</div>
   </div>
 </div>
 
@@ -334,7 +372,102 @@ export function renderPrView(opts: PrViewOptions): string {
 
   var first = document.querySelector('.prfile');
   if (first) select(first.getAttribute('data-file'));
+
+  // ---- what the notes and Ask panels are allowed to know about this page
+  var META = ${embedJson(meta)};
+
+  function currentFile() {
+    var on = document.querySelector('.prfile.on');
+    return on ? on.getAttribute('data-file') : (first ? first.getAttribute('data-file') : null);
+  }
+
+  function visibleRange(file) {
+    var d = DIFFS[file];
+    if (!d) return { from: 1, to: 1 };
+    var lines = d.rows.filter(function (r) { return r.k !== 'hh' && r.n !== null; });
+    if (!lines.length) return { from: 1, to: 1 };
+    return { from: lines[0].n, to: lines[lines.length - 1].n };
+  }
+
+  /**
+   * A note on a PR attaches to the CHANGED lines of the file being read, and carries the
+   * narrative that was on screen. Without that last part a note records what someone
+   * flagged but not what they were being told when they flagged it, which is most of what
+   * makes it worth reading a week later.
+   */
+  window.__noteAnchor = function () {
+    var f = currentFile();
+    if (!f) return null;
+    var r = visibleRange(f);
+    var m = META.files[f] || {};
+    var d = DIFFS[f];
+    var quote = d ? d.rows.filter(function (x) { return x.k === 'add' || x.k === 'del'; })
+      .slice(0, 12).map(function (x) { return (x.k === 'add' ? '+' : '-') + x.t; }).join('\\n') : '';
+    return {
+      file: f, startLine: r.from, endLine: r.to,
+      stopIndex: m.index === undefined ? -1 : m.index,
+      stopTitle: m.title || null,
+      explanation: m.narrative || null,
+      head: META.head || null,
+      quote: quote
+    };
+  };
+
+  window.__noteSubject = function () {
+    return (META.pr ? '#' + META.pr + ' ' : '') + (META.title || '');
+  };
+
+  window.__askContext = function () {
+    var f = currentFile();
+    var m = f ? (META.files[f] || {}) : {};
+    var d = f ? DIFFS[f] : null;
+    var diffText = d ? d.rows.map(function (r) {
+      if (r.k === 'hh') return r.t;
+      return (r.k === 'add' ? '+' : r.k === 'del' ? '-' : ' ') + r.t;
+    }).join('\\n') : '';
+    return {
+      repo: META.repo,
+      pr: { number: META.pr, title: META.title, body: META.body, head: META.headLabel, base: META.baseLabel },
+      file: f,
+      fileMeaning: m.meaning || null,
+      stopTitle: m.title || null,
+      stopText: m.narrative || null,
+      diff: diffText,
+      importers: m.importers || []
+    };
+  };
+
+  // ---- panes
+  Array.prototype.forEach.call(document.querySelectorAll('.stab'), function (b) {
+    b.addEventListener('click', function () {
+      var want = b.getAttribute('data-pane');
+      Array.prototype.forEach.call(document.querySelectorAll('.stab'), function (x) {
+        x.classList.toggle('on', x === b);
+      });
+      Array.prototype.forEach.call(document.querySelectorAll('.pane'), function (p) {
+        p.classList.toggle('on', p.id === 'pane-' + want);
+      });
+      if (window.__notesChanged) window.__notesChanged();
+    });
+  });
 })();
 </script>
+<script>${notesPanelScript(notesKey(repoName, refs.number))}</script>
+<script>${askPanelScript(notesKey(repoName, refs.number))}</script>
 </body></html>`;
 }
+
+/** Panes and the tab strip — the right column carries three things now, not one. */
+export const PANE_CSS = `
+.rightcol { display:flex; flex-direction:column; max-height:calc(100vh - 150px); }
+.rightcol .tabsrow { display:flex; gap:0; border-bottom:1px solid var(--line); flex:none; }
+.rightcol .stab {
+  background:none; border:0; border-bottom:2px solid transparent; padding:9px 12px;
+  font:inherit; font-size:12.5px; color:var(--muted); cursor:pointer;
+}
+.rightcol .stab.on { color:var(--ink); border-bottom-color:#fd8c73; font-weight:600; }
+.rightcol .stab .chip { margin-left:6px; }
+.rightcol .pane { display:none; min-height:0; flex:1 1 auto; }
+.rightcol .pane.on { display:flex; flex-direction:column; }
+.rightcol .pane .stops { flex:1 1 auto; overflow:auto; max-height:none; }
+`;

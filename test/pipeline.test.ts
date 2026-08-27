@@ -29,6 +29,8 @@ import { meaningDistance, vocabularyOf, fileDelta, orderByMeaning, ripple, type 
 import { buildPrTour, whyFor, band } from '../src/prtour.js';
 import { renderPrView } from '../src/prview.js';
 import { parseUnified } from '../src/diff.js';
+import { buildContextBlock, trimMessages, ASK_PERSONA } from '../src/ask.js';
+import { notesKey } from '../src/notes.js';
 import { issueRefs, resolvePr, listPrs, diffSet } from '../src/pr.js';
 import { loadCheckpoint, staleness } from '../src/checkpoint.js';
 import type { FileExtract, SymbolRecord } from '../src/types.js';
@@ -1932,7 +1934,12 @@ describe('T-9 — the PR page is about the change, not the score', () => {
   });
 
   it('criterion 7 — how far ahead or behind the base is stays off the page', () => {
-    expect(html).not.toMatch(/commits since this branch forked|ahead|behind/i);
+    // The branch's position relative to its base, specifically — not the English words,
+    // which is what this first asserted and which "no server behind it" tripped.
+    expect(html).not.toMatch(/commits since this branch forked/i);
+    expect(html).not.toMatch(/\b\d+ commits? (ahead|behind)\b/i);
+    expect(html).not.toMatch(/base has moved/i);
+    expect(html).not.toContain(String(refs.baseAhead) + ' commits');
   });
 
   it('a rename with no text still says something rather than showing an empty pane', () => {
@@ -2044,5 +2051,119 @@ describe('a build in progress polls the job it is actually waiting on', () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('T-3 — notes carry provenance, and the assistant can read them', () => {
+  it('the storage key separates a PR from the repository it belongs to', () => {
+    expect(notesKey('repo-tour')).toBe('repotour:notes:repo-tour');
+    expect(notesKey('repo-tour', 3)).toBe('repotour:notes:repo-tour#pr-3');
+    // and it is keyed to the repo, not the commit — notes outlive a rebuild
+    expect(notesKey('repo-tour', 3)).not.toMatch(/[0-9a-f]{40}/);
+  });
+
+  it('criterion 6 — the context block carries the page AND the reader\'s notes', () => {
+    const block = buildContextBlock({
+      repo: 'repo-tour',
+      pr: { number: 3, title: 'Damp test files', body: 'Two unrelated things.', head: 'demo', base: 'main' },
+      file: 'src/rank.ts',
+      fileMeaning: 'Scores every file by churn, in-degree and size.',
+      stopTitle: 'src/rank.ts',
+      stopText: 'The MULTIPLIER table previously weighted test files at 0.5.',
+      diff: '-  test: 0.5,\n+  test: 0.05,',
+      importers: ['src/digest.ts'],
+      notes: [{ file: 'src/rank.ts', startLine: 24, endLine: 24, stopTitle: 'src/rank.ts', quote: '  test: 0.05,', body: 'is 0.05 too aggressive?' }],
+    });
+    expect(block).toContain('Pull request: #3 Damp test files');
+    expect(block).toContain('src/rank.ts');
+    expect(block).toContain('churn, in-degree and size');
+    expect(block).toContain('test: 0.05,');
+    expect(block).toContain("THE READER'S OWN NOTES (1)");
+    expect(block).toContain('[note 1] src/rank.ts:24');
+    expect(block).toContain('is 0.05 too aggressive?');
+  });
+
+  it('says plainly when there are no notes rather than omitting the section', () => {
+    // An absent section reads as "notes were not offered"; an empty one reads as "none
+    // written yet", and only the second is true.
+    expect(buildContextBlock({ repo: 'r' })).toContain("THE READER'S OWN NOTES --- none yet.");
+  });
+
+  it('trims the conversation the way the gauntlet does — last 30, never opening on a reply', () => {
+    const many = Array.from({ length: 40 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: `m${i}` }));
+    const out = trimMessages(many);
+    expect(out.length).toBeLessThanOrEqual(30);
+    expect(out[0]!.role).toBe('user');
+    expect(trimMessages([{ role: 'assistant', content: 'hi' }])).toEqual([]);
+    expect(trimMessages('nonsense')).toEqual([]);
+    expect(trimMessages([{ role: 'user', content: '   ' }])).toEqual([]);
+  });
+
+  it('the persona forbids the two things that would make it untrustworthy', () => {
+    expect(ASK_PERSONA).toMatch(/NEVER claim to have read a file/);
+    expect(ASK_PERSONA).toMatch(/Do not invent notes/);
+  });
+
+  it('the PR page ships both panels and tells the assistant what is on screen', () => {
+    const refs = {
+      number: 3, url: 'https://github.com/o/r/pull/3',
+      headSha: 'a'.repeat(40), baseSha: 'b'.repeat(40), forkSha: null,
+      baseLabel: 'main', headLabel: 'feature', baseAhead: 0,
+      prose: { title: 'A change', body: null, commits: [], issues: [], source: 'github' as const },
+    };
+    const delta: FileDelta = {
+      path: 'src/rank.ts', status: 'M', linesChanged: 2, meaningDelta: 0.6,
+      surface: { added: [], removed: [], changed: [] }, interpreted: true, reason: 'r', basis: 'adjudicated',
+    };
+    const html = renderPrView({
+      refs, repoName: 'repo-tour',
+      deltas: [delta],
+      diffs: new Map([['src/rank.ts', parseUnified('src/rank.ts', '@@ -22,1 +22,1 @@\n-  test: 0.5,\n+  test: 0.05,')]]),
+      steps: [], ripple: { reinterpret: [], structuralOnly: [], reachable: 0 },
+      verdicts: new Map([['src/rank.ts', {
+        changed: true, magnitude: 0.6, kind: 'behaviour' as const, source: 'model' as const,
+        headline: 'h', narrative: 'The multiplier drops to 0.05.',
+      }]]),
+      meanings: new Map([['src/rank.ts', 'Scores every file by churn, in-degree and size.']]),
+      importers: new Map([['src/rank.ts', ['src/digest.ts']]]),
+    });
+    expect(html).toContain('id="asklog"');
+    expect(html).toContain('id="nlist"');
+    expect(html).toContain('repotour:notes:repo-tour#pr-3');
+    // a note anchors to the narrative that was on screen — the field that makes it
+    // reviewable later rather than just a bookmark
+    expect(html).toContain('The multiplier drops to 0.05.');
+    expect(html).toContain('Scores every file by churn, in-degree and size.');
+    expect(html).toContain('src/digest.ts');
+  });
+});
+
+describe('the Ask panel is on the repo tour too', () => {
+  it('ships the pane, the tab, and the repo-scoped notes key', async () => {
+    const r = await digest(root, { write: false });
+    const plan = buildCodeTour(r, { maxFiles: 2, perFile: 2 });
+    const html = renderRepoView(r, { steps: plan.steps, itinerary: plan.itinerary });
+    expect(html).toContain('id="tab-ask"');
+    expect(html).toContain('id="ask"');
+    expect(html).toContain('id="asklog"');
+    // scoped to the repository, with no PR suffix — a repo tour is not a pull request
+    expect(html).toContain(`repotour:notes:${path.basename(root)}`);
+    expect(html).not.toMatch(/repotour:notes:[^"']*#pr-/);
+  });
+
+  it('hands the assistant what each file is for, and who imports it', async () => {
+    const r = await digest(root, { write: false });
+    const plan = buildCodeTour(r, { maxFiles: 3, perFile: 2 });
+    const html = renderRepoView(r, { steps: plan.steps, itinerary: plan.itinerary });
+    const payload = JSON.parse(/window\.__REPO__ = (\{.*?\});<\/script>/s.exec(html)![1]!) as {
+      meanings: Record<string, string>;
+      importers: Record<string, string[]>;
+    };
+    expect(Object.keys(payload.meanings).length).toBeGreaterThan(0);
+    // every meaning belongs to a file the tour actually visits
+    for (const f of Object.keys(payload.meanings)) expect(plan.itinerary).toContain(f);
+    // and the importer map is real edges, not empty scaffolding
+    const withImporters = Object.values(payload.importers).filter((v) => v.length > 0);
+    expect(withImporters.length).toBeGreaterThan(0);
   });
 });

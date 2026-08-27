@@ -31,7 +31,8 @@ import { buildArchitecture, architectureBrief } from './architecture.js';
 import { interpretStops, applyMeanings, interpretArchitecture, DEFAULT_MODEL } from './interpret.js';
 import { renderRepoView } from './repoview.js';
 import { baseCss, alternateCss, skinPicker, skinScript } from './skins.js';
-import { surveyProviders, resolveChoice, providerById, killLlmChildren, type LlmChoice } from './llm.js';
+import { surveyProviders, resolveChoice, providerById, killLlmChildren, runLlm, type LlmChoice } from './llm.js';
+import { buildAskPrompt, trimMessages, type AskContext } from './ask.js';
 import { listPrs, PrResolutionError, type PrListResult } from './pr.js';
 import { NoCheckpointError } from './checkpoint.js';
 import { runPrFlow } from './prflow.js';
@@ -667,6 +668,38 @@ export class RepoTourServer {
       }
 
       if (route === '/api/repos') return this.json(res, 200, { repos: this.listRepos() });
+
+      /**
+       * The Ask panel.
+       *
+       * Everything the reader can see is sent UP from the page rather than reassembled
+       * here: the page already holds the file, the diff, the stop and the notes, and the
+       * notes in particular live in the reader's own browser and the server has never seen
+       * them. Rebuilding that state server-side would mean either duplicating it or
+       * persisting notes somewhere they were never promised to go.
+       */
+      if (route === '/api/ask' && req.method === 'POST') {
+        let payload: { messages?: unknown; context?: AskContext };
+        try {
+          payload = JSON.parse(await this.readBody(req)) as typeof payload;
+        } catch {
+          return this.json(res, 400, { error: 'invalid JSON' });
+        }
+        const messages = trimMessages(payload.messages);
+        if (!messages.length) return this.json(res, 400, { error: 'ask something first' });
+
+        const prompt = buildAskPrompt(messages, payload.context ?? {});
+        try {
+          const reply = await runLlm(prompt, this.choice, process.cwd());
+          const text = reply.text.trim();
+          if (!text) return this.json(res, 502, { error: 'the model returned nothing' });
+          return this.json(res, 200, { reply: text, model: this.choice.model, provider: this.choice.provider });
+        } catch (e) {
+          // The provider's own words. "Could not launch the claude CLI" tells the reader
+          // what to fix; "request failed" tells them nothing.
+          return this.json(res, 502, { error: e instanceof Error ? e.message.split('\n')[0] : String(e) });
+        }
+      }
 
       /**
        * What the Pull requests tab asks, on load.
