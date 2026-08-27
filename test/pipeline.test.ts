@@ -1768,14 +1768,16 @@ describe('T-8 — the Pull requests tab is reachable, not decoration', () => {
     expect(html).toMatch(/<span class="tab off" title="[^"]*repo-tour serve[^"]*">Pull requests<\/span>/);
   });
 
-  it('an empty list and a broken tool do not look the same', () => {
+  it('an empty list and a broken tool do not look the same', async () => {
     // three outcomes, three different things said on the page
-    const noRemote = listPrs(fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-noremote-')));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-noremote-'));
+    const noRemote = await listPrs(dir);
     expect(noRemote.ok).toBe(false);
     if (!noRemote.ok) {
       expect(noRemote.reason).toMatch(/no GitHub remote/);
       expect(noRemote.remedy).toMatch(/--base/);
     }
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 });
 

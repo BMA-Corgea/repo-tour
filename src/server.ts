@@ -531,8 +531,17 @@ export class RepoTourServer {
     return rendered;
   }
 
-  /** Finished PR tours, keyed `<repo>#pr-<n>`. Cleared when the app restarts, like the jobs. */
+  /**
+   * Finished PR tours, keyed `<repo>#pr-<n>`, newest last. Cleared on restart, like jobs.
+   *
+   * BOUNDED. Each rendered tour embeds the source it walks and runs close to a megabyte;
+   * an unbounded map would let a session spent browsing pull requests grow the server's
+   * memory without limit and without anything to show for it. Rebuilding an evicted tour
+   * costs no tokens — every interpretation and verdict behind it is cached by content — so
+   * the cheapest thing to throw away is the render.
+   */
   private prTours = new Map<string, { html: string }>();
+  private static readonly PR_TOUR_KEEP = 8;
 
   /**
    * Build one PR tour in the background.
@@ -551,6 +560,11 @@ export class RepoTourServer {
     void runPrFlow(repoPath, { pr: n, onProgress: (line) => job.lines.push(line) })
       .then((result) => {
         this.prTours.set(key, { html: result.html });
+        while (this.prTours.size > RepoTourServer.PR_TOUR_KEEP) {
+          const oldest = this.prTours.keys().next().value as string | undefined;
+          if (oldest === undefined) break;
+          this.prTours.delete(oldest);
+        }
         job.state = 'done';
         job.lines.push('ready');
       })
@@ -695,7 +709,7 @@ export class RepoTourServer {
       if (route === '/prs') {
         const p = url.searchParams.get('path') ?? '';
         if (!this.repos.some((r) => r.path === p)) return this.html(res, 404, notFound(p));
-        return this.html(res, 200, prList(p, listPrs(p)));
+        return this.html(res, 200, prList(p, await listPrs(p)));
       }
 
       if (route === '/pr') {

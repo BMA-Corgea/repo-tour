@@ -672,3 +672,20 @@ ever exercised a path that exists on one side and not the other. It surfaced onl
 running the tool against a branch built to contain exactly one rename. Sibling of the T-1
 lesson: a tool that reads a tree needs a fixture shaped like the case you are afraid of,
 because the ordinary run will not show you.
+
+## A cache keyed on the input must also be keyed on the code that transforms it
+
+**2026-08-27, T-8.** The served repo page is cached against a fingerprint of the repository
+tree. A new UI control shipped, the tree had not changed, and the cache kept serving the
+page that predated the feature — so the feature was invisible to the only person who wanted
+it. There is a `presentationVersion()` that hashes the renderer for exactly this, and the
+one code path that mattered never consulted it.
+
+**The rule:** any cache whose value is `f(input)` must invalidate on a change to `f`, not
+only to `input`. If a version-of-the-code hash already exists, every read path checks it —
+not just the ones that were convenient to write.
+
+**Why it stayed invisible:** every test called the renderer directly and got fresh output.
+Only the running server had a cache in front of it, and no test ran the server. Sibling of
+the T-1 self-scan lesson and the T-5 rename lesson: three times now, the defect lived in
+the gap between what the tests construct and what a person actually touches.
