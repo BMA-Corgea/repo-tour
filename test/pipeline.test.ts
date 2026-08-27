@@ -1887,12 +1887,36 @@ describe('T-9 — the PR page is about the change, not the score', () => {
     expect(listed).toEqual(['src/rank.ts']);
   });
 
-  it('criterion 2 — added and removed lines are on screen and distinguishable', () => {
-    const payload = /var DIFFS = (\{.*?\});/s.exec(html)![1]!;
-    expect(payload).toContain('dl del');
-    expect(payload).toContain('dl add');
-    expect(payload).toContain('test: 0.5,');
-    expect(payload).toContain('test: 0.05,');
+  it('criterion 2 — added and removed lines reach the page, typed and numbered', () => {
+    const payload = JSON.parse(/var DIFFS = (\{.*?\});\n/s.exec(html)![1]!) as Record<
+      string,
+      { lang: string | null; rows: Array<{ k: string; o: number | null; n: number | null; t: string }> } | null
+    >;
+    const rows = payload['src/rank.ts']!.rows;
+    const del = rows.find((r) => r.k === 'del')!;
+    const add = rows.find((r) => r.k === 'add')!;
+    expect(del.t).toContain('test: 0.5,');
+    expect(add.t).toContain('test: 0.05,');
+    // a deletion has no head-side number, an addition no base-side one
+    expect(del.n).toBeNull();
+    expect(add.o).toBeNull();
+    // and the hunk header travels with them so a reader knows where they are
+    expect(rows[0]!.k).toBe('hh');
+    expect(rows[0]!.t).toContain('MULTIPLIER');
+    // the language is carried so the diff is highlighted like the rest of the product
+    expect(payload['src/rank.ts']!.lang).toBe('ts');
+  });
+
+  it('the page is built from the house components, not its own', () => {
+    // Evan: "I'm not convinced the style follows through entirely." The cause was invented
+    // colour tokens with dark fallbacks. These are the shared ones.
+    expect(html).toContain('class="topbar"');
+    expect(html).toContain('class="layout"');
+    expect(html).toMatch(/<div class="panel">\s*<h3>Files/);
+    expect(html).toContain('class="filehead"');
+    for (const invented of ['--panel', '--hover', '--fg']) {
+      expect(html.includes(`var(${invented}`)).toBe(false);
+    }
   });
 
   it('criterion 4/5 — a stop opens with the change, never with a number', () => {

@@ -367,13 +367,15 @@ input:focus, select:focus, textarea:focus {
 
 /* T-8: the Pull requests tab is a real link when the app can serve one. It keeps the
    inactive-tab look — it is not the current page — but takes a pointer and lights up,
-   so it reads as reachable rather than as decoration. */
+   so it reads as reachable rather than as decoration.
+   T-9: these were first written with invented tokens (--fg, --hover) whose fallbacks were
+   dark, so on a light skin they rendered as dark chips on cream. House tokens only. */
 .tab.live { cursor:pointer; text-decoration:none; }
-.tab.live:hover { color:var(--fg); border-bottom-color:var(--accent,#4c8dff); }
+.tab.live:hover { color:var(--ink); border-bottom-color:var(--accent); }
 
 /* T-9: the Pull requests tab carries its real count, and says when one is being read —
    a tab identical to the dead ones beside it tells a reader nothing. */
 .tabcount { margin-left:6px; font-size:11px; padding:0 6px; border-radius:999px;
-            background:var(--hover,#1b2030); border:1px solid var(--line,#2a2f3a); opacity:.8; }
+            background:var(--chip); border:1px solid var(--line); color:var(--muted); }
 .tabcount:empty { display:none; }
-.tabcount.busy { border-color:#c2703c; color:#e08a4e; opacity:1; }
+.tabcount.busy { border-color:var(--accent); color:var(--accent); }
