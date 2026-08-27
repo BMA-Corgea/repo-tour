@@ -37,6 +37,22 @@ function git(cwd: string, ...args: string[]): void {
   execFileSync('git', ['-C', cwd, ...args], { stdio: ['ignore', 'ignore', 'ignore'] });
 }
 
+
+/**
+ * Wait for a server's background build to finish before deleting its fixture.
+ *
+ * Without this the test removes the directory while a resumed build is still running, and
+ * the build writes `.repo-tour/` straight back — leaving a directory in /tmp containing a
+ * digest cache and no source. Twenty of them had accumulated before anyone looked.
+ */
+async function settle(server: { listRepos(): Array<{ running: boolean }> }, ms = 15_000): Promise<void> {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    if (!server.listRepos().some((r) => r.running)) return;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
+
 function initRepo(dir: string): void {
   fs.mkdirSync(dir, { recursive: true });
   git(dir, 'init', '-q');
@@ -1073,6 +1089,8 @@ describe('a build survives the process dying', () => {
       const seen = second.listRepos()[0]!;
       expect(seen.running, 'a fresh server should resume the interrupted build').toBe(true);
       expect(seen.resumed, 'and say so, rather than looking like a fresh start').toBe(true);
+      await settle(second);
+      await settle(first);
     } finally {
       fs.rmSync(own, { recursive: true, force: true });
     }
@@ -1209,6 +1227,7 @@ describe('a cached page carries the renderer that made it', () => {
         fresh.listRepos()[0]!.running,
         'opening a page built by an older renderer should rebuild it behind the reader',
       ).toBe(true);
+      await settle(fresh);
     } finally {
       fs.rmSync(own, { recursive: true, force: true });
     }
