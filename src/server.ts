@@ -668,6 +668,26 @@ export class RepoTourServer {
 
       if (route === '/api/repos') return this.json(res, 200, { repos: this.listRepos() });
 
+      /**
+       * What the Pull requests tab asks, on load.
+       *
+       * Fetched rather than baked into the page: a count rendered at build time is a lie
+       * within the hour, and blocking the page render on a network call to GitHub would
+       * make every repo page as slow as the slowest `gh`.
+       */
+      if (route === '/api/prs') {
+        const p = url.searchParams.get('path') ?? '';
+        if (!this.repos.some((r) => r.path === p)) return this.json(res, 404, { error: 'not loaded' });
+        const listed = await listPrs(p);
+        const building = [...this.jobs.entries()]
+          .filter(([k, j]) => k.startsWith(`${p}#pr-`) && j.state === 'running')
+          .map(([k]) => Number(k.split('#pr-')[1]))
+          .filter((n) => Number.isInteger(n));
+        return this.json(res, 200, listed.ok
+          ? { ok: true, count: listed.prs.length, building }
+          : { ok: false, reason: listed.reason, building });
+      }
+
       if (route === '/api/add' && req.method === 'POST') {
         const { path: p } = JSON.parse(await this.readBody(req)) as { path?: string };
         if (!p) return this.json(res, 400, { error: 'a path is required' });
