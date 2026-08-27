@@ -25,6 +25,8 @@ import { renderRepoView } from '../src/repoview.js';
 import { fingerprint } from '../src/server.js';
 import { applyMeanings, fullText, stepKey, SUMMARY_MAX } from '../src/interpret.js';
 import { narrate, compress } from '../src/narrate.js';
+import { meaningDistance, vocabularyOf, fileDelta, orderByMeaning, ripple } from '../src/delta.js';
+import type { FileExtract, SymbolRecord } from '../src/types.js';
 
 let root: string;
 
@@ -1417,5 +1419,140 @@ describe('every stop is tweet-sized by default, and expanding restores the origi
     // the notes panel must capture the FULL explanation, not the compressed one: a note
     // tagged against a blurb loses the provenance T-3 exists to provide
     expect(html).toContain('explanation: step.text');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T-5 §2/§5 — the meaning delta. Criteria 3, 4, 5, 6.
+//
+// These are the ticket's proof. Spec §10 named the primary risk out loud: stage 4 is a
+// model, and if a model re-wording itself scored the same as a change of subject, the whole
+// premise collapses. Criterion 4 is the test that would catch that, so it is written to
+// FAIL loudly rather than to be satisfiable by a loose threshold.
+
+const sym = (name: string, kind: SymbolRecord['kind'] = 'function', exported = true): SymbolRecord =>
+  ({ name, kind, line: 1, endLine: 2, exported, doc: null });
+
+const asExtract = (p: string, symbols: SymbolRecord[], imports: string[] = []): FileExtract => ({
+  path: p,
+  language: 'typescript',
+  symbols,
+  imports: imports.map((raw, i) => ({ raw, resolved: raw, line: i + 1 })),
+  parseErrors: 0,
+});
+
+describe('the meaning delta separates a re-wording from a change of subject', () => {
+  const retryVocab = vocabularyOf([sym('retryBudget'), sym('spendRetry')], ['./transport.js']);
+
+  it('criterion 4 — a paraphrase of the same claim scores near zero', () => {
+    const d = meaningDistance(
+      'It manages the retry budget for outbound calls, spending from it on each failure and refusing once exhausted.',
+      'It handles the retry budget for outbound calls, drawing down on every failure and declining once it is used up.',
+      [sym('retryBudget')],
+      retryVocab,
+    );
+    expect(d).toBeLessThan(0.15);
+  });
+
+  it('criterion 4 — even an aggressive re-wording stays in the low band', () => {
+    // Every verb swapped: parses->reads, validates->checks, touches->gets. This is the
+    // worst realistic case for the comparison and it is deliberately kept as a test rather
+    // than tuned away, because the honest number matters more than a pretty one.
+    const loaderVocab = vocabularyOf([sym('parseManifest'), sym('validateEntry'), sym('loadSchema')], ['./schema.js']);
+    const d = meaningDistance(
+      'Parses the manifest and validates every entry against the schema before the loader touches it.',
+      'Reads the manifest and checks each entry against the schema before the loader gets to it.',
+      [sym('parseManifest')],
+      loaderVocab,
+    );
+    expect(d).toBeLessThan(0.45);
+  });
+
+  it('a changed subject scores high, and well clear of any re-wording', () => {
+    const d = meaningDistance(
+      'It manages the retry budget for outbound calls, spending from it on each failure and refusing once exhausted.',
+      'It manages the connection pool for outbound calls, leasing sockets and closing idle ones after a timeout.',
+      [sym('retryBudget')],
+      retryVocab,
+    );
+    expect(d).toBeGreaterThan(0.7);
+  });
+
+  it('criterion 4 — a refactor is reported as a refactor, in words', () => {
+    // A genuine paraphrase: the verbs move, the subjects do not.
+    const same = { what: 'Ranks files by churn, in-degree and size.', why: 'Size alone buries the important small files.', summary: 's' };
+    const reworded = { what: 'Orders files by churn, in-degree and size.', why: 'Size alone hides the important small files.', summary: 's' };
+    const d = fileDelta({
+      path: 'src/rank.ts', status: 'M', linesChanged: 900,
+      before: [same], after: [reworded],
+      // the vocabulary a real ranking module has — churn, in-degree and size are its
+      // subjects, and a paraphrase keeps every one of them
+      beforeExtract: asExtract('src/rank.ts', [sym('rank'), sym('churnFor'), sym('inDegree'), sym('sizeOf')]),
+      afterExtract: asExtract('src/rank.ts', [sym('rank'), sym('churnFor'), sym('inDegree'), sym('sizeOf')]),
+    });
+    expect(d.meaningDelta).toBeLessThan(0.15);
+    expect(d.reason).toMatch(/refactor/);
+  });
+
+  it('criterion 5 — a small semantic change outranks a large cosmetic one', () => {
+    const cosmetic = fileDelta({
+      path: 'src/big.ts', status: 'M', linesChanged: 900,
+      before: [{ what: 'Formats the report for the terminal.', why: 'Readability.', summary: 's' }],
+      after: [{ what: 'Formats the report for the terminal.', why: 'Readability.', summary: 's' }],
+      beforeExtract: asExtract('src/big.ts', [sym('formatReport')]),
+      afterExtract: asExtract('src/big.ts', [sym('formatReport')]),
+    });
+    const semantic = fileDelta({
+      path: 'src/small.ts', status: 'M', linesChanged: 12,
+      before: [{ what: 'Caches digests keyed by content hash.', why: 'Renames stay free.', summary: 's' }],
+      after: [{ what: 'Caches digests keyed by file path.', why: 'Simpler invalidation for the watcher.', summary: 's' }],
+      beforeExtract: asExtract('src/small.ts', [sym('cacheKey')]),
+      afterExtract: asExtract('src/small.ts', [sym('cacheKey')]),
+    });
+    expect(semantic.meaningDelta).toBeGreaterThan(cosmetic.meaningDelta);
+    const ordered = orderByMeaning([cosmetic, semantic]);
+    expect(ordered[0]!.path).toBe('src/small.ts');
+    // criterion 3: the ordering is NOT the diff's ordering
+    expect(ordered.map((d) => d.linesChanged)).toEqual([12, 900]);
+  });
+
+  it('a public surface change is a floor the prose cannot talk down', () => {
+    const d = fileDelta({
+      path: 'src/api.ts', status: 'M', linesChanged: 3,
+      before: [{ what: 'Exposes the client.', why: 'Entry point.', summary: 's' }],
+      after: [{ what: 'Exposes the client.', why: 'Entry point.', summary: 's' }],
+      beforeExtract: asExtract('src/api.ts', [sym('connect'), sym('disconnect')]),
+      afterExtract: asExtract('src/api.ts', [sym('connect')]),
+    });
+    expect(d.surface.removed).toEqual(['disconnect']);
+    expect(d.meaningDelta).toBeGreaterThanOrEqual(0.5);
+    expect(d.reason).toMatch(/public surface/);
+  });
+
+  it('criterion 6 — the ripple is one hop of meaning and N hops of structure, both counted', () => {
+    const graph = {
+      nodes: ['a.ts', 'b.ts', 'c.ts', 'd.ts'],
+      edges: [
+        { from: 'b.ts', to: 'a.ts' }, // b imports a  -> first hop
+        { from: 'c.ts', to: 'b.ts' }, // c imports b  -> second hop
+        { from: 'd.ts', to: 'c.ts' }, // d imports c  -> third hop
+      ],
+      inDegree: {},
+      coverage: { totalImports: 3, resolvedInternal: 3, leftTheTree: 0, filesParsed: 4, filesWithParseErrors: 0 },
+    };
+    const r = ripple(graph, ['a.ts']);
+    expect(r.reinterpret).toEqual(['b.ts']);
+    expect(r.structuralOnly).toEqual(['c.ts', 'd.ts']);
+    expect(r.reachable).toBe(3);
+  });
+
+  it('an uninterpreted side is said out loud, not scored as calm', () => {
+    const d = fileDelta({
+      path: 'src/x.ts', status: 'M', linesChanged: 40,
+      before: [], after: [{ what: 'Does a thing.', why: '', summary: 's' }],
+    });
+    expect(d.interpreted).toBe(false);
+    expect(d.reason).toMatch(/not interpreted/);
+    expect(d.meaningDelta).toBeGreaterThan(0);
   });
 });
