@@ -10,8 +10,14 @@ here and found via the reference table below.
 <!-- What is in motion right now: one line per active ticket/effort —
      what, why, where it stands, what is next. Never pruned while live. -->
 
-- Nothing in flight. **Five of the six pieces Evan described on day one are shipped.**
+- Nothing in flight here. **Five of the six pieces Evan described on day one are shipped.**
   The one left is **T-7, GONS integration** — always the endgame rather than the product.
+- **The GONS side is now open on the OTHER shop.** 2026-08-27, on Evan's instruction, GUTS
+  ticket **T-55** was filed ("Bring repo-tour's PR tours into the GONS Office PR section")
+  with a first-hand brief at `GUTS/.autodev/handoffs/T-55.md`, and the live `guts-bridge`
+  session was messaged. Its `spec_ready` was deliberately NOT cleared: how it lands in the
+  Office is GUTS's decision. **repo-tour's T-7 is the counterpart and is still unopened** —
+  open it when GUTS says what it needs, not before.
 
 ## Waiting on
 
