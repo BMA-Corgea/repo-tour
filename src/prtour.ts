@@ -61,6 +61,13 @@ function n(x: number): string {
   return x.toLocaleString();
 }
 
+/** One trailing full stop, whoever wrote the sentence. Model text may or may not carry one. */
+function sentence(text: string): string {
+  const t = text.trim();
+  if (!t) return '';
+  return /[.!?]$/.test(t) ? t : `${t}.`;
+}
+
 /**
  * The sources §7 allows for a claim about why.
  *
@@ -122,12 +129,12 @@ function fileStop(
   // find out whether a file matters.
   const summary =
     `${verdict} · ${d.meaningDelta.toFixed(2)} · ${n(d.linesChanged)} ${d.linesChanged === 1 ? 'line' : 'lines'}. ` +
-    `${d.reason}.`;
+    sentence(d.reason);
 
   const detail = [
     `${d.status === 'A' ? 'Added' : d.status === 'D' ? 'Deleted' : d.status === 'R' ? 'Renamed' : 'Modified'}.`,
     `Meaning delta ${d.meaningDelta.toFixed(2)} (${b}); ${n(d.linesChanged)} ${d.linesChanged === 1 ? 'line' : 'lines'} changed across ${n(hunks.length)} ${hunks.length === 1 ? 'hunk' : 'hunks'}.`,
-    d.reason.charAt(0).toUpperCase() + d.reason.slice(1) + '.',
+    sentence(d.reason.charAt(0).toUpperCase() + d.reason.slice(1)),
     surfaceBits ? `Public surface: ${surfaceBits}` : 'Public surface unchanged.',
     d.interpreted ? '' : 'This file was not interpreted on both sides, so its score rests on structure alone.',
     whySentence(refs, d.path),

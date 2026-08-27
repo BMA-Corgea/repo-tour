@@ -25,7 +25,8 @@ import { renderRepoView } from '../src/repoview.js';
 import { fingerprint } from '../src/server.js';
 import { applyMeanings, fullText, stepKey, SUMMARY_MAX } from '../src/interpret.js';
 import { narrate, compress } from '../src/narrate.js';
-import { meaningDistance, vocabularyOf, fileDelta, orderByMeaning, ripple } from '../src/delta.js';
+import { meaningDistance, vocabularyOf, fileDelta, orderByMeaning, ripple, type FileDelta } from '../src/delta.js';
+import { buildPrTour, whyFor, band } from '../src/prtour.js';
 import type { FileExtract, SymbolRecord } from '../src/types.js';
 
 let root: string;
@@ -1554,5 +1555,101 @@ describe('the meaning delta separates a re-wording from a change of subject', ()
     expect(d.interpreted).toBe(false);
     expect(d.reason).toMatch(/not interpreted/);
     expect(d.meaningDelta).toBeGreaterThan(0);
+  });
+});
+
+describe('a direct verdict beats a guess from two summaries', () => {
+  it('an adjudicated file scores from the verdict, and says so', () => {
+    const d = fileDelta({
+      path: 'src/rank.ts', status: 'M', linesChanged: 16,
+      // the interpretations genuinely differ - this is the real failure that forced
+      // adjudicate.ts to exist, kept here so a regression cannot pass quietly
+      before: [{ what: 'Counts commit touches per file across every repo, tallying git log output into a churn map.', why: 'Churn is a ranking signal.', summary: 's' }],
+      after: [{ what: 'Walks each repo history, shelling out to git log and normalising paths via path.posix.normalize into one unified map.', why: 'Heavily edited files are hotter.', summary: 's' }],
+      beforeExtract: asExtract('src/rank.ts', [sym('churnByFile')]),
+      afterExtract: asExtract('src/rank.ts', [sym('churnByFile')]),
+      adjudication: { magnitude: 0, headline: 'Five local variables renamed; behaviour unchanged.', kind: 'refactor', source: 'model' },
+    });
+    expect(d.meaningDelta).toBe(0);
+    expect(d.basis).toBe('adjudicated');
+    expect(d.reason).toMatch(/renamed/);
+  });
+
+  it('without a verdict the same input scores high — which is why the verdict exists', () => {
+    const d = fileDelta({
+      path: 'src/rank.ts', status: 'M', linesChanged: 16,
+      before: [{ what: 'Counts commit touches per file across every repo, tallying git log output into a churn map.', why: 'Churn is a ranking signal.', summary: 's' }],
+      after: [{ what: 'Walks each repo history, shelling out to git log and normalising paths via path.posix.normalize into one unified map.', why: 'Heavily edited files are hotter.', summary: 's' }],
+      beforeExtract: asExtract('src/rank.ts', [sym('churnByFile')]),
+      afterExtract: asExtract('src/rank.ts', [sym('churnByFile')]),
+    });
+    expect(d.basis).toBe('claims');
+    expect(d.meaningDelta).toBeGreaterThan(0.3);
+  });
+
+  it('an unreachable model is a gap, never a quiet zero', () => {
+    const d = fileDelta({
+      path: 'src/x.ts', status: 'M', linesChanged: 4,
+      before: [], after: [],
+      adjudication: { magnitude: 0.5, headline: 'Could not judge this file.', kind: 'unclear', source: 'unavailable' },
+    });
+    expect(d.basis).not.toBe('adjudicated');
+    expect(d.meaningDelta).toBeGreaterThan(0);
+  });
+
+  it('criterion 13 — a moved stop says so in its summary, before any press', () => {
+    const refs = {
+      headSha: 'a'.repeat(40), baseSha: 'b'.repeat(40), forkSha: null,
+      baseLabel: 'main', headLabel: 'feature', baseAhead: 0,
+      prose: { title: 'A change', body: null, commits: [], issues: [], source: 'git-only' as const },
+    };
+    const deltas: FileDelta[] = [
+      { path: 'src/rank.ts', status: 'M', linesChanged: 2, meaningDelta: 0.6, surface: { added: [], removed: [], changed: [] }, interpreted: true, reason: 'the test multiplier dropped from 0.5 to 0.05', basis: 'adjudicated' },
+      { path: 'src/rollup.ts', status: 'M', linesChanged: 40, meaningDelta: 0, surface: { added: [], removed: [], changed: [] }, interpreted: true, reason: 'documentation only', basis: 'adjudicated' },
+    ];
+    const plan = buildPrTour({
+      refs, deltas,
+      ripple: { reinterpret: [], structuralOnly: [], reachable: 0 },
+      staleness: { sha: 'b'.repeat(40), behind: 0, overlap: [], current: true },
+      hunksByFile: new Map(),
+    });
+    const moved = plan.steps.find((s) => s.file === 'src/rank.ts' && !s.synthetic);
+    expect(moved!.summary).toMatch(/MEANING MOVED/);
+    // criterion 3: the smaller diff comes first because its meaning moved further
+    const order = plan.steps.filter((s) => !s.synthetic).map((s) => s.file);
+    expect(order.indexOf('src/rank.ts')).toBeLessThan(order.indexOf('src/rollup.ts'));
+  });
+
+  it('criterion 8 — a why with no source is admitted, never invented', () => {
+    const refs = {
+      headSha: 'a'.repeat(40), baseSha: 'b'.repeat(40), forkSha: null,
+      baseLabel: 'main', headLabel: 'feature', baseAhead: 0,
+      prose: { title: 'A change', body: null, commits: [], issues: [], source: 'github' as const },
+    };
+    expect(whyFor(refs, 'src/rank.ts')).toBeNull();
+    const plan = buildPrTour({
+      refs,
+      deltas: [{ path: 'src/rank.ts', status: 'M', linesChanged: 2, meaningDelta: 0.6, surface: { added: [], removed: [], changed: [] }, interpreted: true, reason: 'r', basis: 'adjudicated' }],
+      ripple: { reinterpret: [], structuralOnly: [], reachable: 0 },
+      staleness: { sha: 'b'.repeat(40), behind: 0, overlap: [], current: true },
+      hunksByFile: new Map(),
+    });
+    const stop = plan.steps.find((s) => s.file === 'src/rank.ts' && !s.synthetic);
+    expect(stop!.text).toMatch(/recorded no reason/);
+  });
+
+  it('a why that IS sourced cites where it came from', () => {
+    const refs = {
+      headSha: 'a'.repeat(40), baseSha: 'b'.repeat(40), forkSha: null,
+      baseLabel: 'main', headLabel: 'feature', baseAhead: 0,
+      prose: {
+        title: 'A change', body: null,
+        commits: [{ sha: 'c'.repeat(40), message: 'damp test files harder in rank.ts\n\nthey were crowding out real code' }],
+        issues: [], source: 'github' as const,
+      },
+    };
+    const why = whyFor(refs, 'src/rank.ts');
+    expect(why!.text).toBe('damp test files harder in rank.ts');
+    expect(why!.source).toMatch(/^commit cccccccc/);
   });
 });
