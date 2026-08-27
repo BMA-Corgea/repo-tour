@@ -27,8 +27,8 @@ import { applyMeanings, fullText, stepKey, SUMMARY_MAX } from '../src/interpret.
 import { narrate, compress } from '../src/narrate.js';
 import { meaningDistance, vocabularyOf, fileDelta, orderByMeaning, ripple, type FileDelta } from '../src/delta.js';
 import { buildPrTour, whyFor, band } from '../src/prtour.js';
-import { issueRefs, resolvePr } from '../src/pr.js';
-import { loadCheckpoint } from '../src/checkpoint.js';
+import { issueRefs, resolvePr, listPrs, diffSet } from '../src/pr.js';
+import { loadCheckpoint, staleness } from '../src/checkpoint.js';
 import type { FileExtract, SymbolRecord } from '../src/types.js';
 
 let root: string;
@@ -1746,5 +1746,83 @@ describe('verify-stage findings', () => {
     });
     const stop = plan.steps.find((s) => !s.synthetic)!;
     expect(stop.text).toContain('The test multiplier dropped');
+  });
+});
+
+describe('T-8 — the Pull requests tab is reachable, not decoration', () => {
+  it('a served page links the tab when there is a GitHub remote', async () => {
+    const r = await digest(process.cwd(), { write: false });
+    const plan = buildCodeTour(r, { maxFiles: 1, perFile: 2 });
+    const html = renderRepoView(r, {
+      steps: plan.steps, itinerary: plan.itinerary,
+      servedBy: { homeUrl: '/', repoPath: process.cwd(), builtAt: new Date().toISOString() },
+    });
+    expect(html).toMatch(/<a class="tab off live" href="\/prs\?path=/);
+    expect(html).not.toMatch(/<span class="tab off">Pull requests<\/span>/);
+  });
+
+  it('an exported page says why the tab is inert instead of just being dead', async () => {
+    const r = await digest(process.cwd(), { write: false });
+    const plan = buildCodeTour(r, { maxFiles: 1, perFile: 2 });
+    const html = renderRepoView(r, { steps: plan.steps, itinerary: plan.itinerary });
+    expect(html).toMatch(/<span class="tab off" title="[^"]*repo-tour serve[^"]*">Pull requests<\/span>/);
+  });
+
+  it('an empty list and a broken tool do not look the same', async () => {
+    // three outcomes, three different things said on the page
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-noremote-'));
+    const noRemote = await listPrs(dir);
+    expect(noRemote.ok).toBe(false);
+    if (!noRemote.ok) {
+      expect(noRemote.reason).toMatch(/no GitHub remote/);
+      expect(noRemote.remedy).toMatch(/--base/);
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('a pull request is the branch\'s own work, not everything the base gained', () => {
+  let prRoot: string;
+  let trunk: string;
+
+  beforeAll(() => {
+    prRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-3dot-'));
+    initRepo(prRoot);
+    fs.writeFileSync(path.join(prRoot, 'a.ts'), 'export const a = 1;\n');
+    git(prRoot, 'add', '-A'); git(prRoot, 'commit', '-m', 'base');
+    // whatever git called the first branch here — init.defaultBranch is not universal
+    trunk = execFileSync('git', ['-C', prRoot, 'rev-parse', '--abbrev-ref', 'HEAD'],
+      { encoding: 'utf8' }).trim();
+    // branch off, change ONE file
+    git(prRoot, 'checkout', '-q', '-b', 'feature');
+    fs.writeFileSync(path.join(prRoot, 'a.ts'), 'export const a = 2;\n');
+    git(prRoot, 'add', '-A'); git(prRoot, 'commit', '-m', 'the PR');
+    // meanwhile main moves and gains files the branch never saw
+    git(prRoot, 'checkout', '-q', trunk);
+    for (const f of ['b.ts', 'c.ts']) fs.writeFileSync(path.join(prRoot, f), 'export const x = 1;\n');
+    git(prRoot, 'add', '-A'); git(prRoot, 'commit', '-m', 'main moves on');
+  });
+
+  afterAll(() => { fs.rmSync(prRoot, { recursive: true, force: true }); });
+
+  it('two-dot reports the base\'s new files as deletions — the bug', () => {
+    const refs = resolvePr(prRoot, { base: trunk, head: 'feature' });
+    const twoDot = diffSet(prRoot, refs.baseSha, refs.headSha);
+    expect(twoDot.filter((c) => c.status === 'D').map((c) => c.path).sort()).toEqual(['b.ts', 'c.ts']);
+  });
+
+  it('three-dot reports only what the branch actually changed — the fix', () => {
+    const refs = resolvePr(prRoot, { base: trunk, head: 'feature' });
+    expect(refs.forkSha).not.toBeNull();
+    const threeDot = diffSet(prRoot, refs.forkSha!, refs.headSha);
+    expect(threeDot.map((c) => c.path)).toEqual(['a.ts']);
+    expect(threeDot.every((c) => c.status !== 'D')).toBe(true);
+  });
+
+  it('the landing point is still reported, so the base moving is not hidden', () => {
+    const refs = resolvePr(prRoot, { base: trunk, head: 'feature' });
+    expect(refs.baseAhead).toBe(1);
+    const stale = staleness(prRoot, refs.forkSha, refs.baseSha, ['a.ts']);
+    expect(stale.behind).toBe(1);
   });
 });

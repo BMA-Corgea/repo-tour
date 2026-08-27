@@ -15,7 +15,10 @@
  * mode of guessing a base is a tour that confidently explains the wrong diff.
  */
 
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 
 export interface PrCommit {
   sha: string;
@@ -327,4 +330,87 @@ export function lineCounts(root: string, from: string, to: string): Map<string, 
     out.set(file.trim(), a + d);
   }
   return out;
+}
+
+export interface PrSummary {
+  number: number;
+  title: string;
+  author: string;
+  headRefName: string;
+  draft: boolean;
+}
+
+/**
+ * Why a PR list is empty.
+ *
+ * Three outcomes that look identical on screen if you let them: a repository with no open
+ * pull requests, a `gh` that is not installed, and a `gh` that is installed but not logged
+ * in. Collapsing those into "no pull requests" tells someone their repo is quiet when
+ * really the tool is broken — so the reason travels with the (empty) list and the page
+ * prints it.
+ */
+export type PrListResult =
+  | { ok: true; prs: PrSummary[] }
+  | { ok: false; reason: string; remedy: string };
+
+/**
+ * List a repository's open pull requests.
+ *
+ * ASYNC on purpose. `gh pr list` is a network call, and running it with execFileSync inside
+ * an HTTP handler stops the whole server — every other repo page, every in-flight build's
+ * progress — for as long as GitHub takes to answer. On a slow or hanging connection the app
+ * simply appears dead.
+ */
+export async function listPrs(root: string): Promise<PrListResult> {
+  const slug = repoSlug(root);
+  if (!slug) {
+    return {
+      ok: false,
+      reason: 'this repository has no GitHub remote',
+      remedy: 'Tour a change from the command line instead: repo-tour pr --base <ref> --head <ref>',
+    };
+  }
+  let raw: string;
+  try {
+    const { stdout } = await execFileAsync('gh', ['-R', slug, 'pr', 'list', '--state', 'open',
+      '--limit', '50', '--json', 'number,title,author,headRefName,isDraft'], {
+      encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, timeout: 20_000,
+    });
+    raw = stdout;
+  } catch (err) {
+    const message = (err as Error).message ?? '';
+    const notInstalled = /ENOENT|not found/i.test(message);
+    const timedOut = /ETIMEDOUT|timed out|SIGTERM/i.test(message);
+    return {
+      ok: false,
+      reason: notInstalled
+        ? 'the gh command-line tool is not installed'
+        : timedOut
+          ? `gh took too long to answer for ${slug}`
+          : `gh could not list pull requests for ${slug}`,
+      remedy: notInstalled
+        ? 'Install GitHub CLI (https://cli.github.com), or use: repo-tour pr --base <ref> --head <ref>'
+        : 'Check `gh auth status`, or use: repo-tour pr --base <ref> --head <ref>',
+    };
+  }
+  try {
+    const parsed = JSON.parse(raw) as Array<{
+      number?: number; title?: string; headRefName?: string; isDraft?: boolean;
+      author?: { login?: string };
+    }>;
+    return {
+      ok: true,
+      prs: parsed
+        .filter((p) => typeof p.number === 'number')
+        .map((p) => ({
+          number: p.number!,
+          title: p.title ?? '(no title)',
+          author: p.author?.login ?? 'unknown',
+          headRefName: p.headRefName ?? '',
+          draft: p.isDraft === true,
+        })),
+    };
+  } catch {
+    return { ok: false, reason: 'gh returned something this build could not read', remedy: 'Try `gh pr list` directly to see what it said.' };
+  }
 }
