@@ -41,7 +41,7 @@ import { defaultCacheDir } from './interpret.js';
 import { runLlm, resolveChoice, type LlmChoice } from './llm.js';
 
 /** Bump when the prompt changes — a cached verdict answered a different question. */
-export const ADJUDICATOR_VERSION = 1;
+export const ADJUDICATOR_VERSION = 2;
 
 export interface Adjudication {
   /** did what this code is FOR change? */
@@ -50,6 +50,18 @@ export interface Adjudication {
   magnitude: number;
   /** one line a reader can act on, written to sit in a tour stop's summary */
   headline: string;
+  /**
+   * What this PR is PROPOSING TO CHANGE about code that already does something — the thing
+   * Evan asked for and the first two versions of this did not give him:
+   *
+   *   "It needs to use the context of what's actually going on to tell us what the PR is
+   *    proposing to change about it."
+   *
+   * So the model is handed the checkpoint's own reading of the file and the list of modules
+   * that depend on it, and asked to write about the change IN THOSE TERMS. Not the commit
+   * message paraphrased, and emphatically not the score.
+   */
+  narrative: string;
   /** what kind of change this is, in the model's own judgement */
   kind: 'refactor' | 'behaviour' | 'surface' | 'new' | 'removed' | 'unclear';
   /** where this verdict came from, so a tour never implies more confidence than it has */
@@ -57,51 +69,88 @@ export interface Adjudication {
 }
 
 const SYSTEM = [
-  'You are comparing two versions of the same source file from a pull request.',
-  'Answer ONE question: did what this code is FOR change?',
+  'You are explaining one file\'s change in a pull request, to someone who has never seen',
+  'this repository. You are given what the file ALREADY does (worked out from the code',
+  'before this change), what depends on it, and the diff.',
   '',
-  'Judge MEANING, not text. Specifically:',
-  '- Renaming local variables, reformatting, reordering imports, changing comments, or',
-  '  extracting a helper WITHOUT changing behaviour are all REFACTORS. magnitude 0.0-0.1.',
+  'Answer two things.',
+  '',
+  'FIRST — did what this code is FOR change?',
+  '- Renaming locals, reformatting, reordering imports, changing comments, or extracting a',
+  '  helper WITHOUT changing behaviour are REFACTORS. magnitude 0.0-0.1.',
   '- A changed condition, threshold, default, order of operations, error path or return',
-  '  value is BEHAVIOUR, even if the diff is tiny. magnitude 0.5-0.9.',
-  '- An added, removed or re-shaped export is SURFACE — other code can feel it.',
-  '  magnitude 0.6-1.0.',
+  '  value is BEHAVIOUR, even if the diff is one line. magnitude 0.5-0.9.',
+  '- An added, removed or re-shaped export is SURFACE. magnitude 0.6-1.0.',
   '- A file that now does a genuinely different job is NEW. magnitude 1.0.',
-  '- If you truly cannot tell from what you were shown, say "unclear" and give 0.5.',
-  '',
-  'A LARGE diff that only renames things is still a refactor. A ONE LINE diff that flips a',
+  '- If you cannot tell from what you were shown, say "unclear" and give 0.5.',
+  'A LARGE diff that only renames is still a refactor. A ONE LINE diff that flips a',
   'condition is still behaviour. Size is not the question; purpose is.',
   '',
-  'The headline is one sentence for a reader skimming a list of changed files. Say what',
-  'moved, concretely, naming identifiers. Never say "this change improves" or "this is a',
-  'good refactor" — you are describing, not reviewing.',
+  'SECOND — "narrative": two to four sentences on WHAT THIS PR IS PROPOSING TO CHANGE,',
+  'written in terms of what this code is for and what leans on it.',
+  '',
+  'The narrative is the main thing you are producing. Rules for it:',
+  '- START with the change itself, in plain words. Never start with a number, a score, a',
+  '  band, a line count, or the words "meaning moved".',
+  '- Say what the code did BEFORE, then what this change makes it do instead. The reader',
+  '  has the diff in front of them; tell them what it MEANS, not what it says.',
+  '- Where the dependents matter, say what this means for them concretely.',
+  '- Name real identifiers and real values from the diff. "drops the multiplier from 0.5 to',
+  '  0.05" beats "adjusts a weighting".',
+  '- Do NOT review it. No "improves", "cleanly", "nicely", "should probably". Describe.',
+  '- Do NOT mention how far ahead or behind any branch is. Not your subject.',
+  '- If the diff genuinely changes nothing about purpose, say so plainly and briefly —',
+  '  a reader who can skip a file is glad to be told.',
+  '',
+  'headline: ONE sentence, the same discipline, for a list view.',
   '',
   'Reply with ONLY this JSON object and nothing else:',
-  '{"kind":"refactor|behaviour|surface|new|removed|unclear","magnitude":0.0,"headline":"..."}',
+  '{"kind":"refactor|behaviour|surface|new|removed|unclear","magnitude":0.0,',
+  ' "headline":"...","narrative":"..."}',
 ].join('\n');
+
+export interface FileContext {
+  /** what the checkpoint already worked out this file does */
+  what?: string;
+  /** and why it exists, where that was inferable */
+  why?: string;
+  /** modules that import it — the reason a change here can be felt elsewhere */
+  importers?: string[];
+}
 
 function excerpt(code: string, limit = 6000): string {
   return code.length <= limit ? code : `${code.slice(0, limit)}\n… (truncated)`;
 }
 
-function buildPrompt(file: string, before: string, after: string): string {
-  return [
-    `File: ${file}`,
-    '',
-    '=== BEFORE ===',
-    excerpt(before),
-    '',
-    '=== AFTER ===',
-    excerpt(after),
-    '',
-    SYSTEM,
-  ].join('\n');
+function buildPrompt(file: string, diff: string, ctx: FileContext): string {
+  const parts: string[] = [`File: ${file}`, ''];
+
+  if (ctx.what) {
+    parts.push('=== WHAT THIS FILE ALREADY DOES (worked out before this change) ===', ctx.what);
+    if (ctx.why) parts.push('', `Why it exists: ${ctx.why}`);
+    parts.push('');
+  }
+  if (ctx.importers && ctx.importers.length) {
+    parts.push(
+      `=== WHAT DEPENDS ON IT === ${ctx.importers.length} module(s) import this file: ` +
+        ctx.importers.slice(0, 12).join(', ') +
+        (ctx.importers.length > 12 ? `, and ${ctx.importers.length - 12} more` : ''),
+      '',
+    );
+  } else {
+    parts.push('=== WHAT DEPENDS ON IT === nothing in this repository imports it.', '');
+  }
+
+  parts.push('=== THE DIFF ===', excerpt(diff, 9000), '', SYSTEM);
+  return parts.join('\n');
 }
 
-function verdictKey(file: string, before: string, after: string, choice: LlmChoice): string {
+function verdictKey(file: string, diff: string, ctx: FileContext, choice: LlmChoice): string {
   return createHash('sha256')
-    .update(`${ADJUDICATOR_VERSION}:${file}:${before}:${after}:${choice.provider}:${choice.model}`)
+    .update(
+      `${ADJUDICATOR_VERSION}:${file}:${diff}:${ctx.what ?? ''}:${(ctx.importers ?? []).join(',')}:` +
+        `${choice.provider}:${choice.model}`,
+    )
     .digest('hex')
     .slice(0, 32);
 }
@@ -114,7 +163,7 @@ function parse(raw: string): Omit<Adjudication, 'source'> | null {
   if (start === -1 || end === -1 || end < start) return null;
   try {
     const o = JSON.parse(body.slice(start, end + 1)) as {
-      kind?: string; magnitude?: number; headline?: string;
+      kind?: string; magnitude?: number; headline?: string; narrative?: string;
     };
     const kinds = ['refactor', 'behaviour', 'surface', 'new', 'removed', 'unclear'] as const;
     const kind = (kinds as readonly string[]).includes(o.kind ?? '')
@@ -126,7 +175,10 @@ function parse(raw: string): Omit<Adjudication, 'source'> | null {
     const headline = typeof o.headline === 'string' && o.headline.trim().length > 0
       ? o.headline.trim()
       : 'The model returned no headline for this file.';
-    return { kind, magnitude, changed: magnitude >= 0.15, headline };
+    const narrative = typeof o.narrative === 'string' && o.narrative.trim().length > 0
+      ? o.narrative.trim()
+      : headline;
+    return { kind, magnitude, changed: magnitude >= 0.15, headline, narrative };
   } catch {
     return null;
   }
@@ -148,14 +200,14 @@ export interface AdjudicateOptions {
  */
 export async function adjudicate(
   file: string,
-  before: string,
-  after: string,
+  diff: string,
+  ctx: FileContext,
   opts: AdjudicateOptions = {},
 ): Promise<Adjudication> {
   const choice = resolveChoice({ provider: opts.provider, model: opts.model });
   const cacheDir = opts.cacheDir ?? path.join(defaultCacheDir(), '..', 'adjudicate');
   fs.mkdirSync(cacheDir, { recursive: true });
-  const cachePath = path.join(cacheDir, `${verdictKey(file, before, after, choice)}.json`);
+  const cachePath = path.join(cacheDir, `${verdictKey(file, diff, ctx, choice)}.json`);
 
   if (fs.existsSync(cachePath)) {
     try {
@@ -167,12 +219,13 @@ export async function adjudicate(
   }
 
   try {
-    const reply = await runLlm(buildPrompt(file, before, after), choice, opts.cwd ?? process.cwd());
+    const reply = await runLlm(buildPrompt(file, diff, ctx), choice, opts.cwd ?? process.cwd());
     const parsed = parse(reply.text);
     if (!parsed) {
       return {
         changed: false, magnitude: 0.5, kind: 'unclear',
         headline: 'The model did not answer in a readable form, so this file is unjudged.',
+        narrative: 'This file could not be interpreted on this run. The diff below is the whole of what is known about it here.',
         source: 'unavailable',
       };
     }
@@ -184,6 +237,7 @@ export async function adjudicate(
     return {
       changed: false, magnitude: 0.5, kind: 'unclear',
       headline: `Could not judge this file: ${(err as Error).message.split('\n')[0]}`,
+      narrative: 'This file could not be interpreted on this run. The diff below is the whole of what is known about it here.',
       source: 'unavailable',
     };
   }

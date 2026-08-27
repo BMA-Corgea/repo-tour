@@ -668,6 +668,26 @@ export class RepoTourServer {
 
       if (route === '/api/repos') return this.json(res, 200, { repos: this.listRepos() });
 
+      /**
+       * What the Pull requests tab asks, on load.
+       *
+       * Fetched rather than baked into the page: a count rendered at build time is a lie
+       * within the hour, and blocking the page render on a network call to GitHub would
+       * make every repo page as slow as the slowest `gh`.
+       */
+      if (route === '/api/prs') {
+        const p = url.searchParams.get('path') ?? '';
+        if (!this.repos.some((r) => r.path === p)) return this.json(res, 404, { error: 'not loaded' });
+        const listed = await listPrs(p);
+        const building = [...this.jobs.entries()]
+          .filter(([k, j]) => k.startsWith(`${p}#pr-`) && j.state === 'running')
+          .map(([k]) => Number(k.split('#pr-')[1]))
+          .filter((n) => Number.isInteger(n));
+        return this.json(res, 200, listed.ok
+          ? { ok: true, count: listed.prs.length, building }
+          : { ok: false, reason: listed.reason, building });
+      }
+
       if (route === '/api/add' && req.method === 'POST') {
         const { path: p } = JSON.parse(await this.readBody(req)) as { path?: string };
         if (!p) return this.json(res, 400, { error: 'a path is required' });
@@ -723,11 +743,19 @@ export class RepoTourServer {
         if (done?.html) return this.html(res, 200, done.html);
 
         const job = this.jobs.get(key);
-        if (job?.state === 'running') return this.html(res, 200, building(`${p} — PR #${n}`, job.lines));
+        if (job?.state === 'running') {
+          return this.html(res, 200, building(
+            `PR #${n}`, job.lines, key,
+            `/pr?path=${encodeURIComponent(p)}&n=${n}`,
+          ));
+        }
         if (job?.state === 'failed') return this.html(res, 200, prFailed(p, n, job.lines));
 
         this.startPrJob(p, n);
-        return this.html(res, 200, building(`${p} — PR #${n}`, [`starting PR #${n}`]));
+        return this.html(res, 200, building(
+          `PR #${n}`, [`reading PR #${n}`], key,
+          `/pr?path=${encodeURIComponent(p)}&n=${n}`,
+        ));
       }
 
       if (route === '/r') {
@@ -764,7 +792,9 @@ export class RepoTourServer {
           return this.html(res, 200, older.html);
         }
 
-        if (job?.state === 'running') return this.html(res, 200, building(p, job.lines));
+        if (job?.state === 'running') {
+          return this.html(res, 200, building(path.basename(p), job.lines, p, `/r?path=${encodeURIComponent(p)}`));
+        }
         return this.html(res, 200, notBuilt(p));
       }
 
@@ -1234,14 +1264,27 @@ setInterval(refresh, 4000);
 </body></html>`;
 }
 
-function building(repoPath: string, lines: string[]): string {
+/**
+ * The "this is being read" page.
+ *
+ * Three things it needs, and they are NOT the same string — which is the bug this signature
+ * exists to prevent. A PR build was rendered with `building(\`${repo} — PR #3\`, …)`, so the
+ * page polled `/api/job?path=<that decorated label>`, matched no job, read back `idle`
+ * forever, and hung. Leaving and returning worked, because the route checks the finished
+ * tour directly — which is exactly what Evan saw.
+ *
+ *   label    what the reader is told is being read
+ *   jobKey   the key the job is actually stored under
+ *   doneUrl  where to go when it finishes — a PR tour is not at /r
+ */
+function building(label: string, lines: string[], jobKey: string, doneUrl: string): string {
   const esc = (s: string): string => s.replace(/</g, '&lt;').replace(/"/g, '&quot;');
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>building ${esc(path.basename(repoPath))} — repo-tour</title><style>${SHELL_STYLE}</style><script>${skinScript()}</script></head>
+<title>building ${esc(label)} — repo-tour</title><style>${SHELL_STYLE}</style><script>${skinScript()}</script></head>
 <body>${navBar('building')}<div class="buildwrap">
-<h1><span class="spin"></span>Reading ${esc(path.basename(repoPath))}</h1>
+<h1><span class="spin"></span>Reading ${esc(label)}</h1>
 <div class="sub">
   This is not fast, and is not meant to be. <b>You can leave this page</b> — the build keeps
   running on the server, and it will be waiting whenever you come back. Closing the tab is
@@ -1257,7 +1300,8 @@ function building(repoPath: string, lines: string[]): string {
 // Poll rather than reload. A hard reload every couple of seconds can fire mid-click and
 // throw away a navigation the reader just started — the exact opposite of being free to
 // leave. This updates in place, and only navigates once the build is actually done.
-var path = ${JSON.stringify(repoPath)};
+var jobKey = ${JSON.stringify(jobKey)};
+var doneUrl = ${JSON.stringify(doneUrl)};
 var started = Date.now();
 var log = document.getElementById('log');
 var elapsed = document.getElementById('elapsed');
@@ -1268,11 +1312,11 @@ setInterval(function () {
 }, 1000);
 
 function tick() {
-  fetch('/api/job?path=' + encodeURIComponent(path), { cache: 'no-store' })
+  fetch('/api/job?path=' + encodeURIComponent(jobKey), { cache: 'no-store' })
     .then(function (r) { return r.json(); })
     .then(function (j) {
       if (j.lines && j.lines.length) log.textContent = j.lines.join('\\n');
-      if (j.state === 'done') { location.replace('/r?path=' + encodeURIComponent(path)); return; }
+      if (j.state === 'done') { location.replace(doneUrl); return; }
       if (j.state === 'failed') {
         log.textContent = (j.lines || []).join('\\n') + '\\n\\nThat build failed. Go back and try Rebuild.';
         return;

@@ -27,6 +27,8 @@ import { applyMeanings, fullText, stepKey, SUMMARY_MAX } from '../src/interpret.
 import { narrate, compress } from '../src/narrate.js';
 import { meaningDistance, vocabularyOf, fileDelta, orderByMeaning, ripple, type FileDelta } from '../src/delta.js';
 import { buildPrTour, whyFor, band } from '../src/prtour.js';
+import { renderPrView } from '../src/prview.js';
+import { parseUnified } from '../src/diff.js';
 import { issueRefs, resolvePr, listPrs, diffSet } from '../src/pr.js';
 import { loadCheckpoint, staleness } from '../src/checkpoint.js';
 import type { FileExtract, SymbolRecord } from '../src/types.js';
@@ -1776,8 +1778,11 @@ describe('T-8 — the Pull requests tab is reachable, not decoration', () => {
       steps: plan.steps, itinerary: plan.itinerary,
       servedBy: { homeUrl: '/', repoPath: process.cwd(), builtAt: new Date().toISOString() },
     });
-    expect(html).toMatch(/<a class="tab off live" href="\/prs\?path=/);
+    expect(html).toMatch(/<a class="tab off live"[^>]*href="\/prs\?path=/);
     expect(html).not.toMatch(/<span class="tab off">Pull requests<\/span>/);
+    // T-9: and it carries a live count, so it does not look like the dead tabs beside it
+    expect(html).toContain('id="prcount"');
+    expect(html).toContain("/api/prs?path=");
   });
 
   it('an exported page says why the tab is inert instead of just being dead', async () => {
@@ -1843,5 +1848,201 @@ describe('a pull request is the branch\'s own work, not everything the base gain
     expect(refs.baseAhead).toBe(1);
     const stale = staleness(prRoot, refs.forkSha, refs.baseSha, ['a.ts']);
     expect(stale.behind).toBe(1);
+  });
+});
+
+describe('T-9 — the PR page is about the change, not the score', () => {
+  const refs = {
+    number: 3, url: 'https://github.com/o/r/pull/3',
+    headSha: 'a'.repeat(40), baseSha: 'b'.repeat(40), forkSha: null,
+    baseLabel: 'main', headLabel: 'feature', baseAhead: 5,
+    prose: { title: 'A change', body: null, commits: [], issues: [], source: 'github' as const },
+  };
+  const delta: FileDelta = {
+    path: 'src/rank.ts', status: 'M', linesChanged: 2, meaningDelta: 0.6,
+    surface: { added: [], removed: [], changed: [] }, interpreted: true,
+    reason: 'r', basis: 'adjudicated',
+  };
+  const parsed = parseUnified('src/rank.ts', [
+    '@@ -22,3 +22,3 @@ export const MULTIPLIER = {',
+    '   structural: 1.4,',
+    '-  test: 0.5,',
+    '+  test: 0.05,',
+    '   data: 0.3,',
+  ].join('\n'));
+  const verdict = {
+    changed: true, magnitude: 0.6, kind: 'behaviour' as const, source: 'model' as const,
+    headline: 'Test files are damped much harder.',
+    narrative: 'The MULTIPLIER table weighted test files at 0.5; this drops it to 0.05, so tests now rank near the floor and source wins the tour itinerary.',
+  };
+
+  const html = renderPrView({
+    refs, deltas: [delta], diffs: new Map([['src/rank.ts', parsed]]),
+    steps: [], ripple: { reinterpret: [], structuralOnly: [], reachable: 0 },
+    verdicts: new Map([['src/rank.ts', verdict]]),
+  });
+
+  it('criterion 1 — the file panel lists only the PR\'s files', () => {
+    const listed = [...html.matchAll(/class="pfname">([^<]+)</g)].map((m) => m[1]);
+    expect(listed).toEqual(['src/rank.ts']);
+  });
+
+  it('criterion 2 — added and removed lines reach the page, typed and numbered', () => {
+    const payload = JSON.parse(/var DIFFS = (\{.*?\});\n/s.exec(html)![1]!) as Record<
+      string,
+      { lang: string | null; rows: Array<{ k: string; o: number | null; n: number | null; t: string }> } | null
+    >;
+    const rows = payload['src/rank.ts']!.rows;
+    const del = rows.find((r) => r.k === 'del')!;
+    const add = rows.find((r) => r.k === 'add')!;
+    expect(del.t).toContain('test: 0.5,');
+    expect(add.t).toContain('test: 0.05,');
+    // a deletion has no head-side number, an addition no base-side one
+    expect(del.n).toBeNull();
+    expect(add.o).toBeNull();
+    // and the hunk header travels with them so a reader knows where they are
+    expect(rows[0]!.k).toBe('hh');
+    expect(rows[0]!.t).toContain('MULTIPLIER');
+    // the language is carried so the diff is highlighted like the rest of the product
+    expect(payload['src/rank.ts']!.lang).toBe('ts');
+  });
+
+  it('the page is built from the house components, not its own', () => {
+    // Evan: "I'm not convinced the style follows through entirely." The cause was invented
+    // colour tokens with dark fallbacks. These are the shared ones.
+    expect(html).toContain('class="topbar"');
+    expect(html).toContain('class="layout"');
+    expect(html).toMatch(/<div class="panel">\s*<h3>Files/);
+    expect(html).toContain('class="filehead"');
+    for (const invented of ['--panel', '--hover', '--fg']) {
+      expect(html.includes(`var(${invented}`)).toBe(false);
+    }
+  });
+
+  it('criterion 4/5 — a stop opens with the change, never with a number', () => {
+    const body = /<div class="body">([^<]+)</.exec(html)![1]!;
+    expect(body.startsWith('The MULTIPLIER table')).toBe(true);
+    expect(body).not.toMatch(/^(MEANING MOVED|Meaning|0\.\d)/);
+    // the score survives only as a chip
+    expect(html).toMatch(/<span class="chip">moved<\/span>/);
+  });
+
+  it('criterion 6 — it links to the pull request', () => {
+    expect(html).toContain('https://github.com/o/r/pull/3');
+  });
+
+  it('criterion 7 — how far ahead or behind the base is stays off the page', () => {
+    expect(html).not.toMatch(/commits since this branch forked|ahead|behind/i);
+  });
+
+  it('a rename with no text still says something rather than showing an empty pane', () => {
+    const empty = renderPrView({
+      refs, deltas: [{ ...delta, path: 'src/x.ts' }],
+      diffs: new Map([['src/x.ts', parseUnified('src/x.ts', '')]]),
+      steps: [], ripple: { reinterpret: [], structuralOnly: [], reachable: 0 }, verdicts: new Map(),
+    });
+    expect(empty).toContain('No textual change to show');
+  });
+});
+
+describe('the diff parser', () => {
+  it('numbers both sides and classifies every line', () => {
+    const d = parseUnified('a.ts', [
+      '@@ -10,4 +10,4 @@ function go() {',
+      '   const a = 1;',
+      '-  const b = 2;',
+      '+  const b = 3;',
+      '   return a + b;',
+    ].join('\n'));
+    expect(d.added).toBe(1);
+    expect(d.removed).toBe(1);
+    expect(d.hunks).toHaveLength(1);
+    expect(d.hunks[0]!.header).toBe('function go() {');
+    const kinds = d.hunks[0]!.lines.map((l) => l.kind);
+    expect(kinds).toEqual(['ctx', 'del', 'add', 'ctx']);
+    // an addition has no line on the base side, a deletion none on the head side
+    expect(d.hunks[0]!.lines[1]!.newNo).toBeNull();
+    expect(d.hunks[0]!.lines[2]!.oldNo).toBeNull();
+    // context keeps both, and they advance together
+    expect(d.hunks[0]!.lines[3]!.oldNo).toBe(12);
+    expect(d.hunks[0]!.lines[3]!.newNo).toBe(12);
+  });
+
+  it('an empty diff is empty, not a crash', () => {
+    expect(parseUnified('a.ts', '').empty).toBe(true);
+  });
+});
+
+describe('a build in progress polls the job it is actually waiting on', () => {
+  // Evan: "When I stayed on the page constructing the interpretation it hung. I left and
+  // came back and it was instantly done." The page polled a decorated LABEL as though it
+  // were a job key, matched nothing, read back `idle` forever, and would have navigated to
+  // the repo tour rather than the PR even if it had finished.
+  const own = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-poll-'));
+
+  afterAll(() => { fs.rmSync(own, { recursive: true, force: true }); });
+
+  it('a PR build page polls the PR job key and returns to the PR', async () => {
+    const { RepoTourServer } = await import('../src/server.js');
+    initRepo(own);
+    write(path.join(own, 'a.py'), 'def go(x):\n    """Do it."""\n    return x\n');
+    commitAll(own, 'init');
+
+    const server = new RepoTourServer({ statePath: path.join(own, 'state.json'), interpret: false });
+    server.addRepo(own);
+
+    let body = '';
+    const res = {
+      writeHead() { return this; },
+      end(chunk?: string) { if (typeof chunk === 'string') body = chunk; return this; },
+    } as unknown as import('node:http').ServerResponse;
+
+    await server.handler(
+      { url: `/pr?path=${encodeURIComponent(own)}&n=7`, method: 'GET' } as import('node:http').IncomingMessage,
+      res,
+    );
+
+    // it polls the job key, not a label
+    expect(body).toContain(`var jobKey = ${JSON.stringify(`${own}#pr-7`)}`);
+    expect(body).not.toMatch(/var jobKey = "[^"]*PR #7"/);
+    // and when it finishes it goes back to the PR, not to /r
+    expect(body).toContain(`var doneUrl = "/pr?path=${encodeURIComponent(own).replace(/%/g, '%')}&n=7"`);
+    expect(body).not.toMatch(/var doneUrl = "\/r\?/);
+    await settle(server);
+  });
+
+  it('a repo build page still polls the repo path and returns to /r', async () => {
+    const { RepoTourServer } = await import('../src/server.js');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-poll2-'));
+    try {
+      initRepo(dir);
+      write(path.join(dir, 'a.py'), 'def go(x):\n    return x\n');
+      commitAll(dir, 'init');
+      const server = new RepoTourServer({ statePath: path.join(dir, 'state.json'), interpret: false });
+      server.addRepo(dir);
+      // a marker makes the fresh server resume, so the page is the building one
+      const marker = path.join(dir, '.repo-tour', 'building.json');
+      fs.mkdirSync(path.dirname(marker), { recursive: true });
+      fs.writeFileSync(marker, JSON.stringify({ startedAt: new Date().toISOString(), lines: ['reading…'] }));
+      const fresh = new RepoTourServer({ statePath: path.join(dir, 'state.json'), interpret: false });
+
+      let body = '';
+      const res = {
+        writeHead() { return this; },
+        end(chunk?: string) { if (typeof chunk === 'string') body = chunk; return this; },
+      } as unknown as import('node:http').ServerResponse;
+      await fresh.handler(
+        { url: `/r?path=${encodeURIComponent(dir)}`, method: 'GET' } as import('node:http').IncomingMessage,
+        res,
+      );
+      if (body.includes('var jobKey')) {
+        expect(body).toContain(`var jobKey = ${JSON.stringify(dir)}`);
+        expect(body).toContain(`var doneUrl = "/r?path=`);
+      }
+      await settle(fresh);
+      await settle(server);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -37,6 +37,10 @@ export interface PrProse {
 }
 
 export interface PrRefs {
+  /** the pull request's number, when this came from one */
+  number: number | null;
+  /** its page on GitHub — Evan: "it doesn't link to the PR" */
+  url: string | null;
   headSha: string;
   /** the commit the comparison is against — the landing point */
   baseSha: string;
@@ -192,6 +196,7 @@ export function resolvePr(root: string, opts: ResolveOptions): PrRefs {
     }
     const headSha = resolveRef(root, pr.headRefOid, 'head');
     const baseSha = resolveBaseBranch(root, pr.baseRefName);
+    const slugForUrl = repoSlug(root);
     return assemble(root, headSha, baseSha, pr.headRefName ?? pr.headRefOid, pr.baseRefName, {
       title: pr.title ?? null,
       body: pr.body && pr.body.trim().length > 0 ? pr.body : null,
@@ -201,6 +206,9 @@ export function resolvePr(root: string, opts: ResolveOptions): PrRefs {
       })),
       issues: issueRefs(pr.body ?? ''),
       source: 'github',
+    }, {
+      number: opts.pr,
+      url: slugForUrl ? `https://github.com/${slugForUrl}/pull/${opts.pr}` : null,
     });
   }
 
@@ -243,12 +251,15 @@ function assemble(
   headLabel: string,
   baseLabel: string,
   prose: PrProse,
+  pr?: { number: number; url: string | null },
 ): PrRefs {
   const mergeBase = tryGit(root, 'merge-base', baseSha, headSha);
   const forkSha = mergeBase && mergeBase !== baseSha ? mergeBase : null;
   const behind = tryGit(root, 'rev-list', '--count', `${headSha}..${baseSha}`);
   const commits = prose.commits.length > 0 ? prose.commits : commitsBetween(root, mergeBase ?? baseSha, headSha);
   return {
+    number: pr?.number ?? null,
+    url: pr?.url ?? null,
     headSha,
     baseSha,
     forkSha,

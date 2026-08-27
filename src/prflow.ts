@@ -18,7 +18,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { CACHE_DIR } from './digest.js';
-import { renderRepoView } from './repoview.js';
+import { renderPrView } from './prview.js';
+import { parseUnified, rawDiff, type FileDiff } from './diff.js';
 import { interpretStops, type StopMeaning } from './interpret.js';
 import { resolvePr, diffSet, lineCounts, hunks, type Hunk, type PrRefs } from './pr.js';
 import { loadCheckpoint, sideAt, staleness, type Checkpoint, type Staleness } from './checkpoint.js';
@@ -39,6 +40,8 @@ export interface PrFlowOptions {
 
 export interface PrFlowResult {
   refs: PrRefs;
+  /** the literal change per file, for the page to render */
+  diffs: Map<string, FileDiff>;
   checkpoint: Checkpoint;
   staleness: Staleness;
   deltas: FileDelta[];
@@ -88,14 +91,19 @@ export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFl
   const stale = staleness(root, checkpoint.sha, refs.baseSha, paths);
 
   if (changes.length === 0) {
+    const verdicts = new Map<string, Adjudication>();
+    void verdicts;
     const plan = buildPrTour({
       refs, deltas: [], ripple: { reinterpret: [], structuralOnly: [], reachable: 0 },
       staleness: stale, hunksByFile: new Map(),
     });
     return {
-      refs, checkpoint, staleness: stale, deltas: [],
+      refs, checkpoint, staleness: stale, deltas: [], diffs: new Map(),
       ripple: { reinterpret: [], structuralOnly: [], reachable: 0 },
-      html: renderRepoView(checkpoint.result, { steps: plan.steps, itinerary: plan.itinerary }),
+      html: renderPrView({
+        refs, deltas: [], diffs: new Map(), steps: plan.steps,
+        ripple: { reinterpret: [], structuralOnly: [], reachable: 0 }, verdicts: new Map(),
+      }),
       stops: plan.steps.length, empty: true,
     };
   }
@@ -110,6 +118,14 @@ export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFl
   try {
     const hunksByFile = new Map<string, Hunk[]>();
     for (const p of paths) hunksByFile.set(p, hunks(root, diffFrom, refs.headSha, p));
+
+    // The literal change, parsed once. The page renders it and the model reads it — both
+    // from the same text, so what the reader sees is what the narrative was written about.
+    const diffs = new Map<string, { raw: string; parsed: FileDiff }>();
+    for (const p of paths) {
+      const raw = rawDiff(root, diffFrom, refs.headSha, p);
+      diffs.set(p, { raw, parsed: parseUnified(p, raw) });
+    }
 
     const stopsFor = (side: typeof beforeSide) =>
       side.files.map((f) => {
@@ -137,16 +153,27 @@ export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFl
       afterMeanings = a.meanings;
       say(`interpreted ${a.cost.interpretedStops + b.cost.interpretedStops} stops, ${a.cost.cachedStops + b.cost.cachedStops} reused`);
 
-      const read = (dir: string, rel: string): string => {
-        try { return fs.readFileSync(path.join(dir, rel), 'utf8'); } catch { return ''; }
-      };
+      // Who imports what, from the checkpoint's own graph — the reason a change in one
+      // file can be felt in another, and half of the context the narrative is written from.
+      const importersOf = new Map<string, string[]>();
+      for (const e of checkpoint.graph.edges) {
+        const list = importersOf.get(e.to) ?? [];
+        list.push(e.from);
+        importersOf.set(e.to, list);
+      }
+
       let n = 0;
       for (const c of changes) {
         n++;
-        say(`judging ${n}/${changes.length} — ${c.path}`);
-        verdicts.set(c.path, await adjudicate(c.path, read(beforeSide.dir, c.path), read(afterSide.dir, c.path), {
-          model: opts.model, provider: opts.provider, cwd: root,
-        }));
+        say(`reading ${n}/${changes.length} — ${c.path}`);
+        // The checkpoint's own reading of the file: what it already does, before this PR.
+        const prior = [...beforeMeanings.entries()].find(([k]) => k.startsWith(`${c.path}:`))?.[1];
+        verdicts.set(c.path, await adjudicate(
+          c.path,
+          diffs.get(c.path)?.raw ?? '',
+          { what: prior?.what, why: prior?.why, importers: importersOf.get(c.path) ?? [] },
+          { model: opts.model, provider: opts.provider, cwd: root },
+        ));
       }
     } else {
       say('not interpreting — scores rest on structure alone');
@@ -175,8 +202,12 @@ export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFl
 
     return {
       refs, checkpoint, staleness: stale,
+      diffs: new Map([...diffs].map(([k, v]) => [k, v.parsed])),
       deltas: orderByMeaning(deltas), ripple: rip,
-      html: renderRepoView(checkpoint.result, { steps: plan.steps, itinerary: plan.itinerary }),
+      html: renderPrView({
+        refs, deltas: orderByMeaning(deltas), diffs: new Map([...diffs].map(([k, v]) => [k, v.parsed])),
+        steps: plan.steps, ripple: rip, verdicts,
+      }),
       stops: plan.steps.length, empty: false,
     };
   } finally {

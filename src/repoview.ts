@@ -256,7 +256,7 @@ function architectureSvg(arch: Architecture): string {
 }
 
 
-const HIGHLIGHTER = `
+export const HIGHLIGHTER = `
 var KW = {
   python: /\\b(False|None|True|and|as|assert|async|await|break|class|continue|def|del|elif|else|except|finally|for|from|global|if|import|in|is|lambda|nonlocal|not|or|pass|raise|return|try|while|with|yield|self|cls)\\b/g,
   js: /\\b(abstract|any|as|async|await|boolean|break|case|catch|class|const|constructor|continue|declare|default|delete|do|else|enum|export|extends|false|finally|for|from|function|get|if|implements|import|in|instanceof|interface|let|new|null|number|of|private|protected|public|readonly|return|set|static|string|super|switch|this|throw|true|try|type|typeof|undefined|var|void|while|yield)\\b/g
@@ -907,6 +907,41 @@ const TOUR_BOOTSTRAP = `
 })();
 `;
 
+/**
+ * Fill in the Pull requests tab after the page loads.
+ *
+ * Evan, on the first version: "there's nothing that indicates that PRs are available to
+ * view… Nothing on the front page or in here indicates that a PR interpretation is being
+ * loaded." A tab that looks exactly like the two dead ones beside it tells a reader nothing.
+ * So it carries the real count, and says so out loud while one is being read.
+ */
+function prTabScript(repoPath: string): string {
+  return `
+(function () {
+  var tab = document.getElementById('prtab');
+  var count = document.getElementById('prcount');
+  if (!tab || !count) return;
+  function poll() {
+    fetch('/api/prs?path=' + encodeURIComponent(${JSON.stringify(repoPath)}), { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d && d.building && d.building.length) {
+          count.textContent = 'reading #' + d.building[0] + '…';
+          count.className = 'tabcount busy';
+          setTimeout(poll, 3000);
+          return;
+        }
+        count.className = 'tabcount';
+        if (d && d.ok) { count.textContent = d.count > 0 ? String(d.count) : ''; tab.title = d.count + ' open'; }
+        else if (d) { count.textContent = ''; tab.title = d.reason || ''; }
+      })
+      .catch(function () {});
+  }
+  poll();
+})();
+`;
+}
+
 export function renderRepoView(result: DigestResult, opts: RepoViewOptions): string {
   // Every stop passes through the ONE narration builder on its way into the page,
   // whichever tour kind produced it (T-5 criterion 14). Doing it here rather than in each
@@ -932,7 +967,7 @@ export function renderRepoView(result: DigestResult, opts: RepoViewOptions): str
     if (!repoSlug(root)) {
       return '<span class="tab off" title="No GitHub remote on this repository. Tour a change directly: repo-tour pr --base &lt;ref&gt; --head &lt;ref&gt;">Pull requests</span>';
     }
-    return `<a class="tab off live" href="/prs?path=${encodeURIComponent(opts.servedBy.repoPath)}">Pull requests</a>`;
+    return `<a class="tab off live" id="prtab" href="/prs?path=${encodeURIComponent(opts.servedBy.repoPath)}">Pull requests<span class="tabcount" id="prcount"></span></a>`;
   })();
   const maxFiles = opts.maxFiles ?? 160;
   const maxBytes = opts.maxBytes ?? 3_500_000;
@@ -995,6 +1030,7 @@ export function renderRepoView(result: DigestResult, opts: RepoViewOptions): str
 <script>${skinScript()}</script>
 ${opts.servedBy ? `<script>${liveReloadScript()}</script>` : ''}
 ${opts.servedBy ? `<script>${freshnessScript(opts.servedBy.repoPath, opts.servedBy.builtAt)}</script>` : ''}
+${opts.servedBy ? `<script>${prTabScript(opts.servedBy.repoPath)}</script>` : ''}
 </head>
 <body>
 
