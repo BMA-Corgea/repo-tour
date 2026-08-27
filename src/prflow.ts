@@ -119,6 +119,16 @@ export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFl
     const hunksByFile = new Map<string, Hunk[]>();
     for (const p of paths) hunksByFile.set(p, hunks(root, diffFrom, refs.headSha, p));
 
+    // Who imports what, from the checkpoint's own graph — the reason a change in one file
+    // can be felt in another. Half of the context the narrative is written from, and half
+    // of what the Ask panel needs to answer a question the page does not literally answer.
+    const importersOf = new Map<string, string[]>();
+    for (const e of checkpoint.graph.edges) {
+      const list = importersOf.get(e.to) ?? [];
+      list.push(e.from);
+      importersOf.set(e.to, list);
+    }
+
     // The literal change, parsed once. The page renders it and the model reads it — both
     // from the same text, so what the reader sees is what the narrative was written about.
     const diffs = new Map<string, { raw: string; parsed: FileDiff }>();
@@ -152,15 +162,6 @@ export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFl
       beforeMeanings = b.meanings;
       afterMeanings = a.meanings;
       say(`interpreted ${a.cost.interpretedStops + b.cost.interpretedStops} stops, ${a.cost.cachedStops + b.cost.cachedStops} reused`);
-
-      // Who imports what, from the checkpoint's own graph — the reason a change in one
-      // file can be felt in another, and half of the context the narrative is written from.
-      const importersOf = new Map<string, string[]>();
-      for (const e of checkpoint.graph.edges) {
-        const list = importersOf.get(e.to) ?? [];
-        list.push(e.from);
-        importersOf.set(e.to, list);
-      }
 
       let n = 0;
       for (const c of changes) {
@@ -207,6 +208,13 @@ export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFl
       html: renderPrView({
         refs, deltas: orderByMeaning(deltas), diffs: new Map([...diffs].map(([k, v]) => [k, v.parsed])),
         steps: plan.steps, ripple: rip, verdicts,
+        repoName: path.basename(root) || root,
+        // What the digest already worked out these files are for, and who leans on them.
+        // The Ask panel needs both to answer anything the page does not literally say.
+        meanings: new Map(
+          [...beforeMeanings.entries()].map(([k, v]) => [k.slice(0, k.lastIndexOf(':')), `${v.what} ${v.why}`.trim()]),
+        ),
+        importers: importersOf,
       }),
       stops: plan.steps.length, empty: false,
     };
