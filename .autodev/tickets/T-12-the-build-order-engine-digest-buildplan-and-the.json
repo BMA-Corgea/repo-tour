@@ -3,8 +3,8 @@
   "slug": "the-build-order-engine-digest-buildplan-and-the",
   "type": "feature",
   "title": "The build-order engine — digest → BuildPlan, and the structural check",
-  "stage": "intake",
-  "status": "triage",
+  "stage": "plan",
+  "status": "planning",
   "spec": "WHY: the VS Code tutorial walks a learner through BUILDING a repo by its decisions. The ordered decision list is a projection of the digest, computed the way src/tour.ts computes a tour: deterministic, free, disposable. Full design: VSCode-LLM-Tutorial .autodev/specs/T-1-build-tutorials-v1.md §4 (the data model is §4.2 — implement it as written; it is complete from day one on Evan's instruction).\n\nACs:\n1. src/build/plan.ts exports buildPlan(digest: DigestResult, opts): BuildPlan. Chapters come from subsystem tiers ordered after the chapters they import from; files within a chapter in topological import order (leaves first), ties by first-commit date then rank score. Check: a synthetic git fixture with a known import DAG yields the expected order, exact equality.\n2. Step kinds shape / file / symbol as specified; symbol steps are the exported symbols capped at 5 per file by span; test files follow the file they test; generated/vendored/lockfile files never become steps but are listed in plan.reproduce. Check: fixture assertions per kind.\n3. Every step has a stable id = sha256(file + kind + symbol name) that survives regeneration and a rename-free edit. Check: regenerate after editing a body; ids unchanged.\n4. Witness per step from git log --diff-filter=A on the file's own repo; a repo with no history yields nulls, never invented values. Check: fixture with history and one without.\n5. scaffold ranges: loadBearing = symbol-step ranges, boilerplate = the rest; a stub generator keeps the signature line and emits a language-correct placeholder body so the file parses. Check: stubbed TS, JS and Python files each parse with zero tree-sitter ERROR nodes.\n6. src/build/check.ts exports check(learnerSource, referenceExtract, language): a structural report — exported symbols (name+kind) present/missing/extra, resolved imports present/missing, parseErrors. It never compares bodies. Check: a reference body with a renamed local variable passes; a missing export is reported by name.\n7. decision.options is populated with the author's option only (taken:true) and decision.why from the docstring when one exists, whySource set accordingly; interpretation (alternatives) is T-13's. Check: schema test — options.length ≥ 1 here, ≥ 2 after T-13.\n8. A JSON schema for BuildPlan ships at schema/build-plan.schema.json and every generated plan validates. Check: vitest with a schema validator on fixtures.\n9. CLI: repo-tour plan <path> [--json] writes <path>/.repo-tour/build/plan.json and prints chapter/step counts. Check: run on the test fixture.\n\nOut of scope\n- Alternatives per step via the model — T-13\n- Mode A (idea) and divergence/replan — VSCode-LLM-Tutorial T-9 and T-10 (the enum and fields exist here; only 'recreate' is produced)\n- Languages beyond the shipped grammars — deferred: who=human:evan why=repo-tour T-1 §3 fixed grammar coverage",
   "pipeline_version": "feature@v1",
   "modifiers": [],
@@ -23,12 +23,16 @@
     "monitor"
   ],
   "passport": [
-    "2026-09-04 created as feature \"The build-order engine — digest → BuildPlan, and the structural check\" on feature@v1 by agent:claude(on-behalf:evan,session_01Mxgb5pYk1Jb3C1qwp9RLAV)"
+    "2026-09-04 waiting at gate spec_ready (keyholder human:owner) since 2026-09-04",
+    "2026-09-04 gate spec_ready cleared by agent:claude(on-behalf:evan,GA-8) on go-ahead GA-8 (\"Let's go ahead and loop through it until these are created a\")",
+    "2026-09-04 advanced refine → queue · refine on unrecorded",
+    "2026-09-04 advanced queue → locate · queue on unrecorded",
+    "2026-09-04 advanced locate → plan · locate on unrecorded"
   ],
   "assignees": {},
   "links": {},
   "gates": {
-    "spec_ready": false,
+    "spec_ready": true,
     "merge": false,
     "accept": false,
     "deploy": false,
@@ -42,5 +46,64 @@
     "validator_passed": false,
     "attempts": 0
   },
-  "history": []
+  "history": [
+    {
+      "from": "intake",
+      "to": "refine",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-04T23:02:40.522Z"
+    },
+    {
+      "from": "refine",
+      "to": "queue",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-04T23:02:40.782Z"
+    },
+    {
+      "from": "queue",
+      "to": "locate",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-04T23:02:40.858Z"
+    },
+    {
+      "from": "locate",
+      "to": "plan",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-04T23:02:40.955Z"
+    }
+  ],
+  "receipts": {
+    "intake": {
+      "evidence": "T-12 captured with type feature, source = VSCode-LLM-Tutorial T-1 direction (its spec section 4), no open duplicate, routed to feature@v1",
+      "kind": "other",
+      "fingerprint": "T-12 captured with type feature, source = VSCode-LLM-Tutorial T-1 direction (its spec section 4), no open duplicate, routed to feature@v1",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-04T23:02:40.520Z",
+      "model": "unrecorded"
+    },
+    "refine": {
+      "evidence": ".autodev/specs/T-12-build-engine.md",
+      "kind": "file",
+      "fingerprint": "sha256:80ec1bd9a0f65096",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-04T23:02:40.715Z",
+      "model": "unrecorded"
+    },
+    "queue": {
+      "evidence": "priority 1 alongside T-11 (independent files); T-13 waits on this ticket; the VS Code T-3 waits on all three",
+      "kind": "other",
+      "fingerprint": "priority 1 alongside T-11 (independent files); T-13 waits on this ticket; the VS Code T-3 waits on all three",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-04T23:02:40.857Z",
+      "model": "unrecorded"
+    },
+    "locate": {
+      "evidence": ".autodev/locates/T-12.md",
+      "kind": "file",
+      "fingerprint": "sha256:bfa2496a207738f0",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-04T23:02:40.953Z",
+      "model": "unrecorded"
+    }
+  }
 }

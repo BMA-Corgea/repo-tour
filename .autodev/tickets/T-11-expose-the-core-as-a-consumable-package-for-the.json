@@ -3,8 +3,8 @@
   "slug": "expose-the-core-as-a-consumable-package-for-the",
   "type": "feature",
   "title": "Expose the core as a consumable package — for the VS Code front end",
-  "stage": "refine",
-  "status": "spec",
+  "stage": "build",
+  "status": "building",
   "spec": "WHY: VSCode-LLM-Tutorial (github.com/BMA-Corgea/VSCode-LLM-Tutorial) is the second front end on this core — Evan: 'I want it to be part of the same app.' Its extension host imports the digest, interpret, llm, ask and skins modules directly (VSCode-LLM-Tutorial spec §3, .autodev/specs/T-1-build-tutorials-v1.md in that repo). Today package.json is private:true with no exports map, dist/ is gitignored, and two modules locate assets only via import.meta.url: src/skins.ts skinsDir() and src/extract.ts grammarPath().\n\nACs:\n1. package.json carries an exports map naming the public modules: ./digest ./interpret ./llm ./ask ./skins ./extract ./types ./rollup ./architecture ./codetour ./build (the last lands with T-12; export the path now). Check: node -e import() of each from a directory outside the repo resolves.\n2. Asset roots are injectable: skinsDir and grammarPath accept an override (an options argument or REPO_TOUR_ASSETS / REPO_TOUR_GRAMMARS env) and fall back to the import.meta.url resolution. Check: a test loads skins and a grammar from a copied assets dir with the override set.\n3. A prepare script builds dist/ on install, so a file: or git dependency works without a manual build. Check: npm install from a consumer directory using file:../repo-tour yields dist/.\n4. A consumer smoke test (test/consumer.test.ts) imports from the package name, runs digest on a fixture, reads baseCss(), and asserts alternateCss() includes gunmetal. Check: vitest run.\n5. The web app and CLI are unchanged in behaviour. Check: the existing suite passes; ./repo-tour doctor still finds its grammars with no override set.\n6. No new runtime dependency. Check: package.json dependencies unchanged.\n\nOut of scope\n- Publishing to npm — deferred: who=human:evan why=a public artifact is not v1; file: serves his machine\n- Bundling the core into the extension — deferred: who=agent:pm why=the extension loads the core as ESM from node_modules (VSCode-LLM-Tutorial spec §10)",
   "pipeline_version": "feature@v1",
   "modifiers": [],
@@ -23,14 +23,16 @@
     "monitor"
   ],
   "passport": [
-    "2026-09-04 created as feature \"Expose the core as a consumable package — for the VS Code front end\" on feature@v1 by agent:claude(on-behalf:evan,session_01Mxgb5pYk1Jb3C1qwp9RLAV)",
-    "2026-09-04 advanced intake → refine · intake on unrecorded",
-    "2026-09-04 waiting at gate spec_ready (keyholder human:owner) since 2026-09-04"
+    "2026-09-04 gate spec_ready cleared by agent:claude(on-behalf:evan,GA-8) on go-ahead GA-8 (\"Let's go ahead and loop through it until these are created a\")",
+    "2026-09-04 advanced refine → queue · refine on unrecorded",
+    "2026-09-04 advanced queue → locate · queue on unrecorded",
+    "2026-09-04 advanced locate → plan · locate on unrecorded",
+    "2026-09-04 advanced plan → build · plan on unrecorded"
   ],
   "assignees": {},
   "links": {},
   "gates": {
-    "spec_ready": false,
+    "spec_ready": true,
     "merge": false,
     "accept": false,
     "deploy": false,
@@ -41,9 +43,8 @@
   "overrides": {},
   "risk": "low",
   "loop": {
-    "validator_passed": true,
-    "attempts": 0,
-    "evidence": ".autodev/specs/T-11-core-package.md"
+    "validator_passed": false,
+    "attempts": 0
   },
   "history": [
     {
@@ -51,6 +52,30 @@
       "to": "refine",
       "by": "agent:claude(on-behalf:evan,session_01Mxgb5pYk1Jb3C1qwp9RLAV)",
       "at": "2026-09-04T22:59:57.367Z"
+    },
+    {
+      "from": "refine",
+      "to": "queue",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-04T23:02:09.631Z"
+    },
+    {
+      "from": "queue",
+      "to": "locate",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-04T23:02:09.718Z"
+    },
+    {
+      "from": "locate",
+      "to": "plan",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-04T23:02:09.802Z"
+    },
+    {
+      "from": "plan",
+      "to": "build",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-04T23:02:09.883Z"
     }
   ],
   "receipts": {
@@ -68,6 +93,30 @@
       "fingerprint": "sha256:30ca45e0d322fc0c",
       "by": "agent:claude(on-behalf:evan,session_01Mxgb5pYk1Jb3C1qwp9RLAV)",
       "at": "2026-09-04T22:59:57.459Z",
+      "model": "unrecorded"
+    },
+    "queue": {
+      "evidence": "priority 1 alongside T-12 (both feed the VS Code front end; independent files per the locate's conflict band); T-13 waits on T-12",
+      "kind": "other",
+      "fingerprint": "priority 1 alongside T-12 (both feed the VS Code front end; independent files per the locate's conflict band); T-13 waits on T-12",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-04T23:02:09.717Z",
+      "model": "unrecorded"
+    },
+    "locate": {
+      "evidence": ".autodev/locates/T-11.md",
+      "kind": "file",
+      "fingerprint": "sha256:35de3cc392e3d6cc",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-04T23:02:09.799Z",
+      "model": "unrecorded"
+    },
+    "plan": {
+      "evidence": ".autodev/plans/T-11.md",
+      "kind": "file",
+      "fingerprint": "sha256:bb7c44c855b7d130",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-04T23:02:09.881Z",
       "model": "unrecorded"
     }
   }
