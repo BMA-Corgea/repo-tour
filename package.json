@@ -3,18 +3,42 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Digest a repository into a queryable, hierarchical understanding \u2014 then tour it.",
+  "description": "Digest a repository into a queryable, hierarchical understanding — then tour it.",
   "license": "AGPL-3.0-or-later",
   "repository": {
     "type": "git",
     "url": "https://github.com/BMA-Corgea/repo-tour"
   },
+  "exports": {
+    "./digest": { "types": "./dist/digest.d.ts", "default": "./dist/digest.js" },
+    "./interpret": { "types": "./dist/interpret.d.ts", "default": "./dist/interpret.js" },
+    "./llm": { "types": "./dist/llm.d.ts", "default": "./dist/llm.js" },
+    "./ask": { "types": "./dist/ask.d.ts", "default": "./dist/ask.js" },
+    "./skins": { "types": "./dist/skins.d.ts", "default": "./dist/skins.js" },
+    "./extract": { "types": "./dist/extract.d.ts", "default": "./dist/extract.js" },
+    "./types": { "types": "./dist/types.d.ts", "default": "./dist/types.js" },
+    "./rollup": { "types": "./dist/rollup.d.ts", "default": "./dist/rollup.js" },
+    "./architecture": { "types": "./dist/architecture.d.ts", "default": "./dist/architecture.js" },
+    "./codetour": { "types": "./dist/codetour.d.ts", "default": "./dist/codetour.js" },
+    "./assets": { "types": "./dist/assets.d.ts", "default": "./dist/assets.js" },
+    "./build": { "types": "./dist/build/index.d.ts", "default": "./dist/build/index.js" },
+    "./package.json": "./package.json",
+    "./dist/*": "./dist/*"
+  },
+  "files": [
+    "dist",
+    "assets",
+    "schema",
+    "README.md",
+    "LICENSE.txt"
+  ],
   "bin": {
     "repo-tour": "./dist/cli.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/cli.ts",
+    "prepare": "npm run build",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
