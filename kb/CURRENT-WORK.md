@@ -10,8 +10,14 @@ here and found via the reference table below.
 <!-- What is in motion right now: one line per active ticket/effort —
      what, why, where it stands, what is next. Never pruned while live. -->
 
-- Nothing in flight here. **Five of the six pieces Evan described on day one are shipped.**
-  The one left is **T-7, GONS integration** — always the endgame rather than the product.
+- **T-11 in flight** — exposing the core as a consumable package (`exports` map, injectable
+  asset roots, a `prepare` build) so `VSCode-LLM-Tutorial`'s extension can `import()` it as a
+  `file:` dependency (that repo's T-1 spec, §3/§10). Worktree `../repo-tour-T-11`, branch
+  `feature/T-11-core-package`; see `.autodev/handoffs/T-11.md`. **T-12** (the build-order
+  engine this package's `./build` export will point at) is running in parallel in
+  `../repo-tour-T-12` on disjoint files. Five of the six pieces Evan described on day one are
+  shipped; the one left besides these is **T-7, GONS integration** — always the endgame
+  rather than the product.
 - **The GONS side is now open on the OTHER shop.** 2026-08-27, on Evan's instruction, GUTS
   ticket **T-55** was filed ("Bring repo-tour's PR tours into the GONS Office PR section")
   with a first-hand brief at `GUTS/.autodev/handoffs/T-55.md`, and the live `guts-bridge`
