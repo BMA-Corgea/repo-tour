@@ -778,3 +778,75 @@ describe('the build-order engine — the CLI (AC9)', () => {
     expect(stdout).toMatch(/repo-tour plan <path>/);
   }, 30_000);
 });
+
+// ================================================================================
+// AC7 — why comes from the docstring when one exists, and is honest when it does not
+// ================================================================================
+
+describe('the build-order engine — why and whySource (AC7)', () => {
+  it('a symbol step quotes the author\'s own docstring; an undocumented one is honest instead', async () => {
+    const root = tmp('repo-tour-build-why-');
+    try {
+      initRepo(root);
+      write(path.join(root, 'src/a.ts'), [
+        '/** Sends a job through the shouter. */',
+        'export function run(job: string): string {',
+        '  return job;',
+        '}',
+        '',
+        'export function undocumented(): number {',
+        '  return 1;',
+        '}',
+        '',
+      ].join('\n'));
+      write(path.join(root, 'src/b.ts'), 'export const OTHER = 1;\n');
+      commitAll(root, 'initial');
+
+      const d = await digest(root, { write: false });
+      const plan = await buildPlan(d, { root });
+
+      const fileStep = plan.steps.find((s) => s.kind === 'file' && s.target.file === 'src/a.ts')!;
+      expect(fileStep.decision.why).toBe('Sends a job through the shouter.');
+      expect(fileStep.decision.whySource).toBe('docstring');
+
+      const documented = plan.steps.find((s) => s.kind === 'symbol' && s.target.file === 'src/a.ts' && s.decision.question.includes('run'))!;
+      expect(documented.decision.why).toBe('Sends a job through the shouter.');
+      expect(documented.decision.whySource).toBe('docstring');
+
+      const undocumented = plan.steps.find((s) => s.kind === 'symbol' && s.target.file === 'src/a.ts' && s.decision.question.includes('undocumented'))!;
+      expect(undocumented.decision.why).toBe('not inferable from the source');
+      expect(undocumented.decision.whySource).toBe('none');
+
+      // never invented for a chapter's own shape step — there is no docstring for a directory
+      const shapeStep = plan.steps.find((s) => s.kind === 'shape')!;
+      expect(shapeStep.decision.whySource).toBe('none');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// ================================================================================
+// AC4 (the more literal reading) — a `.git` that exists but has zero commits
+// ================================================================================
+
+describe('the build-order engine — witness on a git repo with no commits yet (AC4)', () => {
+  it('yields nulls throughout, the same as no repo at all', async () => {
+    const root = tmp('repo-tour-build-zerocommit-');
+    try {
+      initRepo(root); // git init, but nothing is ever committed
+      write(path.join(root, 'src/x.ts'), 'export function x(): number {\n  return 1;\n}\n');
+
+      const d = await digest(root, { write: false });
+      expect(d.manifest.repos).toEqual([{
+        root: '', absRoot: root, head: null, branch: null, commitCount: 0, pointer: false,
+      }]);
+
+      const plan = await buildPlan(d, { root });
+      expect(plan.source.head).toBeNull();
+      for (const s of plan.steps) expect(s.witness).toEqual({ sha: null, date: null, subject: null });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
