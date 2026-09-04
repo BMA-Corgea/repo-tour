@@ -8,19 +8,16 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { createRequire } from 'node:module';
 import { Parser, Language } from 'web-tree-sitter';
 import type { Node as SyntaxNode } from 'web-tree-sitter';
 import type {
   FileExtract, FileRecord, ImportGraph, ImportRecord, SymbolKind, SymbolRecord,
 } from './types.js';
-
-const require_ = createRequire(import.meta.url);
+import { grammarsDir } from './assets.js';
 
 /** Grammar versions are pinned by the resolved package — see spec §10, grammar drift. */
 function grammarPath(name: string): string {
-  const pkg = require_.resolve('tree-sitter-wasms/package.json');
-  return path.join(path.dirname(pkg), 'out', `tree-sitter-${name}.wasm`);
+  return path.join(grammarsDir(), `tree-sitter-${name}.wasm`);
 }
 
 const GRAMMAR_FOR: Record<string, string> = {

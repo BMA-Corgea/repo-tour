@@ -23,7 +23,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { assetsDir } from './assets.js';
 
 export interface Skin {
   /** URL-safe id. Also the `data-theme` value and the filename. */
@@ -54,7 +54,7 @@ export const SKINS: readonly Skin[] = [
 export const DEFAULT_SKIN = 'system';
 
 function skinsDir(): string {
-  return path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'assets', 'skins');
+  return path.join(assetsDir(), 'skins');
 }
 
 /** The base stylesheet: tokens plus the component layer. */
