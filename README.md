@@ -74,6 +74,9 @@ Ollama model ship as providers; adding another is one entry in `src/llm.ts`.
 - `repo-tour tour <path> --view out.html` exports a single self-contained file that opens
   offline — the whole repo page, the tour, and the notes panel, with no network at all.
 - Four skins, and adding one is a single CSS file plus a row in `src/skins.ts`.
+- Consumed as a package (`repo-tour/skins`, `repo-tour/digest`, …) by another front end: a
+  git dependency builds `dist/` on install via `prepare`; a `file:` dependency needs `dist/`
+  already built in this checkout first (`npm install` here does that automatically too).
 
 ## Licence
 
