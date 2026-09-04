@@ -706,3 +706,75 @@ describe('the build-order engine — the JSON schema (AC8)', () => {
     }
   });
 });
+
+// ================================================================================
+// AC9 — the CLI: `repo-tour plan <path> [--json]`
+// ================================================================================
+//
+// Spawns the real entry point (`src/cli.ts`, via the project's own `tsx`, exactly how
+// `npm run dev` runs it) rather than calling `buildPlan` in-process — kb/wiki/lessons.md:
+// "a feature is not verified until someone has reached it the way a user would." This is
+// the one test in this file that exercises the argument parser and the command dispatch
+// this ticket adds to cli.ts, not just the library function underneath it.
+
+const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
+const TSX_BIN = path.join(REPO_ROOT, 'node_modules', '.bin', 'tsx');
+
+function runCli(args: string[]): string {
+  return execFileSync(TSX_BIN, [path.join(REPO_ROOT, 'src', 'cli.ts'), ...args], {
+    cwd: REPO_ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+  });
+}
+
+describe('the build-order engine — the CLI (AC9)', () => {
+  let root: string;
+
+  beforeAll(() => {
+    root = tmp('repo-tour-cli-plan-');
+    initRepo(root);
+    write(path.join(root, 'src/a.ts'), "export function a(): number {\n  return 1;\n}\n");
+    write(path.join(root, 'src/b.ts'), "import { a } from './a.js';\n\nexport function b(): number {\n  return a() + 1;\n}\n");
+    write(path.join(root, 'package-lock.json'), '{"lockfileVersion": 3}\n');
+    commitAll(root, 'initial');
+  });
+
+  afterAll(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('writes <path>/.repo-tour/build/plan.json and prints chapter/step counts', () => {
+    const stdout = runCli(['plan', root]);
+    expect(stdout).toMatch(/\d+ chapters? · \d+ steps? · \d+ files? to reproduce/);
+
+    const planPath = path.join(root, '.repo-tour', 'build', 'plan.json');
+    expect(fs.existsSync(planPath)).toBe(true);
+    const plan = JSON.parse(fs.readFileSync(planPath, 'utf8')) as BuildPlan;
+
+    expect(plan.chapters.length).toBeGreaterThan(0);
+    expect(plan.steps.length).toBeGreaterThan(0);
+    expect(plan.reproduce).toEqual(['package-lock.json']);
+    expect(stdout).toContain(`${plan.chapters.length} chapters`);
+    expect(stdout).toContain(`${plan.steps.length} steps`);
+    expect(stdout).toContain(`${plan.reproduce.length} files to reproduce`);
+  }, 30_000);
+
+  it('--json prints the whole plan instead of the human-readable report', () => {
+    const stdout = runCli(['plan', root, '--json']);
+    const plan = JSON.parse(stdout) as BuildPlan;
+    expect(plan.schemaVersion).toBe(1);
+    expect(plan.mode).toBe('recreate');
+    expect(plan.chapters.length).toBeGreaterThan(0);
+  }, 30_000);
+
+  it('usage text names the new verb', () => {
+    let stdout = '';
+    try {
+      execFileSync(TSX_BIN, [path.join(REPO_ROOT, 'src', 'cli.ts'), 'bogus-command'], {
+        cwd: REPO_ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (err) {
+      stdout = (err as { stdout?: string }).stdout ?? '';
+    }
+    expect(stdout).toMatch(/repo-tour plan <path>/);
+  }, 30_000);
+});
