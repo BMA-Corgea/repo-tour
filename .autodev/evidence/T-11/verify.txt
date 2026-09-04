@@ -1,0 +1,23 @@
+clean-room verify — T-11 — merge f3c8392 — 2026-09-04T17:43:28-06:00
+worktree: /tmp/claude-1000/verify-repo-tour-T-11 (detached at f3c8392)
+--- npm ci ---
+
+
+added 54 packages in 2s
+--- gates: npm test ---
+> vitest run
+
+
+ RUN  v2.1.9 /tmp/claude-1000/verify-repo-tour-T-11
+
+ ✓ test/pipeline.test.ts (118 tests) 2761ms
+ ✓ test/consumer.test.ts (9 tests) 4085ms
+   ✓ AC4 — the consumer smoke test itself > imports by package name, runs digest() on a fixture, and reads the skins 1380ms
+   ✓ AC3 — a file:/git-style dependency gets dist/ with no manual build > npm pack builds dist/ via prepare, and npm install from the tarball yields it too 2503ms
+
+ Test Files  2 passed (2)
+      Tests  127 passed (127)
+   Start at  17:43:31
+   Duration  4.44s (transform 280ms, setup 0ms, collect 387ms, tests 6.85s, environment 0ms, prepare 150ms)
+
+exit: 0

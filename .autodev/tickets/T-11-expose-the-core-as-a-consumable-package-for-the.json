@@ -3,8 +3,8 @@
   "slug": "expose-the-core-as-a-consumable-package-for-the",
   "type": "feature",
   "title": "Expose the core as a consumable package — for the VS Code front end",
-  "stage": "gate",
-  "status": "awaiting_approval",
+  "stage": "monitor",
+  "status": "complete",
   "spec": "WHY: VSCode-LLM-Tutorial (github.com/BMA-Corgea/VSCode-LLM-Tutorial) is the second front end on this core — Evan: 'I want it to be part of the same app.' Its extension host imports the digest, interpret, llm, ask and skins modules directly (VSCode-LLM-Tutorial spec §3, .autodev/specs/T-1-build-tutorials-v1.md in that repo). Today package.json is private:true with no exports map, dist/ is gitignored, and two modules locate assets only via import.meta.url: src/skins.ts skinsDir() and src/extract.ts grammarPath().\n\nACs:\n1. package.json carries an exports map naming the public modules: ./digest ./interpret ./llm ./ask ./skins ./extract ./types ./rollup ./architecture ./codetour ./build (the last lands with T-12; export the path now). Check: node -e import() of each from a directory outside the repo resolves.\n2. Asset roots are injectable: skinsDir and grammarPath accept an override (an options argument or REPO_TOUR_ASSETS / REPO_TOUR_GRAMMARS env) and fall back to the import.meta.url resolution. Check: a test loads skins and a grammar from a copied assets dir with the override set.\n3. A prepare script builds dist/ on install, so a file: or git dependency works without a manual build. Check: npm install from a consumer directory using file:../repo-tour yields dist/.\n4. A consumer smoke test (test/consumer.test.ts) imports from the package name, runs digest on a fixture, reads baseCss(), and asserts alternateCss() includes gunmetal. Check: vitest run.\n5. The web app and CLI are unchanged in behaviour. Check: the existing suite passes; ./repo-tour doctor still finds its grammars with no override set.\n6. No new runtime dependency. Check: package.json dependencies unchanged.\n\nOut of scope\n- Publishing to npm — deferred: who=human:evan why=a public artifact is not v1; file: serves his machine\n- Bundling the core into the extension — deferred: who=agent:pm why=the extension loads the core as ESM from node_modules (VSCode-LLM-Tutorial spec §10)",
   "pipeline_version": "feature@v1",
   "modifiers": [],
@@ -23,19 +23,19 @@
     "monitor"
   ],
   "passport": [
-    "2026-09-04 advanced queue → locate · queue on unrecorded",
-    "2026-09-04 advanced locate → plan · locate on unrecorded",
-    "2026-09-04 advanced plan → build · plan on unrecorded",
-    "2026-09-04 advanced build → auto-review · build on unrecorded",
-    "2026-09-04 advanced auto-review → gate · auto-review on unrecorded"
+    "2026-09-04 gate accept cleared by agent:claude(on-behalf:evan,GA-8) on go-ahead GA-8 (\"Let's go ahead and loop through it until these are created a\")",
+    "2026-09-04 advanced uat → release · uat on unrecorded",
+    "2026-09-04 gate deploy cleared by policy:unattended",
+    "2026-09-04 advanced release → monitor · release on unrecorded",
+    "2026-09-04 pipeline complete at monitor"
   ],
   "assignees": {},
   "links": {},
   "gates": {
     "spec_ready": true,
-    "merge": false,
-    "accept": false,
-    "deploy": false,
+    "merge": true,
+    "accept": true,
+    "deploy": true,
     "sp_decide": false,
     "ex_decide": false,
     "compliance": false
@@ -43,8 +43,9 @@
   "overrides": {},
   "risk": "low",
   "loop": {
-    "validator_passed": false,
-    "attempts": 0
+    "validator_passed": true,
+    "attempts": 0,
+    "evidence": ".autodev/reports/T-11-monitor.md"
   },
   "history": [
     {
@@ -88,6 +89,30 @@
       "to": "gate",
       "by": "agent:claude(on-behalf:evan,GA-8)",
       "at": "2026-09-04T23:43:12.767Z"
+    },
+    {
+      "from": "gate",
+      "to": "verify",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-04T23:43:28.578Z"
+    },
+    {
+      "from": "verify",
+      "to": "uat",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-04T23:43:35.680Z"
+    },
+    {
+      "from": "uat",
+      "to": "release",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-04T23:43:35.773Z"
+    },
+    {
+      "from": "release",
+      "to": "monitor",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-04T23:43:35.820Z"
     }
   ],
   "receipts": {
@@ -146,6 +171,47 @@
       "by": "agent:claude(on-behalf:evan,GA-8)",
       "at": "2026-09-04T23:43:12.766Z",
       "model": "unrecorded"
+    },
+    "gate": {
+      "evidence": "merged to main as f3c8392 (--no-ff, from main's own checkout), pushed to origin/main; merge gate policy unattended — checks green, review PASS",
+      "kind": "other",
+      "fingerprint": "merged to main as f3c8392 (--no-ff, from main's own checkout), pushed to origin/main; merge gate policy unattended — checks green, review PASS",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-04T23:43:28.577Z",
+      "model": "unrecorded"
+    },
+    "verify": {
+      "evidence": ".autodev/evidence/T-11/verify.txt",
+      "kind": "file",
+      "fingerprint": "sha256:c1259d63df0baedb",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-04T23:43:35.679Z",
+      "model": "unrecorded"
+    },
+    "uat": {
+      "evidence": ".autodev/reports/T-11-uat.md",
+      "kind": "file",
+      "fingerprint": "sha256:5b6348d9f583e40c",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-04T23:43:35.772Z",
+      "model": "unrecorded"
+    },
+    "release": {
+      "evidence": ".autodev/reports/T-11-release.md",
+      "kind": "file",
+      "fingerprint": "sha256:8962d73f11cd9318",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-04T23:43:35.819Z",
+      "model": "unrecorded"
+    },
+    "monitor": {
+      "evidence": ".autodev/reports/T-11-monitor.md",
+      "kind": "file",
+      "fingerprint": "sha256:95dfc837137cae33",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-04T23:43:35.864Z",
+      "model": "unrecorded"
     }
-  }
+  },
+  "completed": true
 }
