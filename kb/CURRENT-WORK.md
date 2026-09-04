@@ -10,11 +10,13 @@ here and found via the reference table below.
 <!-- What is in motion right now: one line per active ticket/effort —
      what, why, where it stands, what is next. Never pruned while live. -->
 
-- **T-11 in flight** — exposing the core as a consumable package (`exports` map, injectable
-  asset roots, a `prepare` build) so `VSCode-LLM-Tutorial`'s extension can `import()` it as a
-  `file:` dependency (that repo's T-1 spec, §3/§10). Worktree `../repo-tour-T-11`, branch
-  `feature/T-11-core-package`; see `.autodev/handoffs/T-11.md`. **T-12** (the build-order
-  engine this package's `./build` export will point at) is running in parallel in
+- **T-11 built, all 6 ACs met, awaiting review/merge** — exposes the core as a consumable
+  package (`exports` map, injectable asset roots, a `prepare` build) so
+  `VSCode-LLM-Tutorial`'s extension can `import()` it as a `file:` dependency (that repo's
+  T-1 spec, §3/§10). 6 commits on `feature/T-11-core-package` in worktree `../repo-tour-T-11`,
+  not pushed/merged; full details and per-AC verification in `.autodev/handoffs/T-11.md`.
+  **T-12** (the build-order engine this package's `./build` export will point at) is running
+  in parallel in
   `../repo-tour-T-12` on disjoint files. Five of the six pieces Evan described on day one are
   shipped; the one left besides these is **T-7, GONS integration** — always the endgame
   rather than the product.
