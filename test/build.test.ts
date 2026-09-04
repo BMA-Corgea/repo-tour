@@ -12,9 +12,12 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { digest } from '../src/digest.js';
+import { extract } from '../src/extract.js';
 import { buildArchitecture } from '../src/architecture.js';
 import { buildPlan } from '../src/build/plan.js';
+import { stubFile } from '../src/build/stub.js';
 import type { BuildPlan } from '../src/build/types.js';
+import type { FileRecord } from '../src/types.js';
 
 function git(cwd: string, ...args: string[]): void {
   execFileSync('git', ['-C', cwd, ...args], { stdio: ['ignore', 'ignore', 'ignore'] });
@@ -359,5 +362,83 @@ describe('the build-order engine — the symbol cap (AC2)', () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+// ================================================================================
+// AC5 — the stub generator: stubbed TS, JS and Python still parse, zero ERROR nodes
+// ================================================================================
+
+/** Write `source` under a throwaway root, run the real extractor, return its parseErrors. */
+async function parseErrorsOf(source: string, language: string, ext: string): Promise<number> {
+  const dir = tmp('repo-tour-stub-parse-');
+  try {
+    const relPath = `f.${ext}`;
+    fs.writeFileSync(path.join(dir, relPath), source);
+    const record: FileRecord = {
+      path: relPath, repo: '', bytes: Buffer.byteLength(source, 'utf8'), loc: source.split(/\r?\n/).length,
+      language, sha256: '', classification: 'source', signals: [], binary: false,
+    };
+    const { extracts } = await extract(dir, [record]);
+    expect(extracts, `extract() produced nothing for a ${language} fixture`).toHaveLength(1);
+    return extracts[0]!.parseErrors;
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+describe('the build-order engine — the scaffold writer (AC5)', () => {
+  it('a stubbed TypeScript function still parses, with zero ERROR nodes', async () => {
+    const source = "export function run(job: string): string {\n  const shouted = job.toUpperCase();\n  return shouted;\n}\n";
+    const stubbed = stubFile(source, [{ startLine: 1, endLine: 4 }], 'typescript', [{ ordinal: 1, question: 'How should run behave?' }]);
+    expect(stubbed).toContain('TODO(step 1)');
+    expect(stubbed).not.toContain('shouted');
+    expect(await parseErrorsOf(stubbed, 'typescript', 'ts')).toBe(0);
+  });
+
+  it('a stubbed arrow function (no block body in the reference) still parses', async () => {
+    const source = 'export const add = (a: number, b: number) => a + b;\n';
+    const stubbed = stubFile(source, [{ startLine: 1, endLine: 1 }], 'typescript', [{ ordinal: 2, question: 'How should add combine its inputs?' }]);
+    expect(stubbed).toContain('=>');
+    expect(stubbed).not.toContain('a + b');
+    expect(await parseErrorsOf(stubbed, 'typescript', 'ts')).toBe(0);
+  });
+
+  it('a stubbed JavaScript function still parses', async () => {
+    const source = "function run(job) {\n  return job.toUpperCase();\n}\nmodule.exports = { run };\n";
+    const stubbed = stubFile(source, [{ startLine: 1, endLine: 3 }], 'javascript', [{ ordinal: 1, question: 'How should run behave?' }]);
+    expect(stubbed).toContain('module.exports');
+    expect(await parseErrorsOf(stubbed, 'javascript', 'js')).toBe(0);
+  });
+
+  it('a stubbed Python function keeps the def line and raises, and still parses', async () => {
+    const source = 'def run(job):\n    """Send a job through."""\n    return job.upper()\n';
+    const stubbed = stubFile(source, [{ startLine: 1, endLine: 3 }], 'python', [{ ordinal: 3, question: 'How should run behave?' }]);
+    expect(stubbed).toContain('def run(job):');
+    expect(stubbed).toContain('raise NotImplementedError');
+    expect(stubbed).toContain('TODO(step 3)');
+    expect(await parseErrorsOf(stubbed, 'python', 'py')).toBe(0);
+  });
+
+  it('a stubbed Python class still parses, and measures its own body indentation', async () => {
+    const source = 'class Engine:\n  def start(self):\n    return 1\n';
+    const stubbed = stubFile(source, [{ startLine: 1, endLine: 3 }], 'python', []);
+    // the body used 2-space indent; the stub must match it, not assume 4
+    expect(stubbed).toBe('class Engine:\n  raise NotImplementedError  # TODO(this step): fill this in\n');
+    expect(await parseErrorsOf(stubbed, 'python', 'py')).toBe(0);
+  });
+
+  it('a plain exported constant has no body to hide and is left untouched, byte for byte', () => {
+    const source = 'export const MAX_RETRIES = 3;\n';
+    const stubbed = stubFile(source, [{ startLine: 1, endLine: 1 }], 'typescript', []);
+    expect(stubbed).toBe(source);
+  });
+
+  it('only the load-bearing range is hidden; everything else survives byte for byte', async () => {
+    const source = "export function keep(): number {\n  return 1;\n}\n\nexport function hide(): number {\n  return 2;\n}\n";
+    const stubbed = stubFile(source, [{ startLine: 5, endLine: 7 }], 'typescript', [{ ordinal: 1, question: 'q' }]);
+    expect(stubbed).toContain('export function keep(): number {\n  return 1;\n}');
+    expect(stubbed).not.toContain('return 2;');
+    expect(await parseErrorsOf(stubbed, 'typescript', 'ts')).toBe(0);
   });
 });
