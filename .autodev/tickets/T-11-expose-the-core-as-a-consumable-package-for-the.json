@@ -3,8 +3,8 @@
   "slug": "expose-the-core-as-a-consumable-package-for-the",
   "type": "feature",
   "title": "Expose the core as a consumable package — for the VS Code front end",
-  "stage": "build",
-  "status": "building",
+  "stage": "gate",
+  "status": "awaiting_approval",
   "spec": "WHY: VSCode-LLM-Tutorial (github.com/BMA-Corgea/VSCode-LLM-Tutorial) is the second front end on this core — Evan: 'I want it to be part of the same app.' Its extension host imports the digest, interpret, llm, ask and skins modules directly (VSCode-LLM-Tutorial spec §3, .autodev/specs/T-1-build-tutorials-v1.md in that repo). Today package.json is private:true with no exports map, dist/ is gitignored, and two modules locate assets only via import.meta.url: src/skins.ts skinsDir() and src/extract.ts grammarPath().\n\nACs:\n1. package.json carries an exports map naming the public modules: ./digest ./interpret ./llm ./ask ./skins ./extract ./types ./rollup ./architecture ./codetour ./build (the last lands with T-12; export the path now). Check: node -e import() of each from a directory outside the repo resolves.\n2. Asset roots are injectable: skinsDir and grammarPath accept an override (an options argument or REPO_TOUR_ASSETS / REPO_TOUR_GRAMMARS env) and fall back to the import.meta.url resolution. Check: a test loads skins and a grammar from a copied assets dir with the override set.\n3. A prepare script builds dist/ on install, so a file: or git dependency works without a manual build. Check: npm install from a consumer directory using file:../repo-tour yields dist/.\n4. A consumer smoke test (test/consumer.test.ts) imports from the package name, runs digest on a fixture, reads baseCss(), and asserts alternateCss() includes gunmetal. Check: vitest run.\n5. The web app and CLI are unchanged in behaviour. Check: the existing suite passes; ./repo-tour doctor still finds its grammars with no override set.\n6. No new runtime dependency. Check: package.json dependencies unchanged.\n\nOut of scope\n- Publishing to npm — deferred: who=human:evan why=a public artifact is not v1; file: serves his machine\n- Bundling the core into the extension — deferred: who=agent:pm why=the extension loads the core as ESM from node_modules (VSCode-LLM-Tutorial spec §10)",
   "pipeline_version": "feature@v1",
   "modifiers": [],
@@ -23,11 +23,11 @@
     "monitor"
   ],
   "passport": [
-    "2026-09-04 gate spec_ready cleared by agent:claude(on-behalf:evan,GA-8) on go-ahead GA-8 (\"Let's go ahead and loop through it until these are created a\")",
-    "2026-09-04 advanced refine → queue · refine on unrecorded",
     "2026-09-04 advanced queue → locate · queue on unrecorded",
     "2026-09-04 advanced locate → plan · locate on unrecorded",
-    "2026-09-04 advanced plan → build · plan on unrecorded"
+    "2026-09-04 advanced plan → build · plan on unrecorded",
+    "2026-09-04 advanced build → auto-review · build on unrecorded",
+    "2026-09-04 advanced auto-review → gate · auto-review on unrecorded"
   ],
   "assignees": {},
   "links": {},
@@ -76,6 +76,18 @@
       "to": "build",
       "by": "agent:claude(on-behalf:evan,GA-8)",
       "at": "2026-09-04T23:02:09.883Z"
+    },
+    {
+      "from": "build",
+      "to": "auto-review",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-04T23:26:39.403Z"
+    },
+    {
+      "from": "auto-review",
+      "to": "gate",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-04T23:43:12.767Z"
     }
   ],
   "receipts": {
@@ -117,6 +129,22 @@
       "fingerprint": "sha256:bb7c44c855b7d130",
       "by": "agent:claude(on-behalf:evan,GA-8)",
       "at": "2026-09-04T23:02:09.881Z",
+      "model": "unrecorded"
+    },
+    "build": {
+      "evidence": "commits 718c609 ef1d715 9563740 bb7ff42 4ff6698 bb78643 ae66343 on feature/T-11-core-package (worktree ../repo-tour-T-11); npm run typecheck clean; npm test 127/127 (118 existing + 9 new in test/consumer.test.ts); coder seat model sonnet",
+      "kind": "other",
+      "fingerprint": "commits 718c609 ef1d715 9563740 bb7ff42 4ff6698 bb78643 ae66343 on feature/T-11-core-package (worktree ../repo-tour-T-11); npm run typecheck clean; npm test 127/127 (118 existing + 9 new in test/consumer.test.ts); coder seat model sonnet",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-04T23:26:39.402Z",
+      "model": "unrecorded"
+    },
+    "auto-review": {
+      "evidence": "review record .autodev/reviews/T-11.md committed as 9683f01 on feature/T-11-core-package — Verdict PASS: 0 gating, 4 advisory waived (AC3 test does not rm dist before npm pack; alternateCss silent under a garbage REPO_TOUR_ASSETS; doctor lives in the bash control script; grammarsDir precedence untested); reviewer seat model sonnet, fresh session",
+      "kind": "other",
+      "fingerprint": "review record .autodev/reviews/T-11.md committed as 9683f01 on feature/T-11-core-package — Verdict PASS: 0 gating, 4 advisory waived (AC3 test does not rm dist before npm pack; alternateCss silent under a garbage REPO_TOUR_ASSETS; doctor lives in the bash control script; grammarsDir precedence untested); reviewer seat model sonnet, fresh session",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-04T23:43:12.766Z",
       "model": "unrecorded"
     }
   }

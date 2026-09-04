@@ -18,6 +18,9 @@ here and found via the reference table below.
   session was messaged. Its `spec_ready` was deliberately NOT cleared: how it lands in the
   Office is GUTS's decision. **repo-tour's T-7 is the counterpart and is still unopened** —
   open it when GUTS says what it needs, not before.
+- **T-13** (feature) — Interpret the decisions — alternatives per build step, and Ask context for a st… — intake
+- **T-11** (feature) — Expose the core as a consumable package — for the VS Code front end — gate
+- **T-12** (feature) — The build-order engine — digest → BuildPlan, and the structural check — build
 
 ## Waiting on
 
@@ -27,12 +30,15 @@ here and found via the reference table below.
 - Nothing is held. Every gate that is Evan's was spent on his own recorded go-aheads
   (GA-3 through GA-7) because he asked not to be stopped mid-flight. **The open loop is his
   read of the notes + Ask panels**, which he has not used yet at the time of writing.
+- **T-11** — waiting at spec_ready on human:owner since 2026-09-04
+- **T-12** — waiting at spec_ready on human:owner since 2026-09-04
 
 ## Recent past (~15 items / ~30 days)
 
 <!-- One line per completed item, WITH the why. Newest first. Prune from the
      bottom; the permanent record lives in tickets, events.jsonl, and wiki. -->
 
+- 2026-09-04 **T-10 CLOSED duplicate** — Tutor chat during a tour — context-aware Q&A on the current step
 - **2026-08-27** — **T-3 COMPLETE**, the oldest ask on the project: notes carrying which stop
   inspired them, and an assistant that reads them. Why it took until now: it was deferred at
   every gate since the first spec on the reasoning that a tour has to be worth taking notes
