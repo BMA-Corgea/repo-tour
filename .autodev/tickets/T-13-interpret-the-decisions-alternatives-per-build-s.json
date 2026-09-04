@@ -1,0 +1,49 @@
+{
+  "id": "T-13",
+  "slug": "interpret-the-decisions-alternatives-per-build-s",
+  "type": "feature",
+  "title": "Interpret the decisions — alternatives per build step, and Ask context for a step",
+  "stage": "intake",
+  "status": "triage",
+  "spec": "WHY: even in recreate mode the learner must see 'the author chose X; Y and Z were on the table' — that is the teaching, and it is what makes Mode A and divergence a change of defaults rather than new machinery (VSCode-LLM-Tutorial spec §4.3, §7). Same interpret call, one more ask.\n\nACs:\n1. StopMeaning gains alternatives: Array<{label, consequence}> (2 by default) written in the SAME call as what/why/summary; PROMPT_VERSION bumps so old cache entries are recomputed. Check: the interpret prompt test asserts the field and the version bump.\n2. src/build/plan.ts applies interpreted meanings to steps: decision.options becomes the author's option + the alternatives, decision.why = meaning.why with whySource 'interpret'; an uninterpreted step keeps the docstring or 'not inferable' honestly. Check: fixture with a stubbed provider yields options.length === 3.\n3. Cost lands on plan.cost with provider, metered flag, tokens and usd — zeros only when metered:false. Check: manifest field test.\n4. AskContext gains an optional build block: { question, options, why, learnerDiff } and buildContextBlock renders it under a labelled heading, learner diff clipped like the PR diff. Check: unit test on the rendered block; ASK_PERSONA unchanged.\n5. Cached by content hash exactly as stops are — planning a repo already toured pays only for the new prompt version. Check: second run reports cachedStops === interpretedStops of the first.\n\nOut of scope\n- Model-written build ORDER — deferred: who=agent:pm why=order is deterministic from the graph (T-12); the model interprets, never orders\n- Replanning after divergence — VSCode-LLM-Tutorial T-10",
+  "pipeline_version": "feature@v1",
+  "modifiers": [],
+  "pipeline": [
+    "intake",
+    "refine",
+    "queue",
+    "locate",
+    "plan",
+    "build",
+    "auto-review",
+    "gate",
+    "verify",
+    "uat",
+    "release",
+    "monitor"
+  ],
+  "passport": [
+    "2026-09-04 created as feature \"Interpret the decisions — alternatives per build step, and Ask context for a step\" on feature@v1 by agent:claude(on-behalf:evan,session_01Mxgb5pYk1Jb3C1qwp9RLAV)"
+  ],
+  "assignees": {},
+  "links": {},
+  "depends_on": [
+    "T-12"
+  ],
+  "gates": {
+    "spec_ready": false,
+    "merge": false,
+    "accept": false,
+    "deploy": false,
+    "sp_decide": false,
+    "ex_decide": false,
+    "compliance": false
+  },
+  "overrides": {},
+  "risk": "low",
+  "loop": {
+    "validator_passed": false,
+    "attempts": 0
+  },
+  "history": []
+}

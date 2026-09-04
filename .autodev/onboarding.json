@@ -85,6 +85,13 @@
       "by": "agent:pm",
       "question": null,
       "text": "RESUME 2026-08-27: doctor re-run — was FAIL (kb.lint orphan: kb/wiki/decision-implementation-language.md unreachable from kb/index.md); index row added, doctor now PASS 18 checks, 1 warn (unused feature-regulated pipeline role). Full access RE-PROVEN live by ops/verify-access.sh. Monitoring sidecar installed:true running:true."
+    },
+    {
+      "ts": "2026-09-01T19:45:04.330Z",
+      "phase": "setup",
+      "by": "agent:pm",
+      "question": null,
+      "text": "RESUME 2026-09-01: doctor PASS 18 checks / 1 warn (unused feature-regulated pipeline role, compliance-officer). Full access RE-PROVEN live by ops/verify-access.sh. Monitoring sidecar installed:true running:true. Nothing left in required setup; only the optional ABOUT goal is unfilled."
     }
   ]
 }
