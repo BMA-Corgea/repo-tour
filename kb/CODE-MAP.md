@@ -11,9 +11,29 @@ will be overwritten.
 - Exports: (none)
 - Imports: (none)
 
+## src/adjudicate.ts
+
+- Exports: ADJUDICATOR_VERSION, adjudicate
+- Imports: (none)
+
 ## src/architecture.ts
 
 - Exports: architectureBrief, buildArchitecture
+- Imports: (none)
+
+## src/ask.ts
+
+- Exports: ASK_PERSONA, buildAskPrompt, buildContextBlock, trimMessages
+- Imports: (none)
+
+## src/askpanel.ts
+
+- Exports: ASK_CSS, askPanelHtml, askPanelScript
+- Imports: (none)
+
+## src/checkpoint.ts
+
+- Exports: NoCheckpointError, loadCheckpoint, sideAt, staleness
 - Imports: (none)
 
 ## src/cli.ts
@@ -24,6 +44,16 @@ will be overwritten.
 ## src/codetour.ts
 
 - Exports: buildArchitectureSteps, buildCodeTour
+- Imports: (none)
+
+## src/delta.ts
+
+- Exports: claimsOf, fileDelta, meaningDistance, orderByMeaning, ripple, surfaceChange, vocabularyOf
+- Imports: (none)
+
+## src/diff.ts
+
+- Exports: parseUnified, rawDiff, unifiedDiff
 - Imports: (none)
 
 ## src/digest.ts
@@ -43,7 +73,7 @@ will be overwritten.
 
 ## src/interpret.ts
 
-- Exports: DEFAULT_MODEL, PROMPT_VERSION, applyMeanings, defaultCacheDir, interpretArchitecture, interpretStops, stepKey, stopKey
+- Exports: DEFAULT_MODEL, PROMPT_VERSION, SUMMARY_MAX, applyMeanings, defaultCacheDir, fullText, interpretArchitecture, interpretStops, stepKey, stopKey
 - Imports: (none)
 
 ## src/inventory.ts
@@ -61,6 +91,36 @@ will be overwritten.
 - Exports: DEFAULT_PROVIDER, PROVIDERS, killLlmChildren, providerById, resolveBin, resolveChoice, runLlm, surveyProviders
 - Imports: (none)
 
+## src/narrate.ts
+
+- Exports: compress, narrate
+- Imports: (none)
+
+## src/notes.ts
+
+- Exports: NOTES_CSS, notesKey, notesPanelHtml, notesPanelScript
+- Imports: (none)
+
+## src/pr.ts
+
+- Exports: PrResolutionError, diffSet, hunks, issueRefs, lineCounts, listPrs, repoSlug, resolvePr
+- Imports: (none)
+
+## src/prflow.ts
+
+- Exports: runPrFlow
+- Imports: (none)
+
+## src/prtour.ts
+
+- Exports: band, buildPrTour, whyFor
+- Imports: (none)
+
+## src/prview.ts
+
+- Exports: PANE_CSS, renderPrView
+- Imports: (none)
+
 ## src/rank.ts
 
 - Exports: MULTIPLIER, WEIGHTS, churnByFile, rank
@@ -68,7 +128,7 @@ will be overwritten.
 
 ## src/repoview.ts
 
-- Exports: renderRepoView
+- Exports: HIGHLIGHTER, renderRepoView
 - Imports: (none)
 
 ## src/rollup.ts
