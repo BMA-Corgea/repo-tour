@@ -9,6 +9,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { digest } from '../src/digest.js';
@@ -563,5 +564,145 @@ describe('the build-order engine — the structural check (AC6)', () => {
     ].join('\n');
     const report = await check(learnerSource, reference, 'typescript', 'f.ts');
     expect(report.ok).toBe(true);
+  });
+});
+
+// ================================================================================
+// AC8 — the JSON schema: a generated plan validates, a bad plan does not
+// ================================================================================
+//
+// No ajv: package.json is T-11's file this week and the repo has a zero-runtime-
+// dependency stance (refinement notes). This is a small hand-rolled checker covering
+// exactly what the refinement notes ask for — required keys, types, enums — over the
+// draft-07 subset schema/build-plan.schema.json actually uses ($ref, const, enum,
+// oneOf, type, required/properties, items/minItems).
+
+type JsonSchema = Record<string, unknown>;
+
+function resolveRef(root: JsonSchema, ref: string): JsonSchema {
+  const parts = ref.replace(/^#\//, '').split('/');
+  let cur: unknown = root;
+  for (const p of parts) cur = (cur as Record<string, unknown>)[p];
+  return cur as JsonSchema;
+}
+
+function validateAgainst(root: JsonSchema, schema: JsonSchema, value: unknown, at: string, errors: string[]): void {
+  if (typeof schema.$ref === 'string') {
+    validateAgainst(root, resolveRef(root, schema.$ref), value, at, errors);
+    return;
+  }
+  if ('const' in schema) {
+    if (value !== schema.const) errors.push(`${at}: expected ${JSON.stringify(schema.const)}, got ${JSON.stringify(value)}`);
+    return;
+  }
+  if (Array.isArray(schema.enum)) {
+    if (!schema.enum.includes(value)) errors.push(`${at}: expected one of ${JSON.stringify(schema.enum)}, got ${JSON.stringify(value)}`);
+    return;
+  }
+  if (Array.isArray(schema.oneOf)) {
+    const matches = (schema.oneOf as JsonSchema[]).filter((s) => {
+      const sub: string[] = [];
+      validateAgainst(root, s, value, at, sub);
+      return sub.length === 0;
+    });
+    if (matches.length !== 1) errors.push(`${at}: expected exactly one oneOf branch to match, ${matches.length} did`);
+    return;
+  }
+
+  if (schema.type !== undefined) {
+    const types = Array.isArray(schema.type) ? (schema.type as string[]) : [schema.type as string];
+    const ok = types.some((t) => {
+      if (t === 'null') return value === null;
+      if (t === 'array') return Array.isArray(value);
+      if (t === 'integer') return typeof value === 'number' && Number.isInteger(value);
+      if (t === 'object') return typeof value === 'object' && value !== null && !Array.isArray(value);
+      return typeof value === t;
+    });
+    if (!ok) { errors.push(`${at}: expected type ${JSON.stringify(schema.type)}, got ${JSON.stringify(value)}`); return; }
+  }
+
+  if (schema.type === 'object' && typeof value === 'object' && value !== null && !Array.isArray(value)) {
+    const obj = value as Record<string, unknown>;
+    for (const key of (schema.required as string[] | undefined) ?? []) {
+      if (!(key in obj)) errors.push(`${at}: missing required key "${key}"`);
+    }
+    const props = (schema.properties as Record<string, JsonSchema> | undefined) ?? {};
+    for (const [key, sub] of Object.entries(props)) {
+      if (key in obj) validateAgainst(root, sub, obj[key], `${at}.${key}`, errors);
+    }
+  }
+
+  if (schema.type === 'array' && Array.isArray(value)) {
+    if (typeof schema.minItems === 'number' && value.length < schema.minItems) {
+      errors.push(`${at}: expected at least ${schema.minItems} items, got ${value.length}`);
+    }
+    if (schema.items) value.forEach((v, i) => validateAgainst(root, schema.items as JsonSchema, v, `${at}[${i}]`, errors));
+  }
+}
+
+function validateBuildPlan(schema: JsonSchema, value: unknown): string[] {
+  const errors: string[] = [];
+  validateAgainst(schema, schema, value, '$', errors);
+  return errors;
+}
+
+describe('the build-order engine — the JSON schema (AC8)', () => {
+  // fileURLToPath, never `new URL(...).pathname` — a raw .pathname percent-encodes
+  // spaces, and this very project's path has one ("Coding Projects"). See
+  // `test/pipeline.test.ts`'s "paths with spaces in them" describe block for the defect
+  // this caused the first time repo-tour's own code got this wrong.
+  const schemaPath = fileURLToPath(new URL('../schema/build-plan.schema.json', import.meta.url));
+  const schema = JSON.parse(fs.readFileSync(schemaPath, 'utf8')) as JsonSchema;
+
+  it('validates a plan generated from a real fixture', async () => {
+    const root = tmp('repo-tour-schema-');
+    try {
+      initRepo(root);
+      write(path.join(root, 'src/a.ts'), "export function a(): number {\n  return 1;\n}\n");
+      write(path.join(root, 'src/b.ts'), "export function b(): number {\n  return 2;\n}\n");
+      commitAll(root, 'initial');
+
+      const d = await digest(root, { write: false });
+      const plan = await buildPlan(d, { root });
+      const errors = validateBuildPlan(schema, plan);
+      expect(errors).toEqual([]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a plan with an invalid mode', async () => {
+    const root = tmp('repo-tour-schema-bad-');
+    try {
+      initRepo(root);
+      write(path.join(root, 'src/a.ts'), 'export const A = 1;\n');
+      commitAll(root, 'initial');
+
+      const d = await digest(root, { write: false });
+      const plan = await buildPlan(d, { root });
+      const bad = { ...plan, mode: 'bogus' };
+      const errors = validateBuildPlan(schema, bad);
+      expect(errors.length).toBeGreaterThan(0);
+      expect(errors.some((e) => e.includes('.mode'))).toBe(true);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a plan missing a required top-level key', async () => {
+    const root = tmp('repo-tour-schema-missing-');
+    try {
+      initRepo(root);
+      write(path.join(root, 'src/a.ts'), 'export const A = 1;\n');
+      commitAll(root, 'initial');
+
+      const d = await digest(root, { write: false });
+      const plan = await buildPlan(d, { root }) as Partial<BuildPlan>;
+      delete plan.reproduce;
+      const errors = validateBuildPlan(schema, plan);
+      expect(errors.some((e) => e.includes('missing required key "reproduce"'))).toBe(true);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
