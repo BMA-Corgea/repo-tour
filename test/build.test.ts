@@ -16,8 +16,9 @@ import { extract } from '../src/extract.js';
 import { buildArchitecture } from '../src/architecture.js';
 import { buildPlan } from '../src/build/plan.js';
 import { stubFile } from '../src/build/stub.js';
+import { check } from '../src/build/check.js';
 import type { BuildPlan } from '../src/build/types.js';
-import type { FileRecord } from '../src/types.js';
+import type { FileExtract, FileRecord } from '../src/types.js';
 
 function git(cwd: string, ...args: string[]): void {
   execFileSync('git', ['-C', cwd, ...args], { stdio: ['ignore', 'ignore', 'ignore'] });
@@ -440,5 +441,127 @@ describe('the build-order engine — the scaffold writer (AC5)', () => {
     expect(stubbed).toContain('export function keep(): number {\n  return 1;\n}');
     expect(stubbed).not.toContain('return 2;');
     expect(await parseErrorsOf(stubbed, 'typescript', 'ts')).toBe(0);
+  });
+});
+
+// ================================================================================
+// AC6 — the structural check: never a body comparison
+// ================================================================================
+
+async function extractOf(source: string, language: string, ext: string): Promise<FileExtract> {
+  const dir = tmp('repo-tour-check-reference-');
+  try {
+    const relPath = `f.${ext}`;
+    fs.writeFileSync(path.join(dir, relPath), source);
+    const record: FileRecord = {
+      path: relPath, repo: '', bytes: Buffer.byteLength(source, 'utf8'), loc: source.split(/\r?\n/).length,
+      language, sha256: '', classification: 'source', signals: [], binary: false,
+    };
+    const { extracts } = await extract(dir, [record]);
+    return extracts[0]!;
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+describe('the build-order engine — the structural check (AC6)', () => {
+  const REFERENCE = [
+    "import { shout } from './util.js';",
+    '',
+    'export function run(job: string): string {',
+    '  const loud = shout(job);',
+    '  return loud;',
+    '}',
+    '',
+    'export class Engine {',
+    '  start(): number { return 1; }',
+    '}',
+    '',
+  ].join('\n');
+
+  it('a renamed local variable changes nothing structural and the check passes', async () => {
+    const reference = await extractOf(REFERENCE, 'typescript', 'ts');
+    const learnerSource = REFERENCE.replace(/loud/g, 'result');
+    const report = await check(learnerSource, reference, 'typescript', 'f.ts');
+
+    expect(report.ok).toBe(true);
+    expect(report.symbols.every((s) => s.status === 'present')).toBe(true);
+    expect(report.imports).toEqual([{ raw: './util.js', status: 'present' }]);
+    expect(report.parseErrors).toBe(0);
+  });
+
+  it('a missing export is reported by name and fails the check', async () => {
+    const reference = await extractOf(REFERENCE, 'typescript', 'ts');
+    // Engine dropped entirely — run() survives untouched.
+    const learnerSource = [
+      "import { shout } from './util.js';",
+      '',
+      'export function run(job: string): string {',
+      '  return shout(job);',
+      '}',
+      '',
+    ].join('\n');
+    const report = await check(learnerSource, reference, 'typescript', 'f.ts');
+
+    expect(report.ok).toBe(false);
+    expect(report.symbols).toContainEqual({ name: 'Engine', kind: 'class', status: 'missing' });
+    expect(report.symbols).toContainEqual({ name: 'run', kind: 'function', status: 'present' });
+  });
+
+  it('an export the reference never had is reported as extra, without failing on its own', async () => {
+    const reference = await extractOf(REFERENCE, 'typescript', 'ts');
+    const learnerSource = `${REFERENCE}\nexport function bonus(): number { return 0; }\n`;
+    const report = await check(learnerSource, reference, 'typescript', 'f.ts');
+
+    expect(report.symbols).toContainEqual({ name: 'bonus', kind: 'function', status: 'extra' });
+    // every REFERENCE symbol is still present, and extras alone do not fail the check
+    expect(report.symbols.filter((s) => s.status === 'missing')).toEqual([]);
+    expect(report.ok).toBe(true);
+  });
+
+  it('a missing import is reported and fails the check', async () => {
+    const reference = await extractOf(REFERENCE, 'typescript', 'ts');
+    const learnerSource = [
+      'export function run(job: string): string {',
+      '  return job.toUpperCase();',
+      '}',
+      '',
+      'export class Engine {',
+      '  start(): number { return 1; }',
+      '}',
+      '',
+    ].join('\n');
+    const report = await check(learnerSource, reference, 'typescript', 'f.ts');
+
+    expect(report.imports).toEqual([{ raw: './util.js', status: 'missing' }]);
+    expect(report.ok).toBe(false);
+  });
+
+  it('a learner file that fails to parse is never reported clean', async () => {
+    const reference = await extractOf(REFERENCE, 'typescript', 'ts');
+    const report = await check('export function run( { {{{ broken', reference, 'typescript', 'f.ts');
+
+    expect(report.parseErrors).toBeGreaterThan(0);
+    expect(report.ok).toBe(false);
+  });
+
+  it('never inspects a body: a completely rewritten implementation of the same signature still passes', async () => {
+    const reference = await extractOf(REFERENCE, 'typescript', 'ts');
+    const learnerSource = [
+      "import { shout } from './util.js';",
+      '',
+      'export function run(job: string): string {',
+      '  if (!job) return shout("");',
+      '  for (let i = 0; i < 3; i++) { /* nothing */ }',
+      '  return shout(job);',
+      '}',
+      '',
+      'export class Engine {',
+      '  start(): number { const n = 1; return n; }',
+      '}',
+      '',
+    ].join('\n');
+    const report = await check(learnerSource, reference, 'typescript', 'f.ts');
+    expect(report.ok).toBe(true);
   });
 });
