@@ -23,9 +23,18 @@ here and found via the reference table below.
   saved transcript per tour stamped by stop; streamed answers; the tutor gets its own model,
   strongest by default; a keep button that pre-fills the note box; clickable citations that
   flag a file it was never shown; both the repo tour and the PR page. Acceptance is HIS test
-  drive (Q10) — the first gate since 27 August that genuinely waits. Branch
-  `feature/T-18-finish-the-tutor`, worktree `../repo-tour-T-18`, 8 slices in
-  `.autodev/plans/T-18.md`.
+  drive (Q10) — the first gate since 27 August that genuinely waits, and where this now sits.
+  **MERGED to local main `6b60e3e`, not pushed.** Two review rounds: attempt 1 REWORK on three
+  blockers — an SSE path that could end with no terminal event (the reader watched eight
+  lookups scroll past and was then left with a deleted answer), page tests that were finding
+  their own source text embedded in the toured page (four features deleted, all 21 still
+  green), and AC11 failing its own stated check. Attempt 2 PASS, all three re-verified by
+  reproduction, plus four take-ups including a symlink named `safe.txt` that defeated the
+  secrets screen the first fix had just added. 348/348 green, clean-room merge-verify PASS on
+  the integrated branch, live-driven in a real browser on merged main with zero page errors.
+  Branch `feature/T-18-finish-the-tutor`, worktree `../repo-tour-T-18`. Full detail:
+  `.autodev/handoffs/T-18.md`; for the test drive, a server is up on http://localhost:7801
+  with sql-gauntlet loaded.
 
   every `public/*.js` file's body sat inside a top-level IIFE, invisible to `extract.ts`;
   `server.js`/`tools/*.js` had real top-level symbols but none `exported`, invisible to
