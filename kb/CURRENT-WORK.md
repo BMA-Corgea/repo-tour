@@ -48,7 +48,6 @@ here and found via the reference table below.
   way `src/tour.ts` computes a tour, never a separate hand-written artifact. Next: T-13
   (interpret: alternatives per step) reads this module's output and does not need to
   change its ordering or step shape. Full detail: `.autodev/handoffs/T-12.md`.
-- **T-13 built** on `feature/T-13-interpret-decisions` (worktree `../repo-tour-T-13`):
   `src/build/interpret.ts#interpretPlan` folds two alternatives — and what each would have
   cost — into every `symbol`/`file` step's decision, asked in the SAME model call that
   already writes `what`/`why`/`summary` (`src/interpret.ts`, `PROMPT_VERSION` 5 → 6); a step
@@ -65,7 +64,6 @@ here and found via the reference table below.
   Office is GUTS's decision. **repo-tour's T-7 is the counterpart and is still unopened** —
   open it when GUTS says what it needs, not before.
 - **T-14** (techdebt) — Harden T-11's consumer tests: prove prepare rebuilds dist, and make alternateCs… — intake
-- **T-13** (feature) — Interpret the decisions — alternatives per build step, and Ask context for a st… — gate
 - **T-16** (feature) — Module-pattern and .call(this) IIFEs: record their body declarations too — intake
 
 ## Waiting on
@@ -76,13 +74,13 @@ here and found via the reference table below.
 - Nothing is held. Every gate that is Evan's was spent on his own recorded go-aheads
   (GA-3 through GA-7) because he asked not to be stopped mid-flight. **The open loop is his
   read of the notes + Ask panels**, which he has not used yet at the time of writing.
-- **T-13** — waiting at spec_ready on human:owner since 2026-09-05
 
 ## Recent past (~15 items / ~30 days)
 
 <!-- One line per completed item, WITH the why. Newest first. Prune from the
      bottom; the permanent record lives in tickets, events.jsonl, and wiki. -->
 
+- 2026-09-05 **T-13 COMPLETE** — Interpret the decisions — alternatives per build step, and Ask context for a st…
 - 2026-09-05 **T-15 COMPLETE** — Script-style JS yields no load-bearing ranges: IIFE bodies are invisible to ext…
 - 2026-09-05 **T-12 COMPLETE** — The build-order engine — digest → BuildPlan, and the structural check
 - 2026-09-04 **T-11 COMPLETE** — Expose the core as a consumable package — for the VS Code front end

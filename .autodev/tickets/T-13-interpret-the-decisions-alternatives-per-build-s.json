@@ -3,8 +3,8 @@
   "slug": "interpret-the-decisions-alternatives-per-build-s",
   "type": "feature",
   "title": "Interpret the decisions — alternatives per build step, and Ask context for a step",
-  "stage": "gate",
-  "status": "awaiting_approval",
+  "stage": "monitor",
+  "status": "complete",
   "spec": "WHY: even in recreate mode the learner must see 'the author chose X; Y and Z were on the table' — that is the teaching, and it is what makes Mode A and divergence a change of defaults rather than new machinery (VSCode-LLM-Tutorial spec §4.3, §7). Same interpret call, one more ask.\n\nACs:\n1. StopMeaning gains alternatives: Array<{label, consequence}> (2 by default) written in the SAME call as what/why/summary; PROMPT_VERSION bumps so old cache entries are recomputed. Check: the interpret prompt test asserts the field and the version bump.\n2. src/build/plan.ts applies interpreted meanings to steps: decision.options becomes the author's option + the alternatives, decision.why = meaning.why with whySource 'interpret'; an uninterpreted step keeps the docstring or 'not inferable' honestly. Check: fixture with a stubbed provider yields options.length === 3.\n3. Cost lands on plan.cost with provider, metered flag, tokens and usd — zeros only when metered:false. Check: manifest field test.\n4. AskContext gains an optional build block: { question, options, why, learnerDiff } and buildContextBlock renders it under a labelled heading, learner diff clipped like the PR diff. Check: unit test on the rendered block; ASK_PERSONA unchanged.\n5. Cached by content hash exactly as stops are — planning a repo already toured pays only for the new prompt version. Check: second run reports cachedStops === interpretedStops of the first.\n\nOut of scope\n- Model-written build ORDER — deferred: who=agent:pm why=order is deterministic from the graph (T-12); the model interprets, never orders\n- Replanning after divergence — VSCode-LLM-Tutorial T-10",
   "pipeline_version": "feature@v1",
   "modifiers": [],
@@ -23,11 +23,11 @@
     "monitor"
   ],
   "passport": [
-    "2026-09-05 advanced queue → locate · queue on unrecorded",
-    "2026-09-05 advanced locate → plan · locate on unrecorded",
-    "2026-09-05 advanced plan → build · plan on unrecorded",
-    "2026-09-05 advanced build → auto-review · build on unrecorded",
-    "2026-09-05 advanced auto-review → gate · auto-review on unrecorded"
+    "2026-09-05 gate accept cleared by agent:claude(on-behalf:evan,GA-8) on go-ahead GA-8 (\"Let's go ahead and loop through it until these are created a\")",
+    "2026-09-05 advanced uat → release · uat on unrecorded",
+    "2026-09-05 gate deploy cleared by policy:unattended",
+    "2026-09-05 advanced release → monitor · release on unrecorded",
+    "2026-09-05 pipeline complete at monitor"
   ],
   "assignees": {},
   "links": {},
@@ -36,9 +36,9 @@
   ],
   "gates": {
     "spec_ready": true,
-    "merge": false,
-    "accept": false,
-    "deploy": false,
+    "merge": true,
+    "accept": true,
+    "deploy": true,
     "sp_decide": false,
     "ex_decide": false,
     "compliance": false
@@ -46,8 +46,9 @@
   "overrides": {},
   "risk": "low",
   "loop": {
-    "validator_passed": false,
-    "attempts": 0
+    "validator_passed": true,
+    "attempts": 0,
+    "evidence": ".autodev/reports/T-13-monitor.md"
   },
   "history": [
     {
@@ -91,6 +92,30 @@
       "to": "gate",
       "by": "agent:claude(on-behalf:evan,GA-8)",
       "at": "2026-09-05T02:17:08.161Z"
+    },
+    {
+      "from": "gate",
+      "to": "verify",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-05T02:17:11.150Z"
+    },
+    {
+      "from": "verify",
+      "to": "uat",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-05T02:17:47.435Z"
+    },
+    {
+      "from": "uat",
+      "to": "release",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-05T02:17:47.706Z"
+    },
+    {
+      "from": "release",
+      "to": "monitor",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-05T02:17:47.921Z"
     }
   ],
   "receipts": {
@@ -149,6 +174,47 @@
       "by": "agent:claude(on-behalf:evan,GA-8)",
       "at": "2026-09-05T02:17:08.159Z",
       "model": "unrecorded"
+    },
+    "gate": {
+      "evidence": "merged to main as 3c94016 (--no-ff, from main's own checkout), pushed to origin/main; merge gate policy unattended — checks green, review PASS",
+      "kind": "other",
+      "fingerprint": "merged to main as 3c94016 (--no-ff, from main's own checkout), pushed to origin/main; merge gate policy unattended — checks green, review PASS",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-05T02:17:11.145Z",
+      "model": "unrecorded"
+    },
+    "verify": {
+      "evidence": ".autodev/evidence/T-13/verify.txt",
+      "kind": "file",
+      "fingerprint": "sha256:29eb17b45eb6c17e",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-05T02:17:47.430Z",
+      "model": "unrecorded"
+    },
+    "uat": {
+      "evidence": ".autodev/reports/T-13-uat.md",
+      "kind": "file",
+      "fingerprint": "sha256:df24f156c949bff9",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-05T02:17:47.701Z",
+      "model": "unrecorded"
+    },
+    "release": {
+      "evidence": ".autodev/reports/T-13-release.md",
+      "kind": "file",
+      "fingerprint": "sha256:e94baef7a3dbece3",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-05T02:17:47.915Z",
+      "model": "unrecorded"
+    },
+    "monitor": {
+      "evidence": ".autodev/reports/T-13-monitor.md",
+      "kind": "file",
+      "fingerprint": "sha256:6b656193377804d0",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-05T02:17:48.158Z",
+      "model": "unrecorded"
     }
-  }
+  },
+  "completed": true
 }
