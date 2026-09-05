@@ -129,5 +129,11 @@ export interface CheckReport {
   symbols: Array<{ name: string; kind: SymbolKind; status: 'present' | 'missing' | 'extra' }>;
   imports: Array<{ raw: string; status: 'present' | 'missing' }>;
   parseErrors: number;
+  /**
+   * Free text, present ONLY when `parseErrors > 0`: the numeric count can say a file did
+   * not parse but never why, and "why" is the one thing a learner staring at a red check
+   * actually needs. Still structural — it describes the parse, never a body.
+   */
+  reason?: string;
   ok: boolean;
 }

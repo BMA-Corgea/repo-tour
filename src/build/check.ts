@@ -59,12 +59,18 @@ function compare(reference: FileExtract, learner: FileExtract | undefined): Chec
   // is reported as having at least one problem — never silently "clean".
   const parseErrors = learner ? learner.parseErrors : 1;
 
+  const reason = parseErrors === 0
+    ? undefined
+    : learner
+      ? `the file parsed with ${parseErrors} error${parseErrors === 1 ? '' : 's'} — check the syntax before the structure`
+      : 'extract() produced nothing for this file: an unsupported language, or source it could not read';
+
   const ok =
     symbols.every((s) => s.status !== 'missing') &&
     imports.every((i) => i.status !== 'missing') &&
     parseErrors === 0;
 
-  return { symbols, imports, parseErrors, ok };
+  return { symbols, imports, parseErrors, reason, ok };
 }
 
 /**

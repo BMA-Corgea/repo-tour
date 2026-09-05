@@ -625,6 +625,17 @@ describe('the build-order engine — the structural check (AC6)', () => {
 
     expect(report.parseErrors).toBeGreaterThan(0);
     expect(report.ok).toBe(false);
+    // the numeric count alone cannot say WHY — a free-text reason rides along with it
+    expect(report.reason).toBeTypeOf('string');
+    expect(report.reason).toContain('error');
+  });
+
+  it('a clean report carries no reason — the field exists only to explain a failure', async () => {
+    const reference = await extractOf(REFERENCE, 'typescript', 'ts');
+    const report = await check(REFERENCE, reference, 'typescript', 'f.ts');
+    expect(report.parseErrors).toBe(0);
+    expect(report.ok).toBe(true);
+    expect(report.reason).toBeUndefined();
   });
 
   it('never inspects a body: a completely rewritten implementation of the same signature still passes', async () => {
