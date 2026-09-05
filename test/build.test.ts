@@ -18,8 +18,11 @@ import { buildArchitecture } from '../src/architecture.js';
 import { buildPlan } from '../src/build/plan.js';
 import { stubFile } from '../src/build/stub.js';
 import { check } from '../src/build/check.js';
+import { interpretPlan } from '../src/build/interpret.js';
 import type { BuildPlan, Range } from '../src/build/types.js';
+import { interpretStops, PROMPT_VERSION, stepKey } from '../src/interpret.js';
 import type { FileExtract, FileRecord } from '../src/types.js';
+import type { LlmReply } from '../src/llm.js';
 
 function git(cwd: string, ...args: string[]): void {
   execFileSync('git', ['-C', cwd, ...args], { stdio: ['ignore', 'ignore', 'ignore'] });
@@ -1275,4 +1278,382 @@ describe('the build-order engine — a renamed-in path still has a witness (AC4)
       if (s.kind === 'shape') expect(s.witness).toEqual({ sha: null, date: null, subject: null });
     }
   });
+});
+
+
+// ================================================================================
+// T-13 — the interpret stage: the runner seam, PROMPT_VERSION, and `alternatives`
+// ================================================================================
+//
+// `interpretStops` normally spawns the real `claude` CLI — untestable without either a
+// live subscription or a slow, flaky suite. T-13 adds `InterpretOptions.runner?` so a test
+// can feed it canned JSON instead; every test in this file uses it, and none spawns
+// `claude`.
+
+describe('the interpret stage — the runner seam and the alternatives field (T-13, AC1)', () => {
+  it('PROMPT_VERSION has bumped — old cached explanations are recomputed under the new prompt', () => {
+    expect(PROMPT_VERSION).toBe(6);
+  });
+
+  it('interpretStops uses the injected runner, never the real one, and the canned text lands in meanings', async () => {
+    const root = tmp('repo-tour-interpret-seam-');
+    const cacheDir = tmp('repo-tour-interpret-seam-cache-');
+    try {
+      write(path.join(root, 'src/shout.ts'), 'export function shout(s: string): string {\n  return s.toUpperCase();\n}\n');
+      const file: FileRecord = {
+        path: 'src/shout.ts', repo: '', bytes: 0, loc: 3, language: 'typescript',
+        sha256: 'seam-test-sha', classification: 'source', signals: [], binary: false,
+      };
+      const step = { file: 'src/shout.ts', startLine: 1, endLine: 3, title: 'why shout?', text: '' };
+
+      let calls = 0;
+      const prompts: string[] = [];
+      const cannedRunner = async (prompt: string): Promise<LlmReply> => {
+        calls++;
+        prompts.push(prompt);
+        return {
+          text: JSON.stringify([{
+            n: 1, what: 'Canned: uppercases a string.', why: 'Canned: logs read better shouted.',
+            summary: 'Canned summary.',
+            alternatives: [
+              { label: 'Use a regex replace', consequence: 'Slower, no real benefit here.' },
+              { label: 'Delegate to a locale-aware library', consequence: 'Correct for Turkish "i", but a new dependency.' },
+            ],
+          }]),
+          inputTokens: 10, outputTokens: 5, usd: 0.001, metered: true,
+        };
+      };
+
+      const { meanings, cost } = await interpretStops(root, [step], [file], [], [], { runner: cannedRunner, cacheDir });
+
+      expect(calls).toBe(1); // the seam was actually used — not the real runLlm
+      expect(cost.calls).toBe(1);
+      const meaning = meanings.get(stepKey('src/shout.ts', 1, 3));
+      expect(meaning?.what).toBe('Canned: uppercases a string.');
+      expect(meaning?.alternatives).toEqual([
+        { label: 'Use a regex replace', consequence: 'Slower, no real benefit here.' },
+        { label: 'Delegate to a locale-aware library', consequence: 'Correct for Turkish "i", but a new dependency.' },
+      ]);
+
+      // the prompt really does ask for the new field, not just happen to parse one
+      expect(prompts[0]).toMatch(/"alternatives"/);
+      expect(prompts[0]).toMatch(/two OTHER reasonable ways/i);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(cacheDir, { recursive: true, force: true });
+    }
+  });
+
+  it('a reply that omits alternatives entirely is not a failure — it yields an empty array, honestly', async () => {
+    const root = tmp('repo-tour-interpret-noalt-');
+    const cacheDir = tmp('repo-tour-interpret-noalt-cache-');
+    try {
+      write(path.join(root, 'src/plain.ts'), 'export const PLAIN = 1;\n');
+      const file: FileRecord = {
+        path: 'src/plain.ts', repo: '', bytes: 0, loc: 1, language: 'typescript',
+        sha256: 'noalt-test-sha', classification: 'source', signals: [], binary: false,
+      };
+      const step = { file: 'src/plain.ts', startLine: 1, endLine: 1, title: 'why plain?', text: '' };
+
+      const cannedRunner = async (): Promise<LlmReply> => ({
+        text: JSON.stringify([{ n: 1, what: 'A constant.', why: 'Just a value.', summary: 'A constant.' }]),
+        inputTokens: 1, outputTokens: 1, usd: 0, metered: true,
+      });
+
+      const { meanings } = await interpretStops(root, [step], [file], [], [], { runner: cannedRunner, cacheDir });
+      const meaning = meanings.get(stepKey('src/plain.ts', 1, 1));
+      expect(meaning?.what).toBe('A constant.');
+      expect(meaning?.alternatives).toEqual([]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(cacheDir, { recursive: true, force: true });
+    }
+  });
+
+  it('a malformed alternatives entry is dropped rather than let through half-formed', async () => {
+    const root = tmp('repo-tour-interpret-badalt-');
+    const cacheDir = tmp('repo-tour-interpret-badalt-cache-');
+    try {
+      write(path.join(root, 'src/plain2.ts'), 'export const PLAIN2 = 1;\n');
+      const file: FileRecord = {
+        path: 'src/plain2.ts', repo: '', bytes: 0, loc: 1, language: 'typescript',
+        sha256: 'badalt-test-sha', classification: 'source', signals: [], binary: false,
+      };
+      const step = { file: 'src/plain2.ts', startLine: 1, endLine: 1, title: 'why plain2?', text: '' };
+
+      const cannedRunner = async (): Promise<LlmReply> => ({
+        text: JSON.stringify([{
+          n: 1, what: 'A constant.', why: 'Just a value.', summary: 'A constant.',
+          alternatives: [
+            { label: 'ok', consequence: 'fine' },
+            'garbage',
+            { label: 'no consequence field' },
+            { label: 42, consequence: 'wrong types' },
+          ],
+        }]),
+        inputTokens: 1, outputTokens: 1, usd: 0, metered: true,
+      });
+
+      const { meanings } = await interpretStops(root, [step], [file], [], [], { runner: cannedRunner, cacheDir });
+      const meaning = meanings.get(stepKey('src/plain2.ts', 1, 1));
+      expect(meaning?.alternatives).toEqual([{ label: 'ok', consequence: 'fine' }]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(cacheDir, { recursive: true, force: true });
+    }
+  });
+});
+
+
+// ================================================================================
+// T-13 — interpretPlan: folding alternatives into a BuildPlan
+// ================================================================================
+//
+// Every test here injects a canned runner that echoes each excerpt's own title back in its
+// answer, so an assertion can always tell which step's meaning it is looking at regardless
+// of how many stops `interpretStops` bundled into one file's job.
+
+/**
+ * A runner that answers every excerpt in a prompt, keyed by the excerpt's own title (which
+ * `codeStepsFor` sets to the step's own decision question), so assertions never have to
+ * guess which numbered answer belongs to which step.
+ */
+function titleEchoRunner(calls: { count: number }): (prompt: string) => Promise<LlmReply> {
+  return async (prompt: string): Promise<LlmReply> => {
+    calls.count++;
+    const titles = [...prompt.matchAll(/^--- EXCERPT \d+ — lines [\d-]+ \((.*)\) ---$/gm)].map((m) => m[1]!);
+    const answers = titles.map((title, i) => ({
+      n: i + 1,
+      what: `[what] ${title}`,
+      why: `[why] ${title}`,
+      summary: `[summary] ${title}`,
+      alternatives: [
+        { label: `alt-A for ${title}`, consequence: 'would cost A' },
+        { label: `alt-B for ${title}`, consequence: 'would cost B' },
+      ],
+    }));
+    return { text: JSON.stringify(answers), inputTokens: 7, outputTokens: 3, usd: 0.0002, metered: true };
+  };
+}
+
+describe('interpretPlan — folding alternatives into a BuildPlan (T-13)', () => {
+  let root: string;
+  let d: DigestResult;
+  let plan: BuildPlan; // buildPlan's own, uninterpreted output — read-only in every test below
+
+  beforeAll(async () => {
+    root = tmp('repo-tour-interpret-plan-');
+    initRepo(root);
+    write(path.join(root, 'src/util.ts'), [
+      '/** Uppercases a job name before it is logged. */',
+      'export function shout(job: string): string {',
+      '  return job.toUpperCase();',
+      '}',
+      '',
+      'export function whisper(job: string): string {',
+      '  return job.toLowerCase();',
+      '}',
+      '',
+    ].join('\n'));
+    // a second direct-code file so `src` clears chooseSubsystems' 2-direct-file bar
+    write(path.join(root, 'src/other.ts'), 'export const OTHER = 1;\n');
+    commitAll(root, 'initial');
+
+    d = await digest(root, { write: false });
+    plan = await buildPlan(d, { root });
+  });
+
+  afterAll(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('AC1/AC2 — an interpreted symbol step gets 3 options (author + 2 alternatives), and whySource becomes interpret', async () => {
+    const cacheDir = tmp('repo-tour-interpret-plan-cache-');
+    const calls = { count: 0 };
+    const before = structuredClone(plan);
+
+    try {
+      const { plan: interpreted, cost } = await interpretPlan(plan, d, {
+        root, cacheDir, runner: titleEchoRunner(calls),
+      });
+
+      // never mutates the input
+      expect(plan).toEqual(before);
+      expect(calls.count).toBeGreaterThan(0);
+
+      const shoutStep = interpreted.steps.find(
+        (s) => s.kind === 'symbol' && s.decision.question.startsWith('Fill in shout '),
+      );
+      expect(shoutStep, 'no symbol step found for shout').toBeDefined();
+      expect(shoutStep!.decision.options).toHaveLength(3);
+      expect(shoutStep!.decision.options[0]).toMatchObject({ id: 'author', taken: true });
+      expect(shoutStep!.decision.options[0]!.consequence).toBe(`[summary] ${shoutStep!.decision.question}`);
+      expect(shoutStep!.decision.options[1]).toEqual({
+        id: 'alt-1', label: `alt-A for ${shoutStep!.decision.question}`, consequence: 'would cost A', taken: false,
+      });
+      expect(shoutStep!.decision.options[2]).toEqual({
+        id: 'alt-2', label: `alt-B for ${shoutStep!.decision.question}`, consequence: 'would cost B', taken: false,
+      });
+      expect(shoutStep!.decision.whySource).toBe('interpret');
+      expect(shoutStep!.decision.why).toBe(`[why] ${shoutStep!.decision.question}`);
+      // T-12's own invariants survive untouched
+      expect(shoutStep!.decision.authorChoice).toBe('author');
+      expect(shoutStep!.decision.chosen).toBe('author');
+
+      expect(cost.metered).toBe(true);
+      expect(interpreted.cost).toEqual(cost);
+    } finally {
+      fs.rmSync(cacheDir, { recursive: true, force: true });
+    }
+  });
+
+  it('AC2 — shape steps are skipped: whySource stays none and options stay at 1', async () => {
+    const cacheDir = tmp('repo-tour-interpret-plan-shape-cache-');
+    try {
+      const { plan: interpreted } = await interpretPlan(plan, d, { root, cacheDir, runner: titleEchoRunner({ count: 0 }) });
+      const shapeSteps = interpreted.steps.filter((s) => s.kind === 'shape');
+      expect(shapeSteps.length).toBeGreaterThan(0);
+      for (const s of shapeSteps) {
+        expect(s.decision.whySource).toBe('none');
+        expect(s.decision.options).toHaveLength(1);
+      }
+    } finally {
+      fs.rmSync(cacheDir, { recursive: true, force: true });
+    }
+  });
+
+  it("AC3 — cost lands on plan.cost with a real provider, metered, tokens and usd — not buildPlan's zeroed sentinel", async () => {
+    const cacheDir = tmp('repo-tour-interpret-plan-cost-cache-');
+    try {
+      const { plan: interpreted, cost } = await interpretPlan(plan, d, { root, cacheDir, runner: titleEchoRunner({ count: 0 }) });
+      expect(interpreted.cost.provider).not.toBe('none');
+      expect(interpreted.cost.metered).toBe(true);
+      expect(interpreted.cost.inputTokens).toBeGreaterThan(0);
+      expect(interpreted.cost.usd).toBeGreaterThan(0);
+      // one job per file that had at least one interpretable step: src/util.ts, src/other.ts
+      expect(cost.calls).toBe(2);
+      // buildPlan's own untouched sentinel, for contrast — never metered:false pretending to be zero
+      expect(plan.cost).toEqual({
+        provider: 'none', metered: false, calls: 0, cachedStops: 0, interpretedStops: 0,
+        inputTokens: 0, outputTokens: 0, usd: 0, model: 'none', failures: [],
+      });
+    } finally {
+      fs.rmSync(cacheDir, { recursive: true, force: true });
+    }
+  });
+
+  it('AC2 — an uncached step under --cached-only keeps its T-12 defaults honestly, not silently mangled', async () => {
+    const cacheDir = tmp('repo-tour-interpret-plan-nocache-');
+    try {
+      const calls = { count: 0 };
+      const { plan: interpreted, cost } = await interpretPlan(plan, d, {
+        root, cacheDir, cachedOnly: true, runner: titleEchoRunner(calls),
+      });
+      expect(calls.count).toBe(0); // cachedOnly + an empty cache => the runner is never even asked
+      expect(cost.interpretedStops).toBe(0);
+      for (const s of interpreted.steps) {
+        if (s.kind === 'shape') continue;
+        expect(s.decision.options).toHaveLength(1);
+        expect(s.decision.options[0]!.id).toBe('author');
+      }
+      const shoutStep = interpreted.steps.find((s) => s.kind === 'symbol' && s.decision.question.startsWith('Fill in shout '));
+      expect(shoutStep!.decision.why).toBe('Uppercases a job name before it is logged.');
+      expect(shoutStep!.decision.whySource).toBe('docstring');
+    } finally {
+      fs.rmSync(cacheDir, { recursive: true, force: true });
+    }
+  });
+
+  it('AC5 — caches by content hash: a second interpretPlan on the same digest costs nothing', async () => {
+    const cacheDir = tmp('repo-tour-interpret-plan-reuse-');
+    try {
+      const calls = { count: 0 };
+      const run1 = await interpretPlan(plan, d, { root, cacheDir, runner: titleEchoRunner(calls) });
+      const callsAfterFirst = calls.count;
+      expect(callsAfterFirst).toBeGreaterThan(0);
+      expect(run1.cost.interpretedStops).toBeGreaterThan(0);
+
+      const run2 = await interpretPlan(plan, d, { root, cacheDir, runner: titleEchoRunner(calls) });
+      expect(calls.count).toBe(callsAfterFirst); // zero NEW runner calls on the second run
+
+      expect(run2.cost.cachedStops).toBe(run1.cost.interpretedStops);
+      expect(run2.cost.interpretedStops).toBe(0);
+
+      // and the folded content itself is identical between runs
+      const s1 = run1.plan.steps.find((s) => s.kind === 'symbol' && s.decision.question.startsWith('Fill in shout '));
+      const s2 = run2.plan.steps.find((s) => s.kind === 'symbol' && s.decision.question.startsWith('Fill in shout '));
+      expect(s2).toEqual(s1);
+    } finally {
+      fs.rmSync(cacheDir, { recursive: true, force: true });
+    }
+  });
+
+  it('a file step is interpreted too, over its own head range (1..min(loc,120))', async () => {
+    const cacheDir = tmp('repo-tour-interpret-plan-filehead-');
+    try {
+      const { plan: interpreted } = await interpretPlan(plan, d, { root, cacheDir, runner: titleEchoRunner({ count: 0 }) });
+      const fileStep = interpreted.steps.find((s) => s.kind === 'file' && s.target.file === 'src/util.ts');
+      expect(fileStep!.decision.options.length).toBe(3);
+      expect(fileStep!.decision.whySource).toBe('interpret');
+    } finally {
+      fs.rmSync(cacheDir, { recursive: true, force: true });
+    }
+  });
+});
+
+
+// ================================================================================
+// T-13 — the CLI's --interpret / --cached-only flags
+// ================================================================================
+
+describe('the build-order engine — the CLI --interpret flag (T-13)', () => {
+  let root: string;
+
+  beforeAll(() => {
+    root = tmp('repo-tour-cli-plan-interpret-');
+    initRepo(root);
+    // A marker unique to this run, baked into the source, so this fixture's file content
+    // can never coincidentally match a cache entry left by anything else on the machine —
+    // PROMPT_VERSION 6 is brand new, but this costs nothing and removes the question.
+    const marker = path.basename(root);
+    write(path.join(root, 'src/a.ts'), `// fixture: ${marker}\nexport function a(): number {\n  return 1;\n}\n`);
+    write(
+      path.join(root, 'src/b.ts'),
+      `// fixture: ${marker}\nimport { a } from './a.js';\n\nexport function b(): number {\n  return a() + 1;\n}\n`,
+    );
+    commitAll(root, 'initial');
+  });
+
+  afterAll(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('--interpret --cached-only runs with no model available and writes a plan with an honest, zeroed-interpretation cost', () => {
+    const stdout = runCli(['plan', root, '--interpret', '--cached-only']);
+    const planPath = path.join(root, '.repo-tour', 'build', 'plan.json');
+    const written = JSON.parse(fs.readFileSync(planPath, 'utf8')) as BuildPlan;
+
+    // nothing was ever cached for this fixture's unique content, so cachedOnly folds nothing
+    for (const s of written.steps) {
+      if (s.kind === 'shape') continue;
+      expect(s.decision.options).toHaveLength(1);
+    }
+    expect(written.cost.interpretedStops).toBe(0);
+    expect(written.cost.cachedStops).toBe(0);
+    expect(written.cost.calls).toBe(0);
+    expect(written.cost.provider).not.toBe('none'); // a real provider was chosen; it simply was never called
+    expect(stdout).toMatch(/interpreted\s+0 stops \(0 cached\) in 0 call\(s\)/);
+    expect(stdout).toMatch(/cost\s+\$0\.0000/);
+  }, 30_000);
+
+  it('without --interpret, plan stays exactly as free and deterministic as T-12 shipped it', () => {
+    const stdout = runCli(['plan', root]);
+    const planPath = path.join(root, '.repo-tour', 'build', 'plan.json');
+    const written = JSON.parse(fs.readFileSync(planPath, 'utf8')) as BuildPlan;
+    expect(written.cost).toEqual({
+      provider: 'none', metered: false, calls: 0, cachedStops: 0, interpretedStops: 0,
+      inputTokens: 0, outputTokens: 0, usd: 0, model: 'none', failures: [],
+    });
+    expect(stdout).not.toContain('interpreted');
+  }, 30_000);
 });
