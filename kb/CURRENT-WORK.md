@@ -41,7 +41,9 @@ here and found via the reference table below.
   Office is GUTS's decision. **repo-tour's T-7 is the counterpart and is still unopened** —
   open it when GUTS says what it needs, not before.
 - **T-14** (techdebt) — Harden T-11's consumer tests: prove prepare rebuilds dist, and make alternateCs… — intake
-- **T-13** (feature) — Interpret the decisions — alternatives per build step, and Ask context for a st… — plan
+- **T-13** (feature) — Interpret the decisions — alternatives per build step, and Ask context for a st… — auto-review
+- **T-15** (bug) — Script-style JS yields no load-bearing ranges: IIFE bodies are invisible to ext… — gate
+- **T-16** (feature) — Module-pattern and .call(this) IIFEs: record their body declarations too — intake
 
 ## Waiting on
 
@@ -52,6 +54,7 @@ here and found via the reference table below.
   (GA-3 through GA-7) because he asked not to be stopped mid-flight. **The open loop is his
   read of the notes + Ask panels**, which he has not used yet at the time of writing.
 - **T-13** — waiting at spec_ready on human:owner since 2026-09-05
+- **T-15** — waiting at spec_ready on human:owner since 2026-09-05
 
 ## Recent past (~15 items / ~30 days)
 

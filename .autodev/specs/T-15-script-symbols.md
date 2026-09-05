@@ -16,7 +16,7 @@ ACs:
 
 Out of scope
 - Recognising CommonJS 'module.exports'/'exports.x' as exported — deferred: who=agent:pm why=the exported-or-all fallback already yields the right steps; marking CJS exports is a nicety for ranking, not a blocker
-- Python and TS/ESM behaviour — unchanged by design
+- Python and TS/ESM behaviour for files that EXPORT something — unchanged by design (a types-only module keeps its interface/type/enum steps; a 1-line exported const keeps its step). Files that export nothing take the same exported-or-all fallback as JS — that is AC2's language-neutral intent (review finding 2026-09-04)
 
 ## Refinement notes (2026-09-04)
 

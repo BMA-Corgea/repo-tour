@@ -1,0 +1,48 @@
+{
+  "id": "T-16",
+  "slug": "module-pattern-and-call-this-iifes-record-their",
+  "type": "feature",
+  "title": "Module-pattern and .call(this) IIFEs: record their body declarations too",
+  "stage": "intake",
+  "status": "triage",
+  "spec": "Advisory from T-15's review (.autodev/reviews/T-15.md): iifeBody recognises top-level expression-statement IIFEs only. The revealing-module pattern 'const x = (function () { ... })()' and the '(function () { ... }).call(this)' / '.bind' forms are common in older browser code and stay invisible.\n\nACs:\n1. A top-level 'const/let/var x = (function () {...})()' (and the arrow form) has its body declarations recorded, exported:false. Check: fixture.\n2. '(function () {...}).call(this)' and '.apply' / '.bind(this)()' forms likewise. Check: fixture.\n3. Ordinary nested helpers stay unrecorded; the T-15 and T-12 suites stay byte-unchanged. Check: full suite.\n\nOut of scope\n- CommonJS module.exports recognition as 'exported' — deferred: who=agent:pm why=the exported-or-all fallback already yields the right steps",
+  "pipeline_version": "feature@v1",
+  "modifiers": [],
+  "pipeline": [
+    "intake",
+    "refine",
+    "queue",
+    "locate",
+    "plan",
+    "build",
+    "auto-review",
+    "gate",
+    "verify",
+    "uat",
+    "release",
+    "monitor"
+  ],
+  "passport": [
+    "2026-09-05 created as feature \"Module-pattern and .call(this) IIFEs: record their body declarations too\" on feature@v1 by agent:claude(on-behalf:evan,GA-9)"
+  ],
+  "assignees": {},
+  "links": {
+    "intent": "T-12"
+  },
+  "gates": {
+    "spec_ready": false,
+    "merge": false,
+    "accept": false,
+    "deploy": false,
+    "sp_decide": false,
+    "ex_decide": false,
+    "compliance": false
+  },
+  "overrides": {},
+  "risk": "low",
+  "loop": {
+    "validator_passed": false,
+    "attempts": 0
+  },
+  "history": []
+}

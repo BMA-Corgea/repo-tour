@@ -3,8 +3,8 @@
   "slug": "script-style-js-yields-no-load-bearing-ranges-ii",
   "type": "bug",
   "title": "Script-style JS yields no load-bearing ranges: IIFE bodies are invisible to extract, and non-exported top-level symbols never become symbol steps",
-  "stage": "plan",
-  "status": "planning",
+  "stage": "gate",
+  "status": "awaiting_approval",
   "spec": "SYMPTOM (found 2026-09-04 running 'repo-tour plan' on the first live target, sql-gauntlet): 26 steps, ZERO symbol steps. Every public/*.js file is wrapped in an IIFE '(function () { ... })()' and extract records 0 symbols for it; server.js and tools/*.js have 19/18/8 top-level symbols but none are 'exported' (plain scripts / CommonJS), so plan.ts finds no candidates. Result: no scaffold ranges, so the dial (VSCode-LLM-Tutorial T-5) would have nothing to stub on the very repo the product is accepted against. Spec §4.1/§4.5 assume 'the load-bearing parts of a file' exist for every source file.\n\nACs:\n1. extract: the direct declarations inside a TOP-LEVEL IIFE body (a top-level expression statement calling a function expression or arrow, including the '(function(){...})()' and '(() => {...})()' forms and '!function(){}()' ) are recorded as symbols with their real ranges, exported:false. Non-IIFE nested functions stay unrecorded as today. Check: a fixture of sql-gauntlet's shape yields the IIFE's named functions; a plain nested helper inside a normal function is still absent.\n2. plan: symbol-step candidates are the exported symbols; when a file exports nothing, candidates are its recorded symbols instead. In both cases a candidate must be a function/method/class, or a variable spanning >= 3 lines — a one-line 'const fs = require(..)' or an import alias never becomes a step. Cap 5 by span with overlap-skip as today. Check: server.js-shaped fixture gets symbol steps for its handlers and none for its requires.\n3. Running 'plan' on sql-gauntlet gives >= 1 symbol step for every .js file that defines a named function (public/app.js, chat.js, engine.js, xray.js, server.js, tools/*). Check: run it and count.\n4. The nothing-vanishes invariant, id stability, and every existing test stay green; the T-12 review fixtures unchanged. Check: full suite.\n5. No change to interpret.ts, ask.ts, cli.ts, build/interpret.ts (T-13 is editing them in parallel); new tests live in test/build-scripts.test.ts, not in test/build.test.ts.\n\nOut of scope\n- Recognising CommonJS 'module.exports'/'exports.x' as exported — deferred: who=agent:pm why=the exported-or-all fallback already yields the right steps; marking CJS exports is a nicety for ranking, not a blocker\n- Python and TS/ESM behaviour — unchanged by design",
   "pipeline_version": "bug@v1",
   "modifiers": [],
@@ -23,11 +23,11 @@
     "monitor"
   ],
   "passport": [
-    "2026-09-05 waiting at gate spec_ready (keyholder human:owner) since 2026-09-05",
-    "2026-09-05 gate spec_ready cleared by agent:claude(on-behalf:evan,GA-9) on go-ahead GA-9 (\"Let's go ahead and loop through it until these are created a\")",
-    "2026-09-05 advanced refine → queue · refine on unrecorded",
-    "2026-09-05 advanced queue → locate · queue on unrecorded",
-    "2026-09-05 advanced locate → plan · locate on unrecorded"
+    "2026-09-05 advanced plan → build · plan on unrecorded",
+    "2026-09-05 advanced build → auto-review · build on unrecorded",
+    "2026-09-05 moved auto-review → build by agent:claude(on-behalf:evan,GA-9), attempt 1 · why: auto-review REWORK (.autodev/reviews/T-15.md 93bed9f): isEligibleCandidate (plan.ts:223, wired at :245) also filters the pre-existing EXPORTED path — a TS file exporting only interface/type/enum drops 3 -> 0 symbol steps, a 1-line exported const 1 -> 0; undisclosed and untested. Fix: the triviality filter applies ONLY on the exported-nothing fallback path; the exported path stays byte-identical to T-12. The fallback firing for no-export Python/TS files is AC2's language-neutral intent — keep it, test it, and the spec's out-of-scope line is corrected to say 'files WITH exports unchanged'. Attempt 2, model escalated. · leaving: Machine review: code review + security review + full preflight (lint, typecheck, unit,… · next: Implement the plan: code + tests on the ticket branch.",
+    "2026-09-05 advanced build → auto-review · build on unrecorded",
+    "2026-09-05 advanced auto-review → gate · auto-review on unrecorded"
   ],
   "assignees": {},
   "links": {
@@ -72,6 +72,36 @@
       "to": "plan",
       "by": "agent:claude(on-behalf:evan,GA-9)",
       "at": "2026-09-05T01:02:56.976Z"
+    },
+    {
+      "from": "plan",
+      "to": "build",
+      "by": "agent:claude(on-behalf:evan,GA-9)",
+      "at": "2026-09-05T01:02:57.056Z"
+    },
+    {
+      "from": "build",
+      "to": "auto-review",
+      "by": "agent:claude(on-behalf:evan,GA-9)",
+      "at": "2026-09-05T01:22:13.693Z"
+    },
+    {
+      "from": "auto-review",
+      "to": "build",
+      "by": "agent:claude(on-behalf:evan,GA-9):auto-review REWORK (.autodev/reviews/T-15.md 93bed9f): isEligibleCandidate (plan.ts:223, wired at :245) also filters the pre-existing EXPORTED path — a TS file exporting only interface/type/enum drops 3 -> 0 symbol steps, a 1-line exported const 1 -> 0; undisclosed and untested. Fix: the triviality filter applies ONLY on the exported-nothing fallback path; the exported path stays byte-identical to T-12. The fallback firing for no-export Python/TS files is AC2's language-neutral intent — keep it, test it, and the spec's out-of-scope line is corrected to say 'files WITH exports unchanged'. Attempt 2, model escalated.",
+      "at": "2026-09-05T01:37:50.581Z"
+    },
+    {
+      "from": "build",
+      "to": "auto-review",
+      "by": "agent:claude(on-behalf:evan,GA-9)",
+      "at": "2026-09-05T01:48:56.639Z"
+    },
+    {
+      "from": "auto-review",
+      "to": "gate",
+      "by": "agent:claude(on-behalf:evan,GA-9)",
+      "at": "2026-09-05T02:00:45.658Z"
     }
   ],
   "receipts": {
@@ -106,6 +136,31 @@
       "by": "agent:claude(on-behalf:evan,GA-9)",
       "at": "2026-09-05T01:02:56.975Z",
       "model": "unrecorded"
+    },
+    "plan": {
+      "evidence": ".autodev/plans/T-15.md",
+      "kind": "file",
+      "fingerprint": "sha256:60d8446912301c9d",
+      "by": "agent:claude(on-behalf:evan,GA-9)",
+      "at": "2026-09-05T01:02:57.055Z",
+      "model": "unrecorded"
+    },
+    "build": {
+      "evidence": "attempt 2 (rework, coder seat escalated to opus): commits 806c847 (5 tests RED) 3e75bb2 (fix: filter only on the fallback path; predicate exhaustive over SymbolKind) c081c63 (handoff) on feature/T-15-script-symbols; typecheck clean; npm test 190/190; three-way discrimination table main/93bed9f/3e75bb2; sql-gauntlet unchanged at 61 steps / 35 symbol",
+      "kind": "other",
+      "fingerprint": "attempt 2 (rework, coder seat escalated to opus): commits 806c847 (5 tests RED) 3e75bb2 (fix: filter only on the fallback path; predicate exhaustive over SymbolKind) c081c63 (handoff) on feature/T-15-script-symbols; typecheck clean; npm test 190/190; three-way discrimination table main/93bed9f/3e75bb2; sql-gauntlet unchanged at 61 steps / 35 symbol",
+      "by": "agent:claude(on-behalf:evan,GA-9)",
+      "at": "2026-09-05T01:48:56.638Z",
+      "model": "unrecorded"
+    },
+    "auto-review": {
+      "evidence": "review record .autodev/reviews/T-15.md (attempt 1 REWORK 93bed9f; attempt 2 PASS 01a1a2d) on feature/T-15-script-symbols — exported path byte-identical to main, fallback verified from independent fixtures, RED commit reproduced, 190/190; reviewer seat model sonnet, fresh sessions",
+      "kind": "other",
+      "fingerprint": "review record .autodev/reviews/T-15.md (attempt 1 REWORK 93bed9f; attempt 2 PASS 01a1a2d) on feature/T-15-script-symbols — exported path byte-identical to main, fallback verified from independent fixtures, RED commit reproduced, 190/190; reviewer seat model sonnet, fresh sessions",
+      "by": "agent:claude(on-behalf:evan,GA-9)",
+      "at": "2026-09-05T02:00:45.657Z",
+      "model": "unrecorded"
     }
-  }
+  },
+  "bounces": {}
 }
