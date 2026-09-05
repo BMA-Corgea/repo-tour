@@ -10,6 +10,18 @@ here and found via the reference table below.
 <!-- What is in motion right now: one line per active ticket/effort —
      what, why, where it stands, what is next. Never pruned while live. -->
 
+- **T-15 DONE** — script-style JS yielded zero symbol steps (found live on sql-gauntlet:
+  every `public/*.js` file's body sat inside a top-level IIFE, invisible to `extract.ts`;
+  `server.js`/`tools/*.js` had real top-level symbols but none `exported`, invisible to
+  `plan.ts`'s candidate filter). Fixed both: `extract.ts` recurses one level into a
+  top-level IIFE's body (all 4 documented shapes, both grammars, confirmed identical);
+  `plan.ts` falls back to "all recorded symbols" as candidates when a file exports
+  nothing, screened by a triviality filter (function/method/class always eligible, a
+  variable only if it spans >= 3 lines). Repro-tested first (4 scenarios, committed RED),
+  185/185 tests green, T-12's 49 review fixtures byte-unchanged. Live-reverified on
+  sql-gauntlet: 0 -> 35 symbol steps across the 7 named files (5 each, the cap). Branch
+  `feature/T-15-script-symbols`, worktree `../repo-tour-T-15`. Full detail:
+  `.autodev/handoffs/T-15.md`.
   package (`exports` map, injectable asset roots, a `prepare` build) so
   `VSCode-LLM-Tutorial`'s extension can `import()` it as a `file:` dependency (that repo's
   T-1 spec, §3/§10). 6 commits on `feature/T-11-core-package` in worktree `../repo-tour-T-11`,
