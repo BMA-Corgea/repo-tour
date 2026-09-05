@@ -10,7 +10,7 @@ here and found via the reference table below.
 <!-- What is in motion right now: one line per active ticket/effort —
      what, why, where it stands, what is next. Never pruned while live. -->
 
-- **T-18 — Finish the tutor** (feature, in build). The Ask panel shipped with T-3 and reads
+- **T-18** (feature) — Finish the tutor — give it the code, a memory, and a way into your notes — uat
   the reader's notes; three gaps stop it serving the moment it exists for. It is never given
   the code (`repoview.ts`'s `__askContext` sends the path, the digest's meaning, importers,
   the stop's narration — never the source). It never remembers (one in-memory array in
@@ -82,7 +82,7 @@ here and found via the reference table below.
   open it when GUTS says what it needs, not before.
 - **T-14** (techdebt) — Harden T-11's consumer tests: prove prepare rebuilds dist, and make alternateCs… — intake
 - **T-16** (feature) — Module-pattern and .call(this) IIFEs: record their body declarations too — intake
-- **T-18** (feature) — Finish the tutor — give it the code, a memory, and a way into your notes — gate
+- **T-18** (feature) — Finish the tutor — give it the code, a memory, and a way into your notes — uat
 
 ## Waiting on
 
