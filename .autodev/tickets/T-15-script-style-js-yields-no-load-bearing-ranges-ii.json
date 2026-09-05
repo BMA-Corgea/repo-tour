@@ -1,0 +1,111 @@
+{
+  "id": "T-15",
+  "slug": "script-style-js-yields-no-load-bearing-ranges-ii",
+  "type": "bug",
+  "title": "Script-style JS yields no load-bearing ranges: IIFE bodies are invisible to extract, and non-exported top-level symbols never become symbol steps",
+  "stage": "plan",
+  "status": "planning",
+  "spec": "SYMPTOM (found 2026-09-04 running 'repo-tour plan' on the first live target, sql-gauntlet): 26 steps, ZERO symbol steps. Every public/*.js file is wrapped in an IIFE '(function () { ... })()' and extract records 0 symbols for it; server.js and tools/*.js have 19/18/8 top-level symbols but none are 'exported' (plain scripts / CommonJS), so plan.ts finds no candidates. Result: no scaffold ranges, so the dial (VSCode-LLM-Tutorial T-5) would have nothing to stub on the very repo the product is accepted against. Spec §4.1/§4.5 assume 'the load-bearing parts of a file' exist for every source file.\n\nACs:\n1. extract: the direct declarations inside a TOP-LEVEL IIFE body (a top-level expression statement calling a function expression or arrow, including the '(function(){...})()' and '(() => {...})()' forms and '!function(){}()' ) are recorded as symbols with their real ranges, exported:false. Non-IIFE nested functions stay unrecorded as today. Check: a fixture of sql-gauntlet's shape yields the IIFE's named functions; a plain nested helper inside a normal function is still absent.\n2. plan: symbol-step candidates are the exported symbols; when a file exports nothing, candidates are its recorded symbols instead. In both cases a candidate must be a function/method/class, or a variable spanning >= 3 lines — a one-line 'const fs = require(..)' or an import alias never becomes a step. Cap 5 by span with overlap-skip as today. Check: server.js-shaped fixture gets symbol steps for its handlers and none for its requires.\n3. Running 'plan' on sql-gauntlet gives >= 1 symbol step for every .js file that defines a named function (public/app.js, chat.js, engine.js, xray.js, server.js, tools/*). Check: run it and count.\n4. The nothing-vanishes invariant, id stability, and every existing test stay green; the T-12 review fixtures unchanged. Check: full suite.\n5. No change to interpret.ts, ask.ts, cli.ts, build/interpret.ts (T-13 is editing them in parallel); new tests live in test/build-scripts.test.ts, not in test/build.test.ts.\n\nOut of scope\n- Recognising CommonJS 'module.exports'/'exports.x' as exported — deferred: who=agent:pm why=the exported-or-all fallback already yields the right steps; marking CJS exports is a nicety for ranking, not a blocker\n- Python and TS/ESM behaviour — unchanged by design",
+  "pipeline_version": "bug@v1",
+  "modifiers": [],
+  "pipeline": [
+    "intake",
+    "refine",
+    "queue",
+    "locate",
+    "plan",
+    "build",
+    "auto-review",
+    "gate",
+    "verify",
+    "uat",
+    "release",
+    "monitor"
+  ],
+  "passport": [
+    "2026-09-05 waiting at gate spec_ready (keyholder human:owner) since 2026-09-05",
+    "2026-09-05 gate spec_ready cleared by agent:claude(on-behalf:evan,GA-9) on go-ahead GA-9 (\"Let's go ahead and loop through it until these are created a\")",
+    "2026-09-05 advanced refine → queue · refine on unrecorded",
+    "2026-09-05 advanced queue → locate · queue on unrecorded",
+    "2026-09-05 advanced locate → plan · locate on unrecorded"
+  ],
+  "assignees": {},
+  "links": {
+    "intent": "T-12"
+  },
+  "gates": {
+    "spec_ready": true,
+    "merge": false,
+    "accept": false,
+    "deploy": false,
+    "sp_decide": false,
+    "ex_decide": false,
+    "compliance": false
+  },
+  "overrides": {},
+  "risk": "medium",
+  "loop": {
+    "validator_passed": false,
+    "attempts": 0
+  },
+  "history": [
+    {
+      "from": "intake",
+      "to": "refine",
+      "by": "agent:claude(on-behalf:evan,GA-9)",
+      "at": "2026-09-05T01:02:56.745Z"
+    },
+    {
+      "from": "refine",
+      "to": "queue",
+      "by": "agent:claude(on-behalf:evan,GA-9)",
+      "at": "2026-09-05T01:02:56.878Z"
+    },
+    {
+      "from": "queue",
+      "to": "locate",
+      "by": "agent:claude(on-behalf:evan,GA-9)",
+      "at": "2026-09-05T01:02:56.924Z"
+    },
+    {
+      "from": "locate",
+      "to": "plan",
+      "by": "agent:claude(on-behalf:evan,GA-9)",
+      "at": "2026-09-05T01:02:56.976Z"
+    }
+  ],
+  "receipts": {
+    "intake": {
+      "evidence": "T-15 captured as a bug found by the orchestrator's acceptance-target dry run (sql-gauntlet, 2026-09-04): zero symbol steps; intent T-12; no duplicate; routed bug@v1",
+      "kind": "other",
+      "fingerprint": "T-15 captured as a bug found by the orchestrator's acceptance-target dry run (sql-gauntlet, 2026-09-04): zero symbol steps; intent T-12; no duplicate; routed bug@v1",
+      "by": "agent:claude(on-behalf:evan,GA-9)",
+      "at": "2026-09-05T01:02:56.744Z",
+      "model": "unrecorded"
+    },
+    "refine": {
+      "evidence": ".autodev/specs/T-15-script-symbols.md",
+      "kind": "file",
+      "fingerprint": "sha256:d8e8f9e73995273f",
+      "by": "agent:claude(on-behalf:evan,GA-9)",
+      "at": "2026-09-05T01:02:56.835Z",
+      "model": "unrecorded"
+    },
+    "queue": {
+      "evidence": "priority 1 alongside T-13 (disjoint files: T-15 = extract.ts symbol walk + plan.ts candidates + test/build-scripts.test.ts; T-13 = interpret.ts, ask.ts, cli.ts, build/interpret.ts); blocks the extension's acceptance run on sql-gauntlet",
+      "kind": "other",
+      "fingerprint": "priority 1 alongside T-13 (disjoint files: T-15 = extract.ts symbol walk + plan.ts candidates + test/build-scripts.test.ts; T-13 = interpret.ts, ask.ts, cli.ts, build/interpret.ts); blocks the extension's acceptance run on sql-gauntlet",
+      "by": "agent:claude(on-behalf:evan,GA-9)",
+      "at": "2026-09-05T01:02:56.923Z",
+      "model": "unrecorded"
+    },
+    "locate": {
+      "evidence": ".autodev/locates/T-15.md",
+      "kind": "file",
+      "fingerprint": "sha256:f459172f901829ff",
+      "by": "agent:claude(on-behalf:evan,GA-9)",
+      "at": "2026-09-05T01:02:56.975Z",
+      "model": "unrecorded"
+    }
+  }
+}

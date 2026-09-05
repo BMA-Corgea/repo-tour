@@ -98,3 +98,8 @@
 {"ts":"2026-09-05T00:59:57.389Z","kind":"stage.advanced","ticket":"T-12","from":"uat","to":"release"}
 {"ts":"2026-09-05T00:59:57.433Z","kind":"stage.advanced","ticket":"T-12","from":"release","to":"monitor"}
 {"ts":"2026-09-05T00:59:57.479Z","kind":"pipeline.complete","ticket":"T-12","at":"monitor"}
+{"ts":"2026-09-05T01:00:00.377Z","kind":"stage.advanced","ticket":"T-13","from":"plan","to":"build"}
+{"ts":"2026-09-05T01:02:56.745Z","kind":"stage.advanced","ticket":"T-15","from":"intake","to":"refine"}
+{"ts":"2026-09-05T01:02:56.879Z","kind":"stage.advanced","ticket":"T-15","from":"refine","to":"queue"}
+{"ts":"2026-09-05T01:02:56.924Z","kind":"stage.advanced","ticket":"T-15","from":"queue","to":"locate"}
+{"ts":"2026-09-05T01:02:56.976Z","kind":"stage.advanced","ticket":"T-15","from":"locate","to":"plan"}
