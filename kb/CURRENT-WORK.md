@@ -10,6 +10,23 @@ here and found via the reference table below.
 <!-- What is in motion right now: one line per active ticket/effort —
      what, why, where it stands, what is next. Never pruned while live. -->
 
+- **T-18 — Finish the tutor** (feature, in build). The Ask panel shipped with T-3 and reads
+  the reader's notes; three gaps stop it serving the moment it exists for. It is never given
+  the code (`repoview.ts`'s `__askContext` sends the path, the digest's meaning, importers,
+  the stop's narration — never the source). It never remembers (one in-memory array in
+  `askpanel.ts`, erased by a reload). And it can never contribute to the notes. Scope is
+  Evan's own ruling: he answered ten questions on a decision form
+  (`https://claude.ai/code/artifact/c5780bc2-d1c4-44c6-8e27-15051d496950`, 2026-09-05, all
+  ten, every recommendation taken) — send the code AND let the tutor fetch more through the
+  server (read-only, every fetch shown; the model still gets no real tools, which is why
+  server-mediated beat a real toolbelt); always carry the repo overview + stop list; one
+  saved transcript per tour stamped by stop; streamed answers; the tutor gets its own model,
+  strongest by default; a keep button that pre-fills the note box; clickable citations that
+  flag a file it was never shown; both the repo tour and the PR page. Acceptance is HIS test
+  drive (Q10) — the first gate since 27 August that genuinely waits. Branch
+  `feature/T-18-finish-the-tutor`, worktree `../repo-tour-T-18`, 8 slices in
+  `.autodev/plans/T-18.md`.
+
   every `public/*.js` file's body sat inside a top-level IIFE, invisible to `extract.ts`;
   `server.js`/`tools/*.js` had real top-level symbols but none `exported`, invisible to
   `plan.ts`'s candidate filter). Fixed both: `extract.ts` recurses one level into a
