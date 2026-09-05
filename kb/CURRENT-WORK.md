@@ -32,6 +32,14 @@ here and found via the reference table below.
   way `src/tour.ts` computes a tour, never a separate hand-written artifact. Next: T-13
   (interpret: alternatives per step) reads this module's output and does not need to
   change its ordering or step shape. Full detail: `.autodev/handoffs/T-12.md`.
+- **T-13 built** on `feature/T-13-interpret-decisions` (worktree `../repo-tour-T-13`):
+  `src/build/interpret.ts#interpretPlan` folds two alternatives — and what each would have
+  cost — into every `symbol`/`file` step's decision, asked in the SAME model call that
+  already writes `what`/`why`/`summary` (`src/interpret.ts`, `PROMPT_VERSION` 5 → 6); a step
+  nothing could interpret keeps T-12's own honest defaults. The Ask panel's context gains a
+  `build` block for the VS Code tutor (T-6); `repo-tour plan --interpret [--cached-only]`
+  wired into the CLI. Every test injects a canned runner — none spawns `claude`. 193 tests
+  green (176 + 17). Full detail: `.autodev/handoffs/T-13.md`.
 - Nothing else in flight here. **Five of the six pieces Evan described on day one are shipped.**
   The one left is **T-7, GONS integration** — always the endgame rather than the product.
 - **The GONS side is now open on the OTHER shop.** 2026-08-27, on Evan's instruction, GUTS
