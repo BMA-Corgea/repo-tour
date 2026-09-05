@@ -69,7 +69,12 @@ describe('the repo tour hands over what T-18 promised', () => {
   });
 
   it('sends the stop index, so a message can be stamped with where it was asked', () => {
-    expect(repoHtml).toContain('stopIndex: (window.__tour && window.__tour.index())');
+    expect(repoHtml).toContain('stopIndex: window.__tour ? window.__tour.index() : -1');
+    // Regression guard, found by driving the real page: the falsy-zero form reports stop
+    // ZERO — the opening stop, where most readers ask their first question — as "not
+    // touring". Built by concatenation because a tour of THIS repository embeds this test
+    // file, so a guard written as one literal would find itself and fail forever.
+    expect(repoHtml).not.toContain(`window.__tour.index()${')'} || -1`);
   });
 
   it('carries the repository overview and the whole stop list in its payload', () => {

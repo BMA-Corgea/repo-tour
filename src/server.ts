@@ -1244,6 +1244,9 @@ a{color:var(--accent)}
 /* ── who writes the explanations ─────────────────────────────────────────────────────────── */
 .llm{margin-bottom:34px}
 .llmgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:10px}
+.tutorrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px}
+.tutorrow label{font-weight:600;font-size:13px}
+.tutorrow select{padding:4px 6px}
 .prov{
   border:1px solid var(--line);border-radius:10px;padding:13px 15px;background:var(--bg);
   cursor:pointer;transition:border-color .14s ease
@@ -1318,6 +1321,11 @@ function renderHome(): string {
       <span class="said" id="llmnow"></span>
     </div>
     <div class="llmgrid" id="llmgrid"></div>
+    <div class="tutorrow" id="tutorrow">
+      <label for="tutormodel">Who answers your questions while you read</label>
+      <select id="tutormodel"></select>
+      <span class="said" id="tutornote"></span>
+    </div>
     <p class="said llmnote">
       Everything else about a tour is worked out on this machine by parsers and git. This one
       stage reads your source and writes prose about it, so it is the only place a choice of
@@ -1426,8 +1434,27 @@ function refreshLlm() {
     document.getElementById('llmnow').textContent = d.chosen.provider + ' · ' + d.chosen.model;
     document.getElementById('llmgrid').innerHTML =
       d.providers.map(function (p) { return llmCard(p, d.chosen); }).join('');
+
+    // The tutor is a SEPARATE choice, and the point of showing it here is that it can be
+    // seen to be separate: the tour is written once and read many times, an answer is
+    // written once for one person who is stuck.
+    var prov = null;
+    for (var i = 0; i < d.providers.length; i++) if (d.providers[i].id === d.tutor.provider) prov = d.providers[i];
+    var sel = document.getElementById('tutormodel');
+    sel.innerHTML = (prov ? prov.models : [d.tutor.model]).map(function (m) {
+      return '<option value="' + esc(m) + '"' + (m === d.tutor.model ? ' selected' : '') + '>' + esc(m) + '</option>';
+    }).join('');
+    document.getElementById('tutornote').textContent = d.tutorExplicit
+      ? 'your choice'
+      : 'the strongest model this provider offers, by default';
   });
 }
+
+document.getElementById('tutormodel').addEventListener('change', function (e) {
+  fetch('/api/llm-set', { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ for: 'tutor', model: e.target.value }) })
+    .then(refreshLlm);
+});
 
 document.getElementById('llmgrid').addEventListener('change', function (e) {
   var sel = e.target.closest('[data-model]');

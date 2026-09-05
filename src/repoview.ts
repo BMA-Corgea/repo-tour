@@ -766,7 +766,10 @@ const TOUR_BOOTSTRAP = `
       source: source,
       sourceFullLength: fullLength,
       fileMeaning: meaning,
-      stopIndex: (window.__tour && window.__tour.index()) || -1,
+      // NOT '|| -1': stop ZERO is a real stop, and the first one is the one most readers ask
+      // from. The falsy-zero version recorded every question at the opening stop as though
+      // the reader were browsing rather than touring, which is the one stamp that matters.
+      stopIndex: window.__tour ? window.__tour.index() : -1,
       stopTitle: stop ? stop.title : null,
       stopText: stop ? stop.text : null,
       importers: (file && R.importers && R.importers[file]) || []
