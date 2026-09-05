@@ -1,14 +1,24 @@
 /**
  * The witness — WHEN the author actually wrote a file, read off git, never invented.
  *
- * `git log --diff-filter=A` answers a narrower question than plain `git log`: not every
- * commit that touched a path, but the one that ADDED it — the same distinction rank.ts's
- * `churnByFile` draws for "how often", drawn here for "since when". One walk per repo
- * root, `--reverse` so history is read oldest-first and the FIRST time a path appears IS
- * its add — no second pass to pick a minimum date by hand. A repo with no commits (or no
- * `.git` at all) yields nulls for everything under it, honestly, exactly like
- * `churnByFile` does for churn (kb/wiki/lessons.md: "Ask git what it already knows about
- * identity — never infer it from paths").
+ * `git log --diff-filter=AR` answers a narrower question than plain `git log`: not every
+ * commit that touched a path, but the one that INTRODUCED it — the same distinction
+ * rank.ts's `churnByFile` draws for "how often", drawn here for "since when". One walk per
+ * repo root, `--reverse` so history is read oldest-first and the FIRST time a path appears
+ * IS its introduction — no second pass to pick a minimum date by hand. A repo with no
+ * commits (or no `.git` at all) yields nulls for everything under it, honestly, exactly
+ * like `churnByFile` does for churn (kb/wiki/lessons.md: "Ask git what it already knows
+ * about identity — never infer it from paths").
+ *
+ * `R` is in that filter, not just `A`, because git records a rename as a rename: with
+ * rename detection on (the default, and `-M` here makes it explicit) a commit that moves
+ * `a.py` to `b.py` contributes ZERO `A` entries, so under `--diff-filter=A` alone `b.py`
+ * never appeared under any commit and came back `witness: null` — indistinguishable from a
+ * file with no history at all, for a file that has plenty. A rename's NEW name is where
+ * that path starts existing, so that commit is its witness; the old name keeps whatever
+ * commit already introduced it, since the walk is oldest-first and the first sighting
+ * wins. Reading the status column is what makes this possible, so the walk asks for
+ * `--name-status`, not `--name-only`.
  *
  * The witness is shown, never used to order (spec §4.1) — `plan.ts` reads dates out of
  * this map only as a topological tiebreaker among files with no dependency between them.
@@ -29,10 +39,11 @@ export const NULL_WITNESS: Witness = { sha: null, date: null, subject: null };
 /**
  * A `git log --format=%H%x09%ad%x09%s` header line: 7-40 hex chars, a tab, an ISO date,
  * a tab, the rest of the line as the subject. Detecting headers this way (rather than by
- * blank-line position) is the point — `--name-only` prints the header, then a BLANK line,
- * THEN the names, so a state machine keyed on blank lines drops every name by resetting
- * right before it reads one. A path is vanishingly unlikely to contain a tab, so "does
- * this line look like the header" is unambiguous in practice.
+ * blank-line position) is the point — `--name-status` prints the header, then a BLANK
+ * line, THEN the names, so a state machine keyed on blank lines drops every name by
+ * resetting right before it reads one. A name line under `--name-status` always begins
+ * with its status column (`A`, `R100`), which is neither 7 hex chars nor followed by a
+ * date, so a name line can never be mistaken for a header.
  */
 const HEADER = /^([0-9a-f]{7,40})\t(\d{4}-\d{2}-\d{2})\t(.*)$/;
 
@@ -52,7 +63,7 @@ export function firstCommits(repos: RepoRef[]): Map<string, Witness> {
       raw = execFileSync(
         'git',
         [
-          '-C', repo.absRoot, 'log', '--diff-filter=A', '--name-only',
+          '-C', repo.absRoot, 'log', '--diff-filter=AR', '--name-status', '-M',
           '--format=%H%x09%ad%x09%s', '--date=short', '--reverse',
         ],
         { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 512 * 1024 * 1024 },
@@ -72,9 +83,19 @@ export function firstCommits(repos: RepoRef[]): Map<string, Witness> {
         continue;
       }
       if (!current) continue; // defensive: a name line before any header has been seen
-      const scanPath = path.posix.normalize(prefix + line.trim());
-      // Oldest-first walk: the FIRST time a path is seen here is its add. A later
-      // delete-then-re-add of the same path must not overwrite that earlier truth.
+
+      // `A<TAB>path` for an add; `R<score><TAB>old<TAB>new` for a rename, where the NEW
+      // name is the one that starts existing here. Any other status is not in the filter
+      // and is ignored rather than guessed at.
+      const fields = line.split('\t');
+      const status = fields[0] ?? '';
+      const name = status.startsWith('R') ? fields[2] : status.startsWith('A') ? fields[1] : undefined;
+      if (name === undefined || name.trim() === '') continue;
+
+      const scanPath = path.posix.normalize(prefix + name.trim());
+      // Oldest-first walk: the FIRST time a path is seen here is its introduction. A later
+      // delete-then-re-add, or a rename ONTO a path that once existed, must not overwrite
+      // that earlier truth.
       if (!out.has(scanPath)) out.set(scanPath, current);
     }
   }

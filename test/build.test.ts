@@ -1182,3 +1182,86 @@ describe('the build-order engine — stubbed Python compiles, not just parses (A
     }
   });
 });
+
+
+// ================================================================================
+// AC4 (the case --diff-filter=A cannot see) — a path introduced by a rename
+// ================================================================================
+//
+// git records a move as a rename, not an add plus a delete — and does so with no flags
+// needed, from content similarity alone. So a commit that renames `a.py` to `b.py`
+// contributes ZERO `A` entries, and `b.py` came back `witness: null`: a file with full
+// history looking exactly like a file with none, which is the one thing this module
+// promises never to do. The walk now asks for `--diff-filter=AR --name-status -M` and
+// counts a renamed-in path's first appearance as its witness.
+
+describe('the build-order engine — a renamed-in path still has a witness (AC4)', () => {
+  let root: string;
+  let plan: BuildPlan;
+  let addSha: string;
+  let renameSha: string;
+
+  const headSha = (dir: string): string =>
+    execFileSync('git', ['-C', dir, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+
+  beforeAll(async () => {
+    root = tmp('repo-tour-build-rename-witness-');
+    initRepo(root);
+    write(path.join(root, 'src/a.py'), 'def a():\n    return 1\n');
+    write(path.join(root, 'src/keep.py'), 'def keep():\n    return 2\n');
+    commitAll(root, 'add a and keep');
+    addSha = headSha(root);
+
+    // a plain move plus `git add -A` — no `-M` at commit time, exactly how a learner (or
+    // this file's own AC3 rename test) does it. git detects it anyway.
+    fs.renameSync(path.join(root, 'src/a.py'), path.join(root, 'src/b.py'));
+    commitAll(root, 'rename a to b');
+    renameSha = headSha(root);
+
+    // The premise, asserted rather than assumed: git really classifies this as a rename
+    // under the same `-M` the witness walk passes. If it ever did not, this fixture would
+    // be testing an ordinary add and would pass for the wrong reason.
+    const status = execFileSync(
+      'git', ['-C', root, 'log', '-1', '-M', '--name-status', '--format='],
+      { encoding: 'utf8' },
+    );
+    expect(status).toMatch(/^R\d+\tsrc\/a\.py\tsrc\/b\.py$/m);
+
+    const d = await digest(root, { write: false });
+    plan = await buildPlan(d, { root });
+    expectNothingDropped(d, plan);
+  });
+
+  afterAll(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('the renamed-in path gets the rename commit as its witness, not null', () => {
+    const step = plan.steps.find((s) => s.kind === 'file' && s.target.file === 'src/b.py');
+    expect(step, 'src/b.py has no file step at all').toBeDefined();
+    expect(step!.witness.sha).toBe(renameSha);
+    expect(step!.witness.subject).toBe('rename a to b');
+    expect(step!.witness.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    // and its symbol step reads the same file-granular witness
+    const sym = plan.steps.find((s) => s.kind === 'symbol' && s.target.file === 'src/b.py')!;
+    expect(sym.witness).toEqual(step!.witness);
+  });
+
+  it('the old path is gone from the tree, so it is nowhere in the plan', () => {
+    expect(plan.steps.some((s) => s.target.file === 'src/a.py')).toBe(false);
+    expect(plan.reproduce).not.toContain('src/a.py');
+  });
+
+  it('first appearance still wins: an untouched file keeps its own add commit', () => {
+    const keep = plan.steps.find((s) => s.kind === 'file' && s.target.file === 'src/keep.py')!;
+    expect(keep.witness.sha).toBe(addSha);
+    expect(keep.witness.subject).toBe('add a and keep');
+    expect(keep.witness.sha).not.toBe(renameSha);
+  });
+
+  it('a shape step has no single file behind it and is still null, never fabricated', () => {
+    for (const s of plan.steps) {
+      if (s.kind === 'shape') expect(s.witness).toEqual({ sha: null, date: null, subject: null });
+    }
+  });
+});
