@@ -196,6 +196,13 @@ export function notesPanelScript(key: string): string {
 
   window.__notesChanged = function () { showAnchor(); };
 
+  // Emptying the box drops the kept question with it: otherwise keeping an answer, clearing
+  // the text and typing your own note saves it as source:'tutor' under someone else's
+  // question — the one thing this provenance exists to be trusted about.
+  el.text.addEventListener('input', function () {
+    if (!el.text.value.trim()) pendingQuestion = '';
+  });
+
   /**
    * The Ask panel handing an answer over to be kept (T-18 Q6).
    *

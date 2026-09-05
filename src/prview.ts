@@ -47,6 +47,14 @@ export interface PrViewOptions {
    * is the question, and a diff cannot answer it.
    */
   repoPath?: string;
+  /**
+   * What the digest concluded about the repository as a whole, when it already knows.
+   *
+   * AC4 on this surface (AC10). Looked up from the interpretation cache by the PR flow, so a
+   * repository that has been toured carries its overview here and one that has not carries
+   * null — never a paid interpretation triggered by opening a pull request.
+   */
+  repoOverview?: string | null;
   deltas: FileDelta[];
   diffs: Map<string, FileDiff>;
   steps: CodeStep[];
@@ -199,6 +207,7 @@ export function renderPrView(opts: PrViewOptions): string {
   const meta = {
     repo: repoName,
     repoPath: opts.repoPath ?? null,
+    repoOverview: opts.repoOverview ?? null,
     stops: deltas.map((d, i) => ({ index: i, title: d.path })),
     pr: refs.number,
     title: refs.prose.title,
@@ -442,6 +451,7 @@ export function renderPrView(opts: PrViewOptions): string {
     return {
       repo: META.repo,
       repoPath: META.repoPath || null,
+      repoOverview: META.repoOverview || null,
       stops: META.stops || [],
       pr: { number: META.pr, title: META.title, body: META.body, head: META.headLabel, base: META.baseLabel },
       file: f,
@@ -482,9 +492,13 @@ export function renderPrView(opts: PrViewOptions): string {
 <script>${askPanelScript({
   notesKey: notesKey(repoName, refs.number),
   chatKey: chatKey(repoName, refs.number),
-  offlineHint: 'Nothing answered — the server behind this page may have stopped. '
-    + 'Run "repo-tour serve" and open this pull request from there; your notes and this '
-    + 'conversation are saved in your browser and will still be here.',
+  // Names the checkout, same as the repo tour's: a message that cannot tell you WHICH
+  // repository to reopen is the copy AC11 exists to replace.
+  offlineHint: 'Nothing answered — the server behind this page may have stopped. Run '
+    + '\u0060repo-tour serve\u0060'
+    + (opts.repoPath ? `, add ${opts.repoPath} on the page it opens,` : '')
+    + ' and open this pull request from there — your notes and this conversation are saved '
+    + 'in this browser and will still be here.',
 })}</script>
 </body></html>`;
 }

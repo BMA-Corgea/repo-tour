@@ -39,6 +39,29 @@ const MAX_MATCHES = 40;
 const MAX_FILES_SCANNED = 4000;
 
 /**
+ * Is any segment of this path one we never hand over?
+ *
+ * `searchRepo` has always skipped `SKIP_DIRS` and dot-entries while walking; `fetchFile`
+ * did not, so the same module served `.env` and `.git/config` by name while refusing to
+ * find the very same strings by search. That asymmetry made the tutor the one component in
+ * repo-tour that would read a private repository's secrets into a prompt — and the reader is
+ * only shown the fetch AFTER the material has gone to the provider on the next hop.
+ *
+ * `src/inventory.ts` already sets the product-wide policy (`.git` "is never content"); this
+ * holds the same line on the path a language model can name.
+ */
+export function isScreenedPath(rel: string): boolean {
+  return rel.split('/').some((seg, i, all) => {
+    if (!seg || seg === '.') return false;
+    if (SKIP_DIRS.has(seg)) return true;
+    // Dot-entries are hidden for a reason. `.github` is the one people legitimately tour,
+    // and only as a directory on the way to something, never as a leaf secret.
+    if (seg.startsWith('.') && seg !== '..' && !(seg === '.github' && i < all.length - 1)) return true;
+    return false;
+  });
+}
+
+/**
  * Resolve a repo-relative path inside a root, or null if it does not belong there.
  *
  * Uses realpath on both sides, so a symlink inside the repository that points at /etc is
@@ -63,7 +86,10 @@ export function resolveInRepo(root: string, rel: string): string | null {
   const inside = path.relative(realRoot, real);
   if (inside === '') return realRoot;
   if (inside.startsWith('..') || path.isAbsolute(inside)) return null;
-  return target;
+  // The REAL path, not the spelled one: returning `target` would make the caller re-resolve
+  // the symlink after the check, leaving a window in which it could be repointed. Costs
+  // nothing to close.
+  return real;
 }
 
 /** realpath of a path, or of the deepest ancestor that exists, so missing files still check. */
@@ -83,6 +109,9 @@ function realpathOfNearest(target: string): string | null {
 /** Hand over one file, whole, clipped only if it is enormous. */
 export function fetchFile(root: string, rel: string): FetchOutcome {
   const what = `file ${rel}`;
+  if (isScreenedPath(rel)) {
+    return { ok: false, what, reason: `refused: ${rel} is not content — hidden files, build output and dependency folders are never served` };
+  }
   const abs = resolveInRepo(root, rel);
   if (!abs) {
     return { ok: false, what, reason: `refused: ${rel} is outside the repository being toured` };
@@ -96,7 +125,10 @@ export function fetchFile(root: string, rel: string): FetchOutcome {
     let names: string[];
     try { names = fs.readdirSync(abs).sort(); }
     catch { return { ok: false, what, reason: `${rel} could not be listed` }; }
-    return { ok: true, what, body: `${rel} is a directory containing:\n${names.map((n) => `  ${n}`).join('\n')}` };
+    // Screened here too: a listing that names `.env` is a map to it, and the point of the
+    // screen is that the tutor never learns a private repository's secrets exist.
+    const shown = names.filter((n) => !isScreenedPath(n));
+    return { ok: true, what, body: `${rel} is a directory containing:\n${shown.map((n) => `  ${n}`).join('\n')}` };
   }
 
   let text: string;

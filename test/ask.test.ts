@@ -16,6 +16,7 @@ import {
   parseFetchRequest,
   clipToBudget,
   trimMessages,
+  createReplyGate,
   MAX_FETCH_HOPS,
   type AskContext,
 } from '../src/ask.js';
@@ -195,5 +196,68 @@ describe('trimming still holds the rule it always held', () => {
       { role: 'user', content: 'the real first question' },
     ]);
     expect(msgs[0]!.role).toBe('user');
+  });
+});
+
+describe('the reply gate — what the reader is allowed to see while it decides', () => {
+  const drive = (chunks: string[]): { shown: string; full: string } => {
+    const gate = createReplyGate();
+    let shown = '';
+    for (const c of chunks) shown += gate.push(c);
+    return { shown, full: gate.full() };
+  };
+
+  it('never shows the reader a fetch line, however it is chunked', () => {
+    expect(drive(['FETCH: file src/rank.ts']).shown).toBe('');
+    expect(drive('FETCH: file src/rank.ts'.split('')).shown).toBe('');
+    expect(drive(['FET', 'CH: fi', 'le src/rank.ts']).shown).toBe('');
+    expect(drive(['   FETCH: file src/rank.ts']).shown).toBe('');
+    expect(drive(['```\nFETCH: file src/rank.ts\n```']).shown).toBe('');
+  });
+
+  it('streams an ordinary answer through once it has committed', () => {
+    const out = drive(['It returns 1. ', 'Nothing else.']);
+    expect(out.shown).toBe('It returns 1. Nothing else.');
+  });
+
+  it('releases at exactly the probe length, not before', () => {
+    expect(drive(['Yes sir']).shown).toBe('');        // 7 characters — still deciding
+    expect(drive(['Yes sirs']).shown).toBe('Yes sirs'); // 8 — decided, and nothing was lost
+  });
+
+  it('holds short replies forever — and that is why the server checks released()', () => {
+    // The gate is NOT correct alone, and this is the coupling that makes it safe: it holds
+    // 'FETCH' (no colon), 'Yes.' and an unterminated fence indefinitely, because the probe
+    // length is never reached. askStream compensates by falling back to the full reply text
+    // whenever the gate released nothing. If that fallback is ever removed, these answers
+    // vanish — so this test documents the contract between the two.
+    for (const short of ['FETCH', 'Yes.', '```typescript']) {
+      const out = drive([short]);
+      expect(out.shown).toBe('');
+      expect(out.full).toBe(short);   // the server still has it, and sends it
+    }
+  });
+
+  it('keeps the whole reply available whatever it decided', () => {
+    expect(drive(['FETCH: file a.ts']).full).toBe('FETCH: file a.ts');
+    expect(drive(['an answer that is long enough']).full).toBe('an answer that is long enough');
+  });
+
+  it('shows the plumbing only when a model prefixes its own fetch line', () => {
+    // The documented asymmetry: parseFetchRequest treats this as an ANSWER, so the reader
+    // sees it rather than losing a hop to it. Recorded as a test so the trade stays a choice.
+    const out = drive(['Sure. FETCH: file src/rank.ts']);
+    expect(out.shown).toContain('FETCH:');
+    expect(parseFetchRequest(out.full)).toBeNull();
+  });
+
+  it('never releases text it has not accounted for', () => {
+    // released() is what askStream slices against; if it ever disagreed with what was
+    // emitted, the reader would get a duplicated or truncated answer.
+    const gate = createReplyGate();
+    let emitted = '';
+    for (const c of ['This is a norm', 'al answer.']) emitted += gate.push(c);
+    expect(gate.released()).toBe(emitted);
+    expect(gate.full()).toBe('This is a normal answer.');
   });
 });

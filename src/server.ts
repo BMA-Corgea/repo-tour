@@ -697,11 +697,35 @@ export class RepoTourServer {
       res.write(`event: ${kind}\ndata: ${JSON.stringify(data)}\n\n`);
     };
 
+    /**
+     * Exactly one terminal event, always.
+     *
+     * The reader's panel clears its in-flight bubble on `done` or `error` and on nothing
+     * else, so a stream that closes without one deletes the answer in front of them. This
+     * flag is what makes "always" true rather than intended.
+     */
+    let closed = false;
+    const finish = (kind: 'done' | 'error', data: Record<string, unknown>): void => {
+      if (closed) return;
+      closed = true;
+      // Spend is reported on failure too: the most expensive way for this to go wrong is the
+      // hop ceiling, and a failure that reports zero cost is the one that hides it.
+      send(kind, { model: tutor.model, provider: tutor.provider, inputTokens, outputTokens, usd, ...data });
+    };
+    const fail = (message: string): void => finish('error', { message });
+
     const tutor = this.getTutorChoice();
     const root = base.repoPath && this.repos.some((r) => r.path === base.repoPath) ? base.repoPath : null;
     const fetched: AskFetched[] = [];
-    /** Every path the model was really given this exchange — what a citation is checked against. */
-    const supplied: string[] = base.file ? [base.file] : [];
+    /**
+     * Every path the model was really given this exchange — what a citation is checked against.
+     *
+     * The on-screen file joins this list only once its source is actually in the context: a
+     * PR page whose file is absent from the checkout sends a path and no code, and marking a
+     * citation to it "it was given this file" would be a lie told by the one verdict whose
+     * entire value is that it is trustworthy.
+     */
+    const supplied: string[] = [];
 
     /**
      * The pull request page holds diffs, not whole files, so it cannot send the source the way
@@ -710,6 +734,7 @@ export class RepoTourServer {
      * not send one: the page's own copy is what the reader is looking at and wins.
      */
     const ctx: AskContext = { ...base };
+    if (ctx.source && ctx.file) supplied.push(ctx.file);
     if (!ctx.source && root && ctx.file) {
       const abs = resolveInRepo(root, ctx.file);
       if (abs) {
@@ -718,6 +743,7 @@ export class RepoTourServer {
           if (!text.includes('\0')) {
             ctx.sourceFullLength = text.length;
             ctx.source = text.slice(0, SOURCE_BUDGET);
+            supplied.push(ctx.file);
           }
         } catch { /* a file the diff mentions may not exist on this side of the change */ }
       }
@@ -751,8 +777,11 @@ export class RepoTourServer {
           // text and the streamed text disagree (the provider's own result line wins), say so
           // with a reset rather than appending a second copy of the answer.
           const text = reply.text.trim();
-          if (!text) { send('error', { message: 'the model returned nothing' }); break; }
-          const shown = gate.released();
+          if (!text) { fail('the model returned nothing'); break; }
+          // Trimmed on both sides: `text` is trimmed and `shown` is not, so a reply whose
+          // stream opened with whitespace failed the prefix test and forced a visible
+          // re-render of an answer the reader had already watched arrive.
+          const shown = gate.released().trim();
           if (shown && text.startsWith(shown)) {
             const rest = text.slice(shown.length);
             if (rest) send('delta', { text: rest });
@@ -761,9 +790,8 @@ export class RepoTourServer {
           } else {
             send('delta', { text });
           }
-          send('done', {
-            model: tutor.model, provider: tutor.provider,
-            inputTokens, outputTokens, usd, metered: reply.metered,
+          finish('done', {
+            metered: reply.metered,
             fetches: fetched.map((f) => f.what),
             // Worked out here rather than in the browser so there is ONE implementation of
             // the rule, with tests. The panel only renders what it is handed.
@@ -777,8 +805,20 @@ export class RepoTourServer {
           break;
         }
 
-        // It wants something. Refuse plainly if there is no repository behind this page —
-        // an exported tour has none — rather than inventing a root to read from.
+        // It wants something. The give-up check comes FIRST and before every branch that
+        // can `continue`: when it sat below them, a page whose repo was no longer loaded
+        // plus a model that asks every turn ran the loop to exhaustion and fell out of the
+        // bottom past every send() — no `done`, no `error`, and the panel then removed the
+        // answer bubble, so the reader saw eight lookups and then nothing at all.
+        if (hop >= CEILING) {
+          // It spent its last turn asking again. Say so plainly rather than returning an
+          // empty answer the reader would have to interpret.
+          fail(`the tutor kept asking for files instead of answering (${MAX_FETCH_HOPS} lookups used)`);
+          break;
+        }
+
+        // Refuse plainly if there is no repository behind this page — an exported tour has
+        // none — rather than inventing a root to read from.
         if (!root) {
           fetched.push({
             what: `${request.kind} ${request.arg}`,
@@ -786,14 +826,6 @@ export class RepoTourServer {
           });
           send('fetch', { what: `${request.kind} ${request.arg}`, ok: false, detail: 'no repository behind this page' });
           continue;
-        }
-        if (hop >= CEILING) {
-          // It spent its last turn asking again. Say so plainly rather than returning an
-          // empty answer the reader would have to interpret.
-          send('error', {
-            message: `the tutor kept asking for files instead of answering (${MAX_FETCH_HOPS} lookups used)`,
-          });
-          break;
         }
         if (hop >= MAX_FETCH_HOPS) {
           fetched.push({
@@ -824,8 +856,11 @@ export class RepoTourServer {
     } catch (e) {
       // The provider's own words. "Could not launch the claude CLI" tells the reader what to
       // fix; "request failed" tells them nothing.
-      send('error', { message: e instanceof Error ? e.message.split('\n')[0] : String(e) });
+      fail(e instanceof Error ? (e.message.split('\n')[0] ?? e.message) : String(e));
     }
+    // The backstop. Nothing above should reach here without having finished, but a stream
+    // that closes silently is invisible to the reader and expensive to have already paid for.
+    fail('the tutor stopped without answering');
     if (!res.writableEnded) res.end();
   }
 
@@ -896,6 +931,14 @@ export class RepoTourServer {
        * persisting notes somewhere they were never promised to go.
        */
       if (route === '/api/ask' && req.method === 'POST') {
+        // This route can now read files out of a loaded repository and spend tutor-model
+        // tokens, so a page on another origin must not be able to drive it. The panel is
+        // same-origin; a browser labels its request `same-origin`, and a non-browser caller
+        // sends no such header at all — only an explicit cross-site request is refused.
+        const site = req.headers?.['sec-fetch-site'];
+        if (typeof site === 'string' && site !== 'same-origin' && site !== 'none') {
+          return this.json(res, 403, { error: 'the Ask panel is only reachable from its own page' });
+        }
         let payload: { messages?: unknown; context?: AskContext };
         try {
           payload = JSON.parse(await this.readBody(req)) as typeof payload;

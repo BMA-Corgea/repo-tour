@@ -69,6 +69,8 @@ export const ASK_PERSONA = [
   '    FETCH: search <text to find>',
   `- One request per reply, and at most ${MAX_FETCH_HOPS} of them for a single question, so`,
   '  spend them on what would actually change your answer.',
+  `- There is also a total size budget of about ${Math.round(FETCH_BUDGET / 1000)}k characters across everything you`,
+  '  ask for. A whole large file can spend most of it; a search costs almost nothing.',
   '- When you have enough, answer normally. If you ran out of requests, say what you still',
   '  could not see.',
   '- You have no other tools and no shell. Nothing you ask for can change anything.',

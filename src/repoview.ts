@@ -631,6 +631,16 @@ const NOTES = `
 
   el.clear.addEventListener('click', function () {
     anchor = null; window.__repo.clearSel(); showAnchor();
+    // Also drop the kept question. It used to be cleared only on save, so: keep an answer,
+    // press Clear, type your own note about different lines, save — and the note claimed
+    // source:'tutor' and someone else's question. That is exactly the provenance the keep
+    // button exists to make trustworthy.
+    pendingQuestion = '';
+  });
+
+  // Emptying the box by hand is the same gesture as pressing Clear, and must mean the same.
+  el.text.addEventListener('input', function () {
+    if (!el.text.value.trim()) pendingQuestion = '';
   });
 
   /**
@@ -1308,11 +1318,14 @@ ${opts.servedBy ? `<script>${prTabScript(opts.servedBy.repoPath)}</script>` : ''
 <script>${askPanelScript({
   notesKey: notesKey(repoName),
   chatKey: chatKey(repoName),
+  // AC11 wants a command the reader can PASTE, which means it has to name this repository —
+  // "run repo-tour serve, add this repository" is the copy the AC was written to replace.
   offlineHint: opts.servedBy
-    ? 'Nothing answered — the server behind this page may have stopped. Start it again and reload.'
+    ? `Nothing answered — the server behind this tour of ${root} may have stopped. `
+      + 'Start it again with \u0060repo-tour serve\u0060 and reload this page.'
     : 'This tour was opened as a saved file, so there is no server behind it to answer. Run '
-      + '"repo-tour serve", add this repository, and open the tour from there — your notes and '
-      + 'this conversation are saved in your browser and will still be here.',
+      + `\u0060repo-tour serve\u0060, add ${root} on the page it opens, and ask from there — `
+      + 'your notes and this conversation are saved in this browser and will still be here.',
 })}</script>
 </body>
 </html>`;

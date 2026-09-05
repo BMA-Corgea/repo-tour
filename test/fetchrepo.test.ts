@@ -15,7 +15,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { resolveInRepo, fetchFile, searchRepo, serveFetch } from '../src/fetchrepo.js';
+import { resolveInRepo, fetchFile, searchRepo, serveFetch, isScreenedPath } from '../src/fetchrepo.js';
 
 let root: string;
 let outside: string;
@@ -33,6 +33,11 @@ beforeAll(() => {
   fs.mkdirSync(path.join(root, 'node_modules', 'junk'), { recursive: true });
   fs.writeFileSync(path.join(root, 'node_modules', 'junk', 'index.js'), 'rank rank rank\n');
   fs.writeFileSync(path.join(root, 'bin.dat'), Buffer.from([0x00, 0x01, 0x02, 0x00]));
+  fs.writeFileSync(path.join(root, '.env'), 'AWS_SECRET_ACCESS_KEY=hunter2\n');
+  fs.mkdirSync(path.join(root, '.git'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.git', 'config'), '[remote "origin"]\n  url = https://user:ghp_TOKEN@github.com/x/y.git\n');
+  fs.mkdirSync(path.join(root, '.github', 'workflows'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.github', 'workflows', 'ci.yml'), 'name: ci\n');
 
   try {
     fs.symlinkSync(path.join(outside, 'private.txt'), path.join(root, 'escape.txt'));
@@ -46,7 +51,9 @@ afterAll(() => {
 
 describe('resolveInRepo refuses everything that is not in the repository', () => {
   it('accepts an ordinary relative path', () => {
-    expect(resolveInRepo(root, 'src/rank.ts')).toBe(path.join(root, 'src', 'rank.ts'));
+    // realpath on both sides: /tmp is itself a symlink on some platforms, and the function
+    // deliberately hands back the RESOLVED path so a caller cannot re-resolve it later.
+    expect(resolveInRepo(root, 'src/rank.ts')).toBe(fs.realpathSync(path.join(root, 'src', 'rank.ts')));
   });
 
   it('refuses a climb out with ..', () => {
@@ -73,7 +80,8 @@ describe('resolveInRepo refuses everything that is not in the repository', () =>
   });
 
   it('allows a path that does not exist but would be inside', () => {
-    expect(resolveInRepo(root, 'src/not-yet.ts')).toBe(path.join(root, 'src', 'not-yet.ts'));
+    expect(resolveInRepo(root, 'src/not-yet.ts'))
+      .toBe(path.join(fs.realpathSync(path.join(root, 'src')), 'not-yet.ts'));
   });
 
   it('refuses a null byte and an empty path', () => {
@@ -174,5 +182,71 @@ describe('serveFetch routes the two verbs', () => {
     expect(s.ok).toBe(true);
     if (!s.ok) return;
     expect(s.body).toContain('README.md');
+  });
+});
+
+describe('secrets are not content (the auto-review finding)', () => {
+  // searchRepo always skipped dot-entries and SKIP_DIRS; fetchFile did not, so the same
+  // module refused to FIND 'hunter2' by search while happily serving `.env` by name. That
+  // made the tutor the one component in repo-tour that would read a private repository's
+  // secrets into a prompt — and the reader is only shown the fetch after the material has
+  // already gone to the provider on the next hop.
+  it('refuses a dotfile by name', () => {
+    const out = fetchFile(root, '.env');
+    expect(out.ok).toBe(false);
+    if (out.ok) return;
+    expect(out.reason).toContain('not content');
+    expect(out.reason).not.toContain('hunter2');
+  });
+
+  it('refuses anything inside .git', () => {
+    expect(fetchFile(root, '.git/config').ok).toBe(false);
+    expect(fetchFile(root, '.git').ok).toBe(false);
+  });
+
+  it('refuses dependency and build directories', () => {
+    expect(fetchFile(root, 'node_modules/junk/index.js').ok).toBe(false);
+  });
+
+  it('does not advertise them in a directory listing either', () => {
+    // A listing that names `.env` is a map to it.
+    const out = fetchFile(root, '.');
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.body).not.toContain('.env');
+    expect(out.body).not.toContain('.git');
+    expect(out.body).toContain('README.md');
+  });
+
+  it('still serves .github, which people legitimately tour', () => {
+    const out = fetchFile(root, '.github/workflows/ci.yml');
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.body).toContain('name: ci');
+  });
+
+  it('agrees with searchRepo, which has always refused them', () => {
+    const s = searchRepo(root, 'hunter2');
+    expect(s.ok).toBe(true);
+    if (!s.ok) return;
+    expect(s.body).toContain('No occurrence');
+  });
+
+  it('screens by segment, so a nested dotfile is caught too', () => {
+    expect(isScreenedPath('src/.env')).toBe(true);
+    expect(isScreenedPath('a/node_modules/b.js')).toBe(true);
+    expect(isScreenedPath('src/rank.ts')).toBe(false);
+    expect(isScreenedPath('.github/workflows/ci.yml')).toBe(false);
+    expect(isScreenedPath('.github')).toBe(true);   // the leaf itself is not content
+  });
+});
+
+describe('resolveInRepo hands back the resolved path, not the spelled one', () => {
+  it('returns the real path so a caller cannot re-resolve a symlink after the check', () => {
+    if (!fs.existsSync(path.join(root, 'insidelink'))) {
+      fs.symlinkSync(path.join(root, 'src'), path.join(root, 'insidelink'));
+    }
+    const out = resolveInRepo(root, 'insidelink/rank.ts');
+    expect(out).toBe(fs.realpathSync(path.join(root, 'src', 'rank.ts')));
   });
 });

@@ -6,9 +6,26 @@
  * That is enough to catch the failure that matters — a change landing on one surface and not
  * the other, which is exactly what Q8 ("both, in this one piece of work") was answered to
  * avoid, and what the notes panel's recorded duplication makes easy to do by accident.
+ *
+ * ⚠ READ THIS BEFORE ADDING AN ASSERTION HERE ⚠
+ *
+ * A tour of THIS repository embeds THIS repository's source, and `test/panels.test.ts` is one
+ * of the files it embeds. So `expect(repoHtml).toContain('<some literal>')` finds its own
+ * source text and passes no matter what `src/repoview.ts` does. The first version of this file
+ * did exactly that: the auto-review deleted `window.__openCitation`, the `source:` hand-off,
+ * `window.__keepNote` and the `*Asked:*` export line out of `src/repoview.ts`, and all 21 tests
+ * here still passed — AC1, AC8, AC9 and AC10's repo-tour half had no effective test at all.
+ *
+ * So: NEVER assert against `repoHtml` whole. Assert against `scripts(repoHtml)` — the page's
+ * own `<script>` bodies with every embedded source file stripped out — or against the parsed
+ * `window.__REPO__` payload. `sabotage()` below is the proof the guard works: it deletes a
+ * feature and asserts the test that claims it goes red.
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { digest } from '../src/digest.js';
@@ -18,6 +35,7 @@ import { renderPrView } from '../src/prview.js';
 import { parseUnified } from '../src/diff.js';
 import { noteFromExchange } from '../src/notes.js';
 import { askPanelScript } from '../src/askpanel.js';
+import { SOURCE_BUDGET } from '../src/ask.js';
 import type { FileDelta } from '../src/delta.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -48,6 +66,68 @@ function renderPr(repoPath?: string): string {
   });
 }
 
+/**
+ * The page's own script bodies, with the embedded repository source removed.
+ *
+ * `window.__REPO__` carries every toured file's text, and on a tour of this repository that
+ * includes this test file. Dropping that one assignment leaves the page's REAL client code —
+ * which is the only thing an assertion about `src/repoview.ts` should ever be matching.
+ */
+function scripts(html: string): string {
+  return html
+    .replace(/<script>window\.__REPO__ = \{[\s\S]*?\};<\/script>/, '')
+    .replace(/<script>window\.__STEPS__ = [\s\S]*?;<\/script>/, '')
+    .replace(/<script>window\.__TOPFILE__ = [\s\S]*?;<\/script>/, '');
+}
+
+/**
+ * Render the repo view once per case, each with one of T-18's features cut out of its source,
+ * and hand the pages back for THIS file's own `scripts()` to judge.
+ *
+ * Two deliberate choices. It runs in a CHILD PROCESS because the point is a genuinely fresh
+ * module graph — vitest's loader refuses a cache-busted dynamic import, and an in-process
+ * re-import would hand back the module it already had and quietly prove nothing, which is the
+ * exact class of mistake this block exists to catch. And it returns the raw pages rather than
+ * a verdict, so the stripping under test is the real `scripts()` above and not a copy of it
+ * that could drift away from it.
+ */
+function sabotagedPages(cases: Array<{ file: string; remove: string }>): string[] {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-sabotage-'));
+  const script = path.join(dir, 'run.mts');
+  fs.writeFileSync(script, `
+import fs from 'node:fs';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+const ROOT = ${JSON.stringify(root)};
+const DIR = ${JSON.stringify(dir)};
+const CASES = ${JSON.stringify(cases)};
+const { digest } = await import(pathToFileURL(path.join(ROOT, 'src/digest.ts')).href);
+const { buildCodeTour } = await import(pathToFileURL(path.join(ROOT, 'src/codetour.ts')).href);
+for (let i = 0; i < CASES.length; i++) {
+  const c = CASES[i]!;
+  const abs = path.join(ROOT, c.file);
+  const original = fs.readFileSync(abs, 'utf8');
+  if (!original.includes(c.remove)) throw new Error('not present in ' + c.file + ': ' + c.remove);
+  fs.writeFileSync(abs, original.replace(c.remove, ''));
+  try {
+    const mod: any = await import(pathToFileURL(path.join(ROOT, 'src/repoview.ts')).href + '?s=' + i);
+    const r = await digest(ROOT, { write: false });
+    const plan = buildCodeTour(r, { maxFiles: 3, perFile: 2 });
+    fs.writeFileSync(path.join(DIR, i + '.html'),
+      mod.renderRepoView(r, { steps: plan.steps, itinerary: plan.itinerary }));
+  } finally {
+    fs.writeFileSync(abs, original);
+  }
+}
+`, 'utf8');
+  try {
+    execFileSync('npx', ['tsx', script], { cwd: root, encoding: 'utf8', timeout: 300_000 });
+    return cases.map((_, i) => fs.readFileSync(path.join(dir, `${i}.html`), 'utf8'));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 let repoHtml: string;
 let servedHtml: string;
 
@@ -64,17 +144,20 @@ beforeAll(async () => {
 
 describe('the repo tour hands over what T-18 promised', () => {
   it('sends the source of the file on screen, not only a description of it', () => {
-    expect(repoHtml).toContain('source: R.files[i].text.slice(0,');
-    expect(repoHtml).toContain('sourceFullLength:');
+    // The assertion the auto-review's sabotage exposed: the old text matched nothing the page
+    // emits — only this test file's own copy of it, embedded in the tour. The real line is an
+    // assignment, and it clips to SOURCE_BUDGET.
+    expect(scripts(repoHtml)).toContain(`source = R.files[i].text.slice(0, ${SOURCE_BUDGET});`);
+    expect(scripts(repoHtml)).toContain('sourceFullLength: fullLength');
   });
 
   it('sends the stop index, so a message can be stamped with where it was asked', () => {
-    expect(repoHtml).toContain('stopIndex: window.__tour ? window.__tour.index() : -1');
+    expect(scripts(repoHtml)).toContain('stopIndex: window.__tour ? window.__tour.index() : -1');
     // Regression guard, found by driving the real page: the falsy-zero form reports stop
     // ZERO — the opening stop, where most readers ask their first question — as "not
     // touring". Built by concatenation because a tour of THIS repository embeds this test
     // file, so a guard written as one literal would find itself and fail forever.
-    expect(repoHtml).not.toContain(`window.__tour.index()${')'} || -1`);
+    expect(scripts(repoHtml)).not.toContain(`window.__tour.index()${')'} || -1`);
   });
 
   it('carries the repository overview and the whole stop list in its payload', () => {
@@ -104,14 +187,14 @@ describe('the repo tour hands over what T-18 promised', () => {
     // repository embeds this repository's own source, so the raw HTML contains every string
     // literal in src/ — including the PR page's keys. Matching the rendered form is the only
     // way to test a self-hosting tour and mean it.
-    expect(repoHtml).toContain(`var CHAT_KEY = "repotour:chat:${path.basename(root)}";`);
-    expect(repoHtml).toContain(`var NOTES_KEY = "repotour:notes:${path.basename(root)}";`);
-    expect(repoHtml).not.toMatch(/var CHAT_KEY = "[^"]*#pr-/);
+    expect(scripts(repoHtml)).toContain(`var CHAT_KEY = "repotour:chat:${path.basename(root)}";`);
+    expect(scripts(repoHtml)).toContain(`var NOTES_KEY = "repotour:notes:${path.basename(root)}";`);
+    expect(scripts(repoHtml)).not.toMatch(/var CHAT_KEY = "[^"]*#pr-/);
   });
 
   it('can open a file at a cited line', () => {
-    expect(repoHtml).toContain('window.__openCitation');
-    expect(repoHtml).toContain('window.__repo.mark(line, line)');
+    expect(scripts(repoHtml)).toContain('window.__openCitation');
+    expect(scripts(repoHtml)).toContain('window.__repo.mark(line, line)');
   });
 
   it('tells a reader who opened it from disk exactly what to run (AC11)', () => {
@@ -119,11 +202,16 @@ describe('the repo tour hands over what T-18 promised', () => {
     const exported = JSON.parse(hintOf(repoHtml)) as string;
     expect(exported).toContain('opened as a saved file');
     expect(exported).toContain('repo-tour serve');
+    // The AC's own words: "names the command WITH THE REPO PATH in it". Asserting only the
+    // command was asserting the implementation — the first version passed while the message
+    // still said "add this repository", which is the copy the AC was written to replace.
+    expect(exported).toContain(root);
     expect(exported).toContain('will still be here');
     // a served page says something different — the server stopped, not "you saved this"
     const served = JSON.parse(hintOf(servedHtml)) as string;
     expect(served).not.toContain('opened as a saved file');
     expect(served).toContain('may have stopped');
+    expect(served).toContain(root);
   });
 });
 
@@ -153,6 +241,13 @@ describe('the pull request page hands over the same things (AC10)', () => {
   it('can jump to a cited file', () => {
     expect(renderPr()).toContain('window.__openCitation');
   });
+
+  it('names the checkout in its offline message too (AC11)', () => {
+    const hintOf = (html: string): string => /var OFFLINE_HINT = ("(?:[^"\\]|\\.)*");/.exec(html)![1]!;
+    expect(JSON.parse(hintOf(renderPr('/tmp/checkout'))) as string).toContain('/tmp/checkout');
+    // and stays sane when there is no root to name
+    expect(JSON.parse(hintOf(renderPr())) as string).toContain('repo-tour serve');
+  });
 });
 
 describe('an answer can become a note, on both surfaces (AC8)', () => {
@@ -176,16 +271,38 @@ describe('an answer can become a note, on both surfaces (AC8)', () => {
     // The duplication notes.ts has recorded since T-3: two panels, one shape. This is the
     // guard that they did not drift apart while T-18 touched both.
     for (const html of [repoHtml, renderPr()]) {
-      expect(html).toContain('question: pendingQuestion || undefined');
-      expect(html).toContain("source: pendingQuestion ? 'tutor' : undefined");
-      expect(html).toContain('window.__keepNote');
-      expect(html).toContain('trim it to what matters, then save');
+      expect(scripts(html)).toContain('question: pendingQuestion || undefined');
+      expect(scripts(html)).toContain("source: pendingQuestion ? 'tutor' : undefined");
+      expect(scripts(html)).toContain('window.__keepNote');
+      expect(scripts(html)).toContain('trim it to what matters, then save');
     }
   });
 
   it('both exports show the question a kept note came from', () => {
-    expect(repoHtml).toContain("'*Asked:* '");
-    expect(renderPr()).toContain("'*Asked:* '");
+    expect(scripts(repoHtml)).toContain("'*Asked:* '");
+    expect(scripts(renderPr())).toContain("'*Asked:* '");
+  });
+
+  it('a note written before T-18 still renders and still exports', () => {
+    // `question` and `source` are optional for exactly one reason: notes already sitting in
+    // somebody's browser have neither, and they must keep working. Both panels read them
+    // behind a guard, and a typed note writes `undefined`, which JSON.stringify drops.
+    for (const html of [scripts(repoHtml), scripts(renderPr())]) {
+      expect(html).toMatch(/if \((?:n|nt)\.question\)/);
+    }
+    // nothing unconditionally dereferences them
+    expect(scripts(repoHtml)).not.toMatch(/[^.\w](?:n|nt)\.question\.[a-z]/);
+    expect(scripts(repoHtml)).not.toMatch(/[^.\w](?:n|nt)\.source\.[a-z]/);
+  });
+
+  it('a typed note cannot inherit a kept answer provenance', () => {
+    // Found by the auto-review: pendingQuestion was cleared only on save, so keep → clear →
+    // type your own note → save produced a note claiming source:'tutor' under someone else's
+    // question. That is precisely the provenance AC8 exists to make trustworthy.
+    for (const html of [scripts(repoHtml), scripts(renderPr())]) {
+      expect(html).toContain("if (!el.text.value.trim()) pendingQuestion = '';");
+    }
+    expect(scripts(repoHtml)).toContain("window.__repo.clearSel(); showAnchor();");
   });
 
   it('the panel offers the keep button and reads the question from the turn above', () => {
@@ -223,4 +340,51 @@ describe('the panel script is shared, so both pages get the same behaviour', () 
   it('uses the offline words it was given', () => {
     expect(script).toContain('the hint');
   });
+});
+
+describe('these assertions actually bite (the auto-review proof)', () => {
+  // The auto-review deleted four of T-18's repo-tour features and all 21 tests here still
+  // passed, because each assertion was finding its own source text inside the toured page.
+  // This runs that sabotage as a test: delete the feature, re-render in a fresh process, and
+  // require the page to have lost it. If `scripts()` ever stops stripping the embedded
+  // source, this is where the next reader finds out.
+  const CASES = [
+    { ac: 'AC1 — the source hand-off', file: 'src/repoview.ts',
+      remove: 'source = R.files[i].text.slice(0, ${SOURCE_BUDGET});',
+      gone: `source = R.files[i].text.slice(0, ${SOURCE_BUDGET});` },
+    { ac: 'AC9 — the citation click-through', file: 'src/repoview.ts',
+      remove: 'window.__openCitation = function (file, line) {',
+      gone: 'window.__openCitation = function (file, line) {' },
+    { ac: 'AC8 — the keep hook', file: 'src/repoview.ts',
+      remove: 'window.__keepNote = function (question, answer) {',
+      gone: 'window.__keepNote = function (question, answer) {' },
+    { ac: 'AC8 — the question in the export', file: 'src/repoview.ts',
+      remove: "if (nt.question) out.push('', '*Asked:* ' + nt.question);",
+      gone: "'*Asked:* '" },
+  ];
+
+  let broken: string[];
+  beforeAll(() => {
+    broken = sabotagedPages(CASES.map((c) => ({ file: c.file, remove: c.remove })));
+  }, 300_000);
+
+  it('and the trap they guard against is still real', () => {
+    // Not every marker self-matches — AC1's does not, because the page renders SOURCE_BUDGET
+    // as a number while both this file and repoview.ts carry it as `${…}`. But the keep hook
+    // is a plain literal that lives in this test file too, so a sabotaged page still contains
+    // it and only `scripts()` can tell. If this ever goes green trivially, the toured file set
+    // has changed and every assertion above needs re-examining.
+    const keepHook = 'window.__keepNote = function (question, answer) {';
+    expect(broken[2]!, 'the raw page should still self-match on a plain literal').toContain(keepHook);
+    expect(scripts(broken[2]!)).not.toContain(keepHook);
+  });
+
+  for (const [i, c] of CASES.entries()) {
+    it(`notices when ${c.ac} is deleted`, () => {
+      expect(scripts(broken[i]!), `${c.ac} survived being deleted — that assertion is self-matching`)
+        .not.toContain(c.gone);
+      // and the healthy page has it, so the check is not vacuous in either direction
+      expect(scripts(repoHtml)).toContain(c.gone);
+    });
+  }
 });

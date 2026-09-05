@@ -2189,9 +2189,10 @@ describe('T-13 — the build step reaches the tutor too', () => {
 
   it('ASK_PERSONA is byte-for-byte what we think it is', () => {
     // A snapshot, not a regex. It was written for T-13, which had to touch ask.ts without
-    // touching the persona. T-18 changes it DELIBERATELY — the fetch protocol and the
-    // citation rule are the ticket — so the snapshot moves with it rather than being
-    // deleted. What it still buys: nobody edits this prompt by accident.
+    // touching the persona. T-18 changes it DELIBERATELY — the fetch protocol, the citation
+    // rule, and (after the auto-review) the character budget the plan required it to state —
+    // so the snapshot moves with it rather than being deleted. What it still buys: nobody
+    // edits this prompt by accident.
     expect(ASK_PERSONA).toBe([
       'You are helping someone read a repository they did not write, inside repo-tour.',
       'They can see a page: a file, its diff if this is a pull request, and an explanation of',
@@ -2222,6 +2223,8 @@ describe('T-13 — the build step reaches the tutor too', () => {
       '    FETCH: search <text to find>',
       '- One request per reply, and at most 6 of them for a single question, so',
       '  spend them on what would actually change your answer.',
+      '- There is also a total size budget of about 40k characters across everything you',
+      '  ask for. A whole large file can spend most of it; a search costs almost nothing.',
       '- When you have enough, answer normally. If you ran out of requests, say what you still',
       '  could not see.',
       '- You have no other tools and no shell. Nothing you ask for can change anything.',

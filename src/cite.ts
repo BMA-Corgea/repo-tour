@@ -92,6 +92,10 @@ export function findCitations(
       resolved = suppliedByBase.get(path)!;
     } else if (exists(path)) {
       verdict = 'unshown';
+    } else if (path.startsWith('../') || path.includes('/../')) {
+      // A path that climbs out of the repository is not a claim about a file in it, so
+      // "there is no such file" would be the wrong mark to put on it. Leave it as text.
+      continue;
     } else if (hasSlash) {
       verdict = 'unknown';
     } else {

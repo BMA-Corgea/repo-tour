@@ -246,6 +246,11 @@ async function version(bin: string): Promise<string> {
  */
 let partialMessagesSupported: boolean | null = null;
 
+/** Forget what was learned about the CLI's flags. For tests, and for a settings change. */
+export function resetProviderProbe(): void {
+  partialMessagesSupported = null;
+}
+
 /** One NDJSON line of `--output-format stream-json`, as far as we care about it. */
 interface StreamLine {
   type?: string;
@@ -360,7 +365,11 @@ const claude: Provider = {
       if (out.r.code === 0) { partialMessagesSupported = true; return out.reply; }
       // Only a flag the CLI does not know is worth retrying — anything else is a real error
       // and pretending otherwise would double every failure's wait.
-      if (!/unknown option|unrecognized|--include-partial-messages/i.test(out.r.stderr)) {
+      //
+      // Deliberately NOT matching the flag's own name: a CLI that echoes its argv in an error
+      // banner would turn any transient failure into a permanent, process-lifetime downgrade
+      // to whole-message streaming, with no way back short of a restart.
+      if (!/unknown option|unrecognized option|unknown argument|unexpected argument/i.test(out.r.stderr)) {
         throw new Error(`claude exited ${out.r.code}: ${out.r.stderr.trim().slice(0, 200)}`);
       }
       partialMessagesSupported = false;
