@@ -31,8 +31,16 @@ import { buildArchitecture, architectureBrief } from './architecture.js';
 import { interpretStops, applyMeanings, interpretArchitecture, DEFAULT_MODEL } from './interpret.js';
 import { renderRepoView } from './repoview.js';
 import { baseCss, alternateCss, skinPicker, skinScript } from './skins.js';
-import { surveyProviders, resolveChoice, providerById, killLlmChildren, runLlm, type LlmChoice } from './llm.js';
-import { buildAskPrompt, trimMessages, type AskContext } from './ask.js';
+import {
+  surveyProviders, resolveChoice, resolveTutorChoice, providerById, killLlmChildren,
+  runLlm, runLlmStream, type LlmChoice,
+} from './llm.js';
+import {
+  buildAskPrompt, trimMessages, parseFetchRequest, createReplyGate, clipToBudget,
+  MAX_FETCH_HOPS, FETCH_BUDGET, SOURCE_BUDGET, type AskContext, type AskMessage, type AskFetched,
+} from './ask.js';
+import { serveFetch, resolveInRepo } from './fetchrepo.js';
+import { findCitations } from './cite.js';
 import { listPrs, PrResolutionError, type PrListResult } from './pr.js';
 import { NoCheckpointError } from './checkpoint.js';
 import { runPrFlow } from './prflow.js';
@@ -359,12 +367,21 @@ export class RepoTourServer {
    * the loaded-repo list rather than in localStorage.
    */
   private choice: LlmChoice;
+  /**
+   * The tutor's model, when it has been set apart from the build's.
+   *
+   * Null means "not chosen" rather than "same as the build" — `getTutorChoice` resolves that
+   * to the provider's strongest model, which is the Q5 default.
+   */
+  private tutorChoice: LlmChoice | null = null;
 
   constructor(private opts: ServerOptions = {}) {
     this.statePath = opts.statePath
       ?? path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.cache', 'loaded.json');
     this.interpret = opts.interpret !== false;
-    this.choice = resolveChoice(opts.llm ?? this.loadChoice());
+    const stored = this.loadChoice();
+    this.choice = resolveChoice(opts.llm ?? stored);
+    if (stored?.tutor) this.tutorChoice = resolveTutorChoice(stored.tutor, this.choice);
     this.load();
     this.resumeInterrupted();
   }
@@ -390,20 +407,50 @@ export class RepoTourServer {
     return path.join(path.dirname(this.statePath), 'llm.json');
   }
 
-  private loadChoice(): Partial<LlmChoice> | null {
-    try { return JSON.parse(fs.readFileSync(this.choicePath(), 'utf8')) as Partial<LlmChoice>; }
-    catch { return null; }
+  private loadChoice(): (Partial<LlmChoice> & { tutor?: Partial<LlmChoice> }) | null {
+    try {
+      return JSON.parse(fs.readFileSync(this.choicePath(), 'utf8')) as Partial<LlmChoice> & {
+        tutor?: Partial<LlmChoice>;
+      };
+    } catch { return null; }
   }
 
   getChoice(): LlmChoice { return this.choice; }
 
   setChoice(next: Partial<LlmChoice>): LlmChoice {
     this.choice = resolveChoice(next);
+    this.persistChoices();
+    return this.choice;
+  }
+
+  /**
+   * Which model answers the reader's questions — a DIFFERENT setting from the one that writes
+   * the tour (T-18 Q5).
+   *
+   * They are different jobs. Narration is written once and read many times, so it is worth
+   * running cheaply; a tutor answer is written once, for one person, who is stuck. Unset, it
+   * is the provider's strongest model rather than its default.
+   */
+  getTutorChoice(): LlmChoice {
+    return resolveTutorChoice(this.tutorChoice, this.choice);
+  }
+
+  setTutorChoice(next: Partial<LlmChoice>): LlmChoice {
+    this.tutorChoice = resolveTutorChoice(next, this.choice);
+    this.persistChoices();
+    return this.tutorChoice;
+  }
+
+  private persistChoices(): void {
     try {
       fs.mkdirSync(path.dirname(this.choicePath()), { recursive: true });
-      fs.writeFileSync(this.choicePath(), JSON.stringify(this.choice, null, 2));
+      fs.writeFileSync(
+        this.choicePath(),
+        // The build choice stays at the top level, exactly where it has always been, so a
+        // settings file written before T-18 keeps working and simply has no tutor key.
+        JSON.stringify({ ...this.choice, tutor: this.tutorChoice ?? undefined }, null, 2),
+      );
     } catch { /* an unwritable setting lasts this run, which is better than refusing it */ }
-    return this.choice;
   }
 
   private load(): void {
@@ -558,7 +605,15 @@ export class RepoTourServer {
     const job: Job = { repo: key, state: 'running', lines: [`reading PR #${n}`], startedAt: Date.now() };
     this.jobs.set(key, job);
 
-    void runPrFlow(repoPath, { pr: n, onProgress: (line) => job.lines.push(line) })
+    void runPrFlow(repoPath, {
+      pr: n,
+      // The build choice, because it is what WROTE any cached architecture overview — the
+      // writer is part of the interpretation cache key, so passing it is what makes AC4
+      // reach this page for a reader who changed the model in settings.
+      provider: this.choice.provider,
+      model: this.choice.model,
+      onProgress: (line) => job.lines.push(line),
+    })
       .then((result) => {
         this.prTours.set(key, { html: result.html });
         while (this.prTours.size > RepoTourServer.PR_TOUR_KEEP) {
@@ -622,6 +677,201 @@ export class RepoTourServer {
     res.end(body);
   }
 
+  /**
+   * The Ask panel's answer, streamed, with the tutor's retrieval loop around it.
+   *
+   * One event stream carries the whole exchange: `fetch` when the tutor asks for material and
+   * gets it, `delta` as the answer is written, `done` with what it cost, `error` if the
+   * provider fails. The reader watches the work happen — which is the thing that made a
+   * server-mediated fetch worth choosing over handing the CLI a toolbelt (T-18 Q1). Every hop
+   * is a fact on the page, not an implementation detail.
+   *
+   * The loop is bounded twice over: MAX_FETCH_HOPS requests and FETCH_BUDGET characters. Both
+   * limits, when hit, are TOLD to the model so it can answer with what it has and say what it
+   * could not see — never silently truncated into a confident answer.
+   */
+  private async askStream(
+    res: http.ServerResponse, messages: AskMessage[], base: AskContext,
+  ): Promise<void> {
+    res.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache, no-transform',
+      connection: 'keep-alive',
+      // Nothing between this and the browser should be holding the answer back.
+      'x-accel-buffering': 'no',
+    });
+    const send = (kind: string, data: unknown): void => {
+      if (res.writableEnded) return;
+      res.write(`event: ${kind}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+
+    /**
+     * Exactly one terminal event, always.
+     *
+     * The reader's panel clears its in-flight bubble on `done` or `error` and on nothing
+     * else, so a stream that closes without one deletes the answer in front of them. This
+     * flag is what makes "always" true rather than intended.
+     */
+    let closed = false;
+    const finish = (kind: 'done' | 'error', data: Record<string, unknown>): void => {
+      if (closed) return;
+      closed = true;
+      // Spend is reported on failure too: the most expensive way for this to go wrong is the
+      // hop ceiling, and a failure that reports zero cost is the one that hides it.
+      send(kind, { model: tutor.model, provider: tutor.provider, inputTokens, outputTokens, usd, ...data });
+    };
+    const fail = (message: string): void => finish('error', { message });
+
+    const tutor = this.getTutorChoice();
+    const root = base.repoPath && this.repos.some((r) => r.path === base.repoPath) ? base.repoPath : null;
+    const fetched: AskFetched[] = [];
+    /**
+     * Every path the model was really given this exchange — what a citation is checked against.
+     *
+     * The on-screen file joins this list only once its source is actually in the context: a
+     * PR page whose file is absent from the checkout sends a path and no code, and marking a
+     * citation to it "it was given this file" would be a lie told by the one verdict whose
+     * entire value is that it is trustworthy.
+     */
+    const supplied: string[] = [];
+
+    /**
+     * The pull request page holds diffs, not whole files, so it cannot send the source the way
+     * the repo tour does — and a diff is exactly the shape that cannot answer "what does the
+     * rest of this function do". Read it from the checkout instead, and only when the page did
+     * not send one: the page's own copy is what the reader is looking at and wins.
+     */
+    const ctx: AskContext = { ...base };
+    if (ctx.source && ctx.file) supplied.push(ctx.file);
+    if (!ctx.source && root && ctx.file) {
+      const abs = resolveInRepo(root, ctx.file);
+      if (abs) {
+        try {
+          const text = fs.readFileSync(abs, 'utf8');
+          if (!text.includes('\0')) {
+            ctx.sourceFullLength = text.length;
+            ctx.source = text.slice(0, SOURCE_BUDGET);
+            supplied.push(ctx.file);
+          }
+        } catch { /* a file the diff mentions may not exist on this side of the change */ }
+      }
+    }
+    let budget = FETCH_BUDGET;
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let usd = 0;
+
+    try {
+      // Bounded twice over, and the second bound is not decoration: the first version of this
+      // loop only ended when a reply was NOT a request, so a model that asked for a file every
+      // single time spun the server forever. `pass` is the hard ceiling — one more pass than
+      // there are lookups, so there is always a turn left in which to actually answer.
+      const CEILING = MAX_FETCH_HOPS + 1;
+      for (let hop = 0; hop <= CEILING; hop++) {
+        const gate = createReplyGate();
+        const prompt = buildAskPrompt(messages, { ...ctx, fetched });
+        const reply = await runLlmStream(prompt, tutor, root ?? process.cwd(), (t) => {
+          const safe = gate.push(t);
+          if (safe) send('delta', { text: safe });
+        });
+
+        const request = parseFetchRequest(reply.text);
+        inputTokens += reply.inputTokens;
+        outputTokens += reply.outputTokens;
+        usd += reply.usd;
+
+        if (!request) {
+          // Not a fetch after all: release whatever the gate was still holding. If the final
+          // text and the streamed text disagree (the provider's own result line wins), say so
+          // with a reset rather than appending a second copy of the answer.
+          const text = reply.text.trim();
+          if (!text) { fail('the model returned nothing'); break; }
+          // Trimmed on both sides: `text` is trimmed and `shown` is not, so a reply whose
+          // stream opened with whitespace failed the prefix test and forced a visible
+          // re-render of an answer the reader had already watched arrive.
+          const shown = gate.released().trim();
+          if (shown && text.startsWith(shown)) {
+            const rest = text.slice(shown.length);
+            if (rest) send('delta', { text: rest });
+          } else if (shown) {
+            send('reset', { text });
+          } else {
+            send('delta', { text });
+          }
+          finish('done', {
+            metered: reply.metered,
+            fetches: fetched.map((f) => f.what),
+            // Worked out here rather than in the browser so there is ONE implementation of
+            // the rule, with tests. The panel only renders what it is handed.
+            citations: findCitations(text, supplied, (rel) => {
+              if (!root) return false;
+              const abs = resolveInRepo(root, rel);
+              if (!abs) return false;
+              try { return fs.statSync(abs).isFile(); } catch { return false; }
+            }),
+          });
+          break;
+        }
+
+        // It wants something. The give-up check comes FIRST and before every branch that
+        // can `continue`: when it sat below them, a page whose repo was no longer loaded
+        // plus a model that asks every turn ran the loop to exhaustion and fell out of the
+        // bottom past every send() — no `done`, no `error`, and the panel then removed the
+        // answer bubble, so the reader saw eight lookups and then nothing at all.
+        if (hop >= CEILING) {
+          // It spent its last turn asking again. Say so plainly rather than returning an
+          // empty answer the reader would have to interpret.
+          fail(`the tutor kept asking for files instead of answering (${MAX_FETCH_HOPS} lookups used)`);
+          break;
+        }
+
+        // Refuse plainly if there is no repository behind this page — an exported tour has
+        // none — rather than inventing a root to read from.
+        if (!root) {
+          fetched.push({
+            what: `${request.kind} ${request.arg}`,
+            body: 'refused: this page is not attached to a repository on disk, so nothing can be fetched for it',
+          });
+          send('fetch', { what: `${request.kind} ${request.arg}`, ok: false, detail: 'no repository behind this page' });
+          continue;
+        }
+        if (hop >= MAX_FETCH_HOPS) {
+          fetched.push({
+            what: `${request.kind} ${request.arg}`,
+            body: `refused: you have used all ${MAX_FETCH_HOPS} lookups for this question. Answer with what you have, and say what you could not see.`,
+          });
+          send('fetch', { what: `${request.kind} ${request.arg}`, ok: false, detail: `lookup limit of ${MAX_FETCH_HOPS} reached` });
+          continue;
+        }
+
+        const outcome = serveFetch(root, request);
+        if (!outcome.ok) {
+          fetched.push({ what: outcome.what, body: outcome.reason });
+          send('fetch', { what: outcome.what, ok: false, detail: outcome.reason });
+          continue;
+        }
+        const clipped = clipToBudget(outcome.body, budget);
+        if (!clipped) {
+          fetched.push({ what: outcome.what, body: 'refused: the budget for fetched material is spent. Answer with what you have.' });
+          send('fetch', { what: outcome.what, ok: false, detail: 'the budget for fetched material is spent' });
+          continue;
+        }
+        budget -= clipped.body.length;
+        fetched.push({ what: outcome.what, body: clipped.body, truncated: clipped.truncated });
+        if (request.kind === 'file') supplied.push(request.arg.replace(/^\.\//, ''));
+        send('fetch', { what: outcome.what, ok: true, chars: clipped.body.length, truncated: clipped.truncated });
+      }
+    } catch (e) {
+      // The provider's own words. "Could not launch the claude CLI" tells the reader what to
+      // fix; "request failed" tells them nothing.
+      fail(e instanceof Error ? (e.message.split('\n')[0] ?? e.message) : String(e));
+    }
+    // The backstop. Nothing above should reach here without having finished, but a stream
+    // that closes silently is invisible to the reader and expensive to have already paid for.
+    fail('the tutor stopped without answering');
+    if (!res.writableEnded) res.end();
+  }
+
   private async readBody(req: http.IncomingMessage): Promise<string> {
     const chunks: Buffer[] = [];
     for await (const c of req) chunks.push(c as Buffer);
@@ -656,15 +906,25 @@ export class RepoTourServer {
       if (route === '/api/version') return this.json(res, 200, { bootId: this.bootId });
 
       if (route === '/api/llm') {
-        return this.json(res, 200, { chosen: this.choice, providers: await surveyProviders() });
+        return this.json(res, 200, {
+          chosen: this.choice,
+          // Named separately because it IS separate (T-18 Q5): the model that writes the tour
+          // and the model that answers your questions are two different decisions.
+          tutor: this.getTutorChoice(),
+          tutorExplicit: this.tutorChoice !== null,
+          providers: await surveyProviders(),
+        });
       }
 
       if (route === '/api/llm-set' && req.method === 'POST') {
-        const body = JSON.parse(await this.readBody(req)) as Partial<LlmChoice>;
+        const body = JSON.parse(await this.readBody(req)) as Partial<LlmChoice> & { for?: string };
         if (body.provider && !providerById(body.provider)) {
           return this.json(res, 400, { error: `no such provider: ${body.provider}` });
         }
-        return this.json(res, 200, { chosen: this.setChoice(body) });
+        if (body.for === 'tutor') {
+          return this.json(res, 200, { chosen: this.choice, tutor: this.setTutorChoice(body) });
+        }
+        return this.json(res, 200, { chosen: this.setChoice(body), tutor: this.getTutorChoice() });
       }
 
       if (route === '/api/repos') return this.json(res, 200, { repos: this.listRepos() });
@@ -679,6 +939,14 @@ export class RepoTourServer {
        * persisting notes somewhere they were never promised to go.
        */
       if (route === '/api/ask' && req.method === 'POST') {
+        // This route can now read files out of a loaded repository and spend tutor-model
+        // tokens, so a page on another origin must not be able to drive it. The panel is
+        // same-origin; a browser labels its request `same-origin`, and a non-browser caller
+        // sends no such header at all — only an explicit cross-site request is refused.
+        const site = req.headers?.['sec-fetch-site'];
+        if (typeof site === 'string' && site !== 'same-origin' && site !== 'none') {
+          return this.json(res, 403, { error: 'the Ask panel is only reachable from its own page' });
+        }
         let payload: { messages?: unknown; context?: AskContext };
         try {
           payload = JSON.parse(await this.readBody(req)) as typeof payload;
@@ -687,18 +955,7 @@ export class RepoTourServer {
         }
         const messages = trimMessages(payload.messages);
         if (!messages.length) return this.json(res, 400, { error: 'ask something first' });
-
-        const prompt = buildAskPrompt(messages, payload.context ?? {});
-        try {
-          const reply = await runLlm(prompt, this.choice, process.cwd());
-          const text = reply.text.trim();
-          if (!text) return this.json(res, 502, { error: 'the model returned nothing' });
-          return this.json(res, 200, { reply: text, model: this.choice.model, provider: this.choice.provider });
-        } catch (e) {
-          // The provider's own words. "Could not launch the claude CLI" tells the reader
-          // what to fix; "request failed" tells them nothing.
-          return this.json(res, 502, { error: e instanceof Error ? e.message.split('\n')[0] : String(e) });
-        }
+        return this.askStream(res, messages, payload.context ?? {});
       }
 
       /**
@@ -1038,6 +1295,9 @@ a{color:var(--accent)}
 /* ── who writes the explanations ─────────────────────────────────────────────────────────── */
 .llm{margin-bottom:34px}
 .llmgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:10px}
+.tutorrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px}
+.tutorrow label{font-weight:600;font-size:13px}
+.tutorrow select{padding:4px 6px}
 .prov{
   border:1px solid var(--line);border-radius:10px;padding:13px 15px;background:var(--bg);
   cursor:pointer;transition:border-color .14s ease
@@ -1112,6 +1372,11 @@ function renderHome(): string {
       <span class="said" id="llmnow"></span>
     </div>
     <div class="llmgrid" id="llmgrid"></div>
+    <div class="tutorrow" id="tutorrow">
+      <label for="tutormodel">Who answers your questions while you read</label>
+      <select id="tutormodel"></select>
+      <span class="said" id="tutornote"></span>
+    </div>
     <p class="said llmnote">
       Everything else about a tour is worked out on this machine by parsers and git. This one
       stage reads your source and writes prose about it, so it is the only place a choice of
@@ -1220,8 +1485,27 @@ function refreshLlm() {
     document.getElementById('llmnow').textContent = d.chosen.provider + ' · ' + d.chosen.model;
     document.getElementById('llmgrid').innerHTML =
       d.providers.map(function (p) { return llmCard(p, d.chosen); }).join('');
+
+    // The tutor is a SEPARATE choice, and the point of showing it here is that it can be
+    // seen to be separate: the tour is written once and read many times, an answer is
+    // written once for one person who is stuck.
+    var prov = null;
+    for (var i = 0; i < d.providers.length; i++) if (d.providers[i].id === d.tutor.provider) prov = d.providers[i];
+    var sel = document.getElementById('tutormodel');
+    sel.innerHTML = (prov ? prov.models : [d.tutor.model]).map(function (m) {
+      return '<option value="' + esc(m) + '"' + (m === d.tutor.model ? ' selected' : '') + '>' + esc(m) + '</option>';
+    }).join('');
+    document.getElementById('tutornote').textContent = d.tutorExplicit
+      ? 'your choice'
+      : 'the strongest model this provider offers, by default';
   });
 }
+
+document.getElementById('tutormodel').addEventListener('change', function (e) {
+  fetch('/api/llm-set', { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ for: 'tutor', model: e.target.value }) })
+    .then(refreshLlm);
+});
 
 document.getElementById('llmgrid').addEventListener('change', function (e) {
   var sel = e.target.closest('[data-model]');

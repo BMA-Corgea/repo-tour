@@ -29,6 +29,7 @@ import { band } from './prtour.js';
 import { HIGHLIGHTER } from './repoview.js';
 import { askPanelScript, askPanelHtml, ASK_CSS } from './askpanel.js';
 import { notesPanelScript, notesPanelHtml, notesKey, NOTES_CSS } from './notes.js';
+import { chatKey } from './chat.js';
 
 export interface PrViewOptions {
   refs: PrRefs;
@@ -38,6 +39,22 @@ export interface PrViewOptions {
   meanings?: Map<string, string>;
   /** who imports each changed file, likewise */
   importers?: Map<string, string[]>;
+  /**
+   * The checkout this pull request lives in.
+   *
+   * T-18: it is what lets the tutor ask the server to read a file the diff only shows a
+   * fragment of — on a PR page more than anywhere, "what does the rest of this function do"
+   * is the question, and a diff cannot answer it.
+   */
+  repoPath?: string;
+  /**
+   * What the digest concluded about the repository as a whole, when it already knows.
+   *
+   * AC4 on this surface (AC10). Looked up from the interpretation cache by the PR flow, so a
+   * repository that has been toured carries its overview here and one that has not carries
+   * null — never a paid interpretation triggered by opening a pull request.
+   */
+  repoOverview?: string | null;
   deltas: FileDelta[];
   diffs: Map<string, FileDiff>;
   steps: CodeStep[];
@@ -189,6 +206,9 @@ export function renderPrView(opts: PrViewOptions): string {
   // disagree about what is on screen.
   const meta = {
     repo: repoName,
+    repoPath: opts.repoPath ?? null,
+    repoOverview: opts.repoOverview ?? null,
+    stops: deltas.map((d, i) => ({ index: i, title: d.path })),
     pr: refs.number,
     title: refs.prose.title,
     body: refs.prose.body,
@@ -349,6 +369,9 @@ export function renderPrView(opts: PrViewOptions): string {
     Array.prototype.forEach.call(document.querySelectorAll('.stop'), function (s) {
       s.classList.toggle('on', s.getAttribute('data-file') === file);
     });
+    // On this page the FILE is the stop, so moving between files is what makes the Ask
+    // panel's stamp and its this-stop filter stale.
+    if (window.__askStopChanged) window.__askStopChanged();
   }
 
   Array.prototype.forEach.call(document.querySelectorAll('.prfile'), function (b) {
@@ -427,14 +450,27 @@ export function renderPrView(opts: PrViewOptions): string {
     }).join('\\n') : '';
     return {
       repo: META.repo,
+      repoPath: META.repoPath || null,
+      repoOverview: META.repoOverview || null,
+      stops: META.stops || [],
       pr: { number: META.pr, title: META.title, body: META.body, head: META.headLabel, base: META.baseLabel },
       file: f,
+      // No source here: this page holds diffs, not whole files. The server fills it in from
+      // the checkout, and the tutor can ask for anything else it needs.
       fileMeaning: m.meaning || null,
+      stopIndex: m.index === undefined ? -1 : m.index,
       stopTitle: m.title || null,
       stopText: m.narrative || null,
       diff: diffText,
       importers: m.importers || []
     };
+  };
+
+  /** A citation clicked in an answer: open that file's diff, if this PR touches it. */
+  window.__openCitation = function (file) {
+    if (!file) return;
+    var row = document.querySelector('[data-file="' + (window.CSS && CSS.escape ? CSS.escape(file) : file) + '"]');
+    if (row) { row.click(); row.scrollIntoView({ block: 'center' }); }
   };
 
   // ---- panes
@@ -453,7 +489,17 @@ export function renderPrView(opts: PrViewOptions): string {
 })();
 </script>
 <script>${notesPanelScript(notesKey(repoName, refs.number))}</script>
-<script>${askPanelScript(notesKey(repoName, refs.number))}</script>
+<script>${askPanelScript({
+  notesKey: notesKey(repoName, refs.number),
+  chatKey: chatKey(repoName, refs.number),
+  // Names the checkout, same as the repo tour's: a message that cannot tell you WHICH
+  // repository to reopen is the copy AC11 exists to replace.
+  offlineHint: 'Nothing answered — the server behind this page may have stopped. Run '
+    + '\u0060repo-tour serve\u0060'
+    + (opts.repoPath ? `, add ${opts.repoPath} on the page it opens,` : '')
+    + ' and open this pull request from there — your notes and this conversation are saved '
+    + 'in this browser and will still be here.',
+})}</script>
 </body></html>`;
 }
 

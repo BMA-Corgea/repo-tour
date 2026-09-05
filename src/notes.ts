@@ -48,6 +48,43 @@ export interface NoteRecord {
   /** the code it is about, quoted, so the note survives the file moving */
   quote: string;
   body: string;
+  /**
+   * The question that produced this note, when it came out of the Ask panel (T-18 Q6).
+   *
+   * Optional, and that is not laziness: notes already written and sitting in somebody's
+   * browser have neither this nor `source`, and they must keep rendering and keep exporting.
+   * Every reader of a note therefore treats both as "might not be there".
+   */
+  question?: string;
+  /** where the note came from; absent means the reader typed it themselves */
+  source?: 'tutor';
+}
+
+/**
+ * The record a kept tutor answer becomes.
+ *
+ * Q6 was answered "a keep button that drops it into the note box to trim", so the BODY is
+ * whatever the reader leaves after trimming — their words, as every note body is. What the
+ * exchange contributes is the provenance: the same anchor a hand-written note carries, plus
+ * the question, so a week later the note says what was asked as well as what was concluded.
+ *
+ * This is the canonical shape. The two note panels each build it in their own browser code
+ * (the duplication `notes.ts` has recorded since T-3 — lifting a working, tested panel out is
+ * a rewrite nobody asked for); `test/notes.test.ts` pins both copies against this one.
+ */
+export function noteFromExchange(
+  anchor: Omit<NoteRecord, 'id' | 'body' | 'question' | 'source'>,
+  question: string,
+  body: string,
+  now = Date.now(),
+): NoteRecord {
+  return {
+    ...anchor,
+    id: `${now}-${anchor.startLine}`,
+    body,
+    question,
+    source: 'tutor',
+  };
 }
 
 /** The client-side notes panel for a diff-shaped page. */
@@ -64,6 +101,9 @@ export function notesPanelScript(key: string): string {
   if (!el.text || !el.save) return;
 
   var notes = [];
+  // The question a kept answer came from, held between the Ask panel filling the box and the
+  // reader pressing save. Cleared on every save so a typed note never inherits it.
+  var pendingQuestion = '';
   try { notes = JSON.parse(localStorage.getItem(KEY) || '[]'); } catch (e) { notes = []; }
   function persist() { try { localStorage.setItem(KEY, JSON.stringify(notes)); } catch (e) {} }
   function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
@@ -115,8 +155,13 @@ export function notesPanelScript(key: string): string {
       explanation: a.explanation || null,
       head: a.head || null,
       quote: a.quote || '',
-      body: body
+      body: body,
+      // Set only when the Ask panel handed this over (T-18 Q6). A typed note has neither,
+      // and so does every note already sitting in somebody's browser.
+      question: pendingQuestion || undefined,
+      source: pendingQuestion ? 'tutor' : undefined
     });
+    pendingQuestion = '';
     el.text.value = '';
     el.hint.textContent = 'saved';
     persist(); render(); refreshLinks();
@@ -128,6 +173,7 @@ export function notesPanelScript(key: string): string {
     notes.forEach(function (n, i) {
       out.push('## ' + (i + 1) + '. ' + where(n));
       if (n.stopTitle) out.push('*While reading:* ' + n.stopTitle);
+      if (n.question) out.push('*Asked:* ' + n.question);
       if (n.head) out.push('*At commit:* ' + n.head);
       out.push('');
       if (n.quote) out.push('\`\`\`', n.quote, '\`\`\`', '');
@@ -149,6 +195,30 @@ export function notesPanelScript(key: string): string {
   }
 
   window.__notesChanged = function () { showAnchor(); };
+
+  // Emptying the box drops the kept question with it: otherwise keeping an answer, clearing
+  // the text and typing your own note saves it as source:'tutor' under someone else's
+  // question — the one thing this provenance exists to be trusted about.
+  el.text.addEventListener('input', function () {
+    if (!el.text.value.trim()) pendingQuestion = '';
+  });
+
+  /**
+   * The Ask panel handing an answer over to be kept (T-18 Q6).
+   *
+   * It PRE-FILLS rather than saving: the reader trims it to the sentence that mattered and
+   * presses the same save button they always press. An answer kept whole would land in the
+   * exported review notes whole, and export is the point of notes.
+   */
+  window.__keepNote = function (question, answer) {
+    pendingQuestion = question || '';
+    el.text.value = answer || '';
+    el.hint.textContent = 'trim it to what matters, then save';
+    var pane = document.querySelector('[data-pane="notes"]');
+    if (pane) pane.click();
+    el.text.focus();
+  };
+
   render(); refreshLinks();
 })();
 `;

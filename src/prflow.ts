@@ -23,6 +23,8 @@ import { parseUnified, rawDiff, type FileDiff } from './diff.js';
 import { interpretStops, type StopMeaning } from './interpret.js';
 import { resolvePr, diffSet, lineCounts, hunks, type Hunk, type PrRefs } from './pr.js';
 import { loadCheckpoint, sideAt, staleness, type Checkpoint, type Staleness } from './checkpoint.js';
+import { buildArchitecture, architectureBrief } from './architecture.js';
+import { interpretArchitecture } from './interpret.js';
 import { fileDelta, ripple, orderByMeaning, type FileDelta, type RippleResult } from './delta.js';
 import { buildPrTour, band } from './prtour.js';
 import { adjudicate, type Adjudication } from './adjudicate.js';
@@ -60,6 +62,36 @@ export interface PrFlowResult {
  * for a person, and both callers show it rather than translating it: an error that says
  * what to run is worth more than an error code.
  */
+/**
+ * What the digest concluded about this repository as a whole, IF it already knows.
+ *
+ * AC4 asks every question to carry the repo-level summary, and AC10 asks for that on the pull
+ * request page too. The PR flow never computes one — but the checkpoint carries a whole
+ * `DigestResult`, so the brief can be rebuilt for free and looked up `cachedOnly`. A repo that
+ * has been toured has the answer sitting in the interpretation cache; one that has not gets
+ * null, which is honest, and costs no model call either way. A PR tour must never quietly
+ * become a paid architecture interpretation.
+ */
+async function cachedOverview(
+  root: string, checkpoint: Checkpoint, writer: { provider?: string; model?: string },
+): Promise<string | null> {
+  try {
+    const arch = buildArchitecture(checkpoint.result);
+    const name = path.basename(root) || root;
+    const brief = architectureBrief(arch, name, checkpoint.result.inventory.files.length);
+    // The WRITER is part of the cache key, so it has to match the one the repo tour used.
+    // Without it, anyone who changed the model in the settings UI — a first-class product
+    // control — silently got no overview on any PR page, having already paid for one.
+    const { meaning } = await interpretArchitecture(root, brief, {
+      cachedOnly: true, provider: writer.provider, model: writer.model,
+    });
+    return meaning?.overview ?? null;
+  } catch {
+    // An overview is a nicety on this page; failing to find one must never fail the tour.
+    return null;
+  }
+}
+
 export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFlowResult> {
   const say = opts.onProgress ?? (() => {});
 
@@ -101,6 +133,8 @@ export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFl
       refs, checkpoint, staleness: stale, deltas: [], diffs: new Map(),
       ripple: { reinterpret: [], structuralOnly: [], reachable: 0 },
       html: renderPrView({
+        repoPath: root,
+        repoOverview: await cachedOverview(root, checkpoint, { provider: opts.provider, model: opts.model }),
         refs, deltas: [], diffs: new Map(), steps: plan.steps,
         ripple: { reinterpret: [], structuralOnly: [], reachable: 0 }, verdicts: new Map(),
       }),
@@ -206,6 +240,8 @@ export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFl
       diffs: new Map([...diffs].map(([k, v]) => [k, v.parsed])),
       deltas: orderByMeaning(deltas), ripple: rip,
       html: renderPrView({
+        repoPath: root,
+        repoOverview: await cachedOverview(root, checkpoint, { provider: opts.provider, model: opts.model }),
         refs, deltas: orderByMeaning(deltas), diffs: new Map([...diffs].map(([k, v]) => [k, v.parsed])),
         steps: plan.steps, ripple: rip, verdicts,
         repoName: path.basename(root) || root,

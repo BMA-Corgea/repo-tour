@@ -19,6 +19,8 @@ import { baseCss, alternateCss, skinPicker, skinScript } from './skins.js';
 import { narrate } from './narrate.js';
 import { repoSlug } from './pr.js';
 import { askPanelScript, askPanelHtml, ASK_CSS } from './askpanel.js';
+import { SOURCE_BUDGET } from './ask.js';
+import { chatKey } from './chat.js';
 import { notesKey } from './notes.js';
 
 export interface RepoViewOptions {
@@ -495,6 +497,9 @@ const NOTES = `
   function persist() { try { localStorage.setItem(KEY, JSON.stringify(notes)); } catch (e) {} }
 
   var anchor = null;
+  // The question a kept tutor answer came from, held between the Ask panel pre-filling the
+  // box and the reader pressing save. Cleared on every save so a typed note never inherits it.
+  var pendingQuestion = '';
 
   /**
    * What a note would attach to right now, if the reader has not picked lines themselves.
@@ -570,6 +575,9 @@ const NOTES = `
         out.push('### ' + range + (nt.stopTitle ? '  \\u2014 prompted by tour stop ' + (nt.stopIndex + 1) + ', ' + nt.stopTitle : '') +
           (nt.head && repo.head && nt.head !== repo.head ? '  \\u2014 taken at ' + nt.head.slice(0, 8) + ', code has moved since' : ''));
         if (nt.explanation) out.push('', '> The tour said: ' + nt.explanation);
+        // A kept answer says what was ASKED as well as what was concluded — without it, a
+        // trimmed note read a week later has lost the half that made it make sense.
+        if (nt.question) out.push('', '*Asked:* ' + nt.question);
         if (nt.quote) out.push('', '\\u0060\\u0060\\u0060', nt.quote, '\\u0060\\u0060\\u0060');
         out.push('', nt.body, '');
       });
@@ -606,8 +614,13 @@ const NOTES = `
       explanation: anchor.explanation || null,
       head: repo.head || null,
       quote: window.__repo.lineText(anchor.file, anchor.startLine, anchor.endLine),
-      body: body
+      body: body,
+      // Present only on a note kept from the Ask panel (T-18 Q6); a typed note has neither,
+      // and so does every note already sitting in somebody's browser.
+      question: pendingQuestion || undefined,
+      source: pendingQuestion ? 'tutor' : undefined
     });
+    pendingQuestion = '';
     el.text.value = '';
     anchor = null;
     window.__repo.clearSel();
@@ -618,7 +631,34 @@ const NOTES = `
 
   el.clear.addEventListener('click', function () {
     anchor = null; window.__repo.clearSel(); showAnchor();
+    // Also drop the kept question. It used to be cleared only on save, so: keep an answer,
+    // press Clear, type your own note about different lines, save — and the note claimed
+    // source:'tutor' and someone else's question. That is exactly the provenance the keep
+    // button exists to make trustworthy.
+    pendingQuestion = '';
   });
+
+  // Emptying the box by hand is the same gesture as pressing Clear, and must mean the same.
+  el.text.addEventListener('input', function () {
+    if (!el.text.value.trim()) pendingQuestion = '';
+  });
+
+  /**
+   * The Ask panel handing an answer over to be kept (T-18 Q6).
+   *
+   * It PRE-FILLS rather than saving outright: the reader cuts it down to the sentence that
+   * mattered and presses the same save button they always press. Kept whole, a rambling
+   * answer would land in the exported review notes whole — and the export is the point.
+   */
+  window.__keepNote = function (question, answer) {
+    pendingQuestion = question || '';
+    if (!anchor) anchor = implicitAnchor();
+    el.text.value = answer || '';
+    el.hint.textContent = 'trim it to what matters, then save';
+    if (window.openPane) window.openPane('notes');
+    showAnchor();
+    el.text.focus();
+  };
 
   el.list.addEventListener('click', function (e) {
     var del = e.target.closest('[data-del]');
@@ -711,14 +751,46 @@ const TOUR_BOOTSTRAP = `
     var stop = (window.__tour && window.__tour.step()) || null;
     var meaning = null;
     if (file && R.meanings) meaning = R.meanings[file] || null;
+
+    // T-18: the CODE, not just a description of it. Until this line existed the assistant
+    // could say what a file was for and nothing about what any line in it did — which is
+    // exactly the moment a reader gives up on the tour and asks.
+    var source = null;
+    var fullLength = 0;
+    if (file && R.files) {
+      for (var i = 0; i < R.files.length; i++) {
+        if (R.files[i].path === file) {
+          fullLength = R.files[i].text.length;
+          source = R.files[i].text.slice(0, ${SOURCE_BUDGET});
+          break;
+        }
+      }
+    }
+
     return {
       repo: (R.repo && R.repo.name) || null,
+      repoPath: R.repoPath || null,
+      repoOverview: R.overview || null,
+      stops: R.stops || [],
       file: file,
+      source: source,
+      sourceFullLength: fullLength,
       fileMeaning: meaning,
+      // NOT '|| -1': stop ZERO is a real stop, and the first one is the one most readers ask
+      // from. The falsy-zero version recorded every question at the opening stop as though
+      // the reader were browsing rather than touring, which is the one stamp that matters.
+      stopIndex: window.__tour ? window.__tour.index() : -1,
       stopTitle: stop ? stop.title : null,
       stopText: stop ? stop.text : null,
       importers: (file && R.importers && R.importers[file]) || []
     };
+  };
+
+  /** A citation clicked in an answer: open that file, and mark the line it named. */
+  window.__openCitation = function (file, line) {
+    if (!file || !window.__repo) return;
+    window.__repo.open(file);
+    if (line) window.__repo.mark(line, line);
   };
 
   window.__tour = { step: function () { return null; }, index: function () { return -1; } };
@@ -807,6 +879,9 @@ const TOUR_BOOTSTRAP = `
     el.back.disabled = n === 0;
     el.next.textContent = n === defs.length - 1 ? 'Finish' : (n === ch.to ? 'Next chapter' : 'Next');
     el.skip.style.display = ci === chapters.length - 1 ? 'none' : '';
+    // The Ask panel stamps each message with the stop it was asked at, and can filter to it,
+    // so both are stale the instant the tour moves.
+    if (window.__askStopChanged) window.__askStopChanged();
   }
 
   // ---- disclosure: per-stop press, plus a global toggle for deep-read mode
@@ -1227,6 +1302,12 @@ ${opts.servedBy ? `<script>${prTabScript(opts.servedBy.repoPath)}</script>` : ''
   // disagree about what this repository contains.
   meanings: fileMeanings,
   importers: importersByFile,
+  // T-18 Q1/Q2. The root is what lets the tutor ask the server to read another file — and it
+  // is null on an exported page, which is exactly how the server knows to refuse. The
+  // overview and the stop list are what make "where does this fit?" answerable at all.
+  repoPath: opts.servedBy?.repoPath ?? null,
+  overview: opts.architecture?.overview ?? null,
+  stops: narratedSteps.map((s, i) => ({ index: i, title: s.title })),
 })};</script>
 <script>window.__STEPS__ = ${embedJson(narratedSteps)};</script>
 <script>window.__TOPFILE__ = ${embedJson(topFileOf)};</script>
@@ -1234,7 +1315,18 @@ ${opts.servedBy ? `<script>${prTabScript(opts.servedBy.repoPath)}</script>` : ''
 <script>${APP}</script>
 <script>${TOUR_BOOTSTRAP}</script>
 <script>${NOTES}</script>
-<script>${askPanelScript(notesKey(repoName))}</script>
+<script>${askPanelScript({
+  notesKey: notesKey(repoName),
+  chatKey: chatKey(repoName),
+  // AC11 wants a command the reader can PASTE, which means it has to name this repository —
+  // "run repo-tour serve, add this repository" is the copy the AC was written to replace.
+  offlineHint: opts.servedBy
+    ? `Nothing answered — the server behind this tour of ${root} may have stopped. `
+      + 'Start it again with \u0060repo-tour serve\u0060 and reload this page.'
+    : 'This tour was opened as a saved file, so there is no server behind it to answer. Run '
+      + `\u0060repo-tour serve\u0060, add ${root} on the page it opens, and ask from there — `
+      + 'your notes and this conversation are saved in this browser and will still be here.',
+})}</script>
 </body>
 </html>`;
 }
