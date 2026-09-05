@@ -221,6 +221,50 @@ const JS_DECL_KIND: Record<string, SymbolKind> = {
   enum_declaration: 'enum',
 };
 
+const IIFE_FN_TYPES = new Set(['function_expression', 'arrow_function']);
+
+/** Peel away any number of redundant `( ... )` wrappers around a single inner expression. */
+function unwrapParens(node: SyntaxNode): SyntaxNode {
+  let n = node;
+  while (n.type === 'parenthesized_expression' && n.namedChildCount === 1) n = n.namedChild(0)!;
+  return n;
+}
+
+/**
+ * T-15 — a top-level IIFE is the one place script-style JS hides real declarations from
+ * the top-level walk below. `stmt` must be a top-level `expression_statement` whose
+ * expression is a call — the call itself, the function being called, or both, may sit
+ * inside `( ... )` — to a function/arrow expression, optionally behind a single leading
+ * unary operator (`!function(){}()` is the documented example; the locate doc's own rule
+ * is "unary-prefixed", not "`!`-prefixed", so this does not special-case the operator).
+ * Confirmed identical between the javascript and typescript grammars — write-ahead
+ * handoff, `.autodev/handoffs/T-15.md`. Anything else (a call to a named function, a
+ * call whose callee is itself a call, ...) is not an IIFE and returns null.
+ *
+ * Returns the invoked function's `statement_block` body — the ONE level `jsSymbols`
+ * recurses into, exactly as top-level, never further (a helper nested inside an ordinary,
+ * non-IIFE function is not reachable from here at all: its own enclosing node is a plain
+ * `function_declaration`, which this is never even called on).
+ */
+function iifeBody(stmt: SyntaxNode): SyntaxNode | null {
+  if (stmt.type !== 'expression_statement') return null;
+  let expr = stmt.namedChild(0);
+  if (!expr) return null;
+  expr = unwrapParens(expr);
+  if (expr.type === 'unary_expression') {
+    const arg = expr.childForFieldName('argument');
+    if (!arg) return null;
+    expr = unwrapParens(arg);
+  }
+  if (expr.type !== 'call_expression') return null;
+  const fn = expr.childForFieldName('function');
+  if (!fn) return null;
+  const target = unwrapParens(fn);
+  if (!IIFE_FN_TYPES.has(target.type)) return null;
+  const body = target.childForFieldName('body');
+  return body && body.type === 'statement_block' ? body : null;
+}
+
 function jsSymbols(root: SyntaxNode): SymbolRecord[] {
   const out: SymbolRecord[] = [];
 
@@ -284,6 +328,15 @@ function jsSymbols(root: SyntaxNode): SymbolRecord[] {
     if (node.type === 'export_statement') {
       const decl = node.childForFieldName('declaration');
       if (decl) recordDecl(decl, true);
+      continue;
+    }
+    const body = iifeBody(node);
+    if (body) {
+      // Exactly the top-level treatment, one level down: an IIFE's own direct
+      // declarations are never exported (there is no `export` inside a function body),
+      // and we stop here — a nested IIFE, or a plain function, inside this body is not
+      // recursed into again (T-15 AC1: recurse one level only).
+      for (const inner of body.children) if (inner) recordDecl(inner, false);
       continue;
     }
     recordDecl(node, false);
