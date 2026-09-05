@@ -37,7 +37,7 @@ import {
 } from './llm.js';
 import {
   buildAskPrompt, trimMessages, parseFetchRequest, createReplyGate, clipToBudget,
-  MAX_FETCH_HOPS, FETCH_BUDGET, type AskContext, type AskMessage, type AskFetched,
+  MAX_FETCH_HOPS, FETCH_BUDGET, SOURCE_BUDGET, type AskContext, type AskMessage, type AskFetched,
 } from './ask.js';
 import { serveFetch, resolveInRepo } from './fetchrepo.js';
 import { findCitations } from './cite.js';
@@ -702,6 +702,26 @@ export class RepoTourServer {
     const fetched: AskFetched[] = [];
     /** Every path the model was really given this exchange — what a citation is checked against. */
     const supplied: string[] = base.file ? [base.file] : [];
+
+    /**
+     * The pull request page holds diffs, not whole files, so it cannot send the source the way
+     * the repo tour does — and a diff is exactly the shape that cannot answer "what does the
+     * rest of this function do". Read it from the checkout instead, and only when the page did
+     * not send one: the page's own copy is what the reader is looking at and wins.
+     */
+    const ctx: AskContext = { ...base };
+    if (!ctx.source && root && ctx.file) {
+      const abs = resolveInRepo(root, ctx.file);
+      if (abs) {
+        try {
+          const text = fs.readFileSync(abs, 'utf8');
+          if (!text.includes('\0')) {
+            ctx.sourceFullLength = text.length;
+            ctx.source = text.slice(0, SOURCE_BUDGET);
+          }
+        } catch { /* a file the diff mentions may not exist on this side of the change */ }
+      }
+    }
     let budget = FETCH_BUDGET;
     let inputTokens = 0;
     let outputTokens = 0;
@@ -715,7 +735,7 @@ export class RepoTourServer {
       const CEILING = MAX_FETCH_HOPS + 1;
       for (let hop = 0; hop <= CEILING; hop++) {
         const gate = createReplyGate();
-        const prompt = buildAskPrompt(messages, { ...base, fetched });
+        const prompt = buildAskPrompt(messages, { ...ctx, fetched });
         const reply = await runLlmStream(prompt, tutor, root ?? process.cwd(), (t) => {
           const safe = gate.push(t);
           if (safe) send('delta', { text: safe });

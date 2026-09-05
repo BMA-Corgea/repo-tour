@@ -101,6 +101,7 @@ export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFl
       refs, checkpoint, staleness: stale, deltas: [], diffs: new Map(),
       ripple: { reinterpret: [], structuralOnly: [], reachable: 0 },
       html: renderPrView({
+        repoPath: root,
         refs, deltas: [], diffs: new Map(), steps: plan.steps,
         ripple: { reinterpret: [], structuralOnly: [], reachable: 0 }, verdicts: new Map(),
       }),
@@ -206,6 +207,7 @@ export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFl
       diffs: new Map([...diffs].map(([k, v]) => [k, v.parsed])),
       deltas: orderByMeaning(deltas), ripple: rip,
       html: renderPrView({
+        repoPath: root,
         refs, deltas: orderByMeaning(deltas), diffs: new Map([...diffs].map(([k, v]) => [k, v.parsed])),
         steps: plan.steps, ripple: rip, verdicts,
         repoName: path.basename(root) || root,
