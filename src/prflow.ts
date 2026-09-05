@@ -72,12 +72,19 @@ export interface PrFlowResult {
  * null, which is honest, and costs no model call either way. A PR tour must never quietly
  * become a paid architecture interpretation.
  */
-async function cachedOverview(root: string, checkpoint: Checkpoint): Promise<string | null> {
+async function cachedOverview(
+  root: string, checkpoint: Checkpoint, writer: { provider?: string; model?: string },
+): Promise<string | null> {
   try {
     const arch = buildArchitecture(checkpoint.result);
     const name = path.basename(root) || root;
     const brief = architectureBrief(arch, name, checkpoint.result.inventory.files.length);
-    const { meaning } = await interpretArchitecture(root, brief, { cachedOnly: true });
+    // The WRITER is part of the cache key, so it has to match the one the repo tour used.
+    // Without it, anyone who changed the model in the settings UI — a first-class product
+    // control — silently got no overview on any PR page, having already paid for one.
+    const { meaning } = await interpretArchitecture(root, brief, {
+      cachedOnly: true, provider: writer.provider, model: writer.model,
+    });
     return meaning?.overview ?? null;
   } catch {
     // An overview is a nicety on this page; failing to find one must never fail the tour.
@@ -127,7 +134,7 @@ export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFl
       ripple: { reinterpret: [], structuralOnly: [], reachable: 0 },
       html: renderPrView({
         repoPath: root,
-        repoOverview: await cachedOverview(root, checkpoint),
+        repoOverview: await cachedOverview(root, checkpoint, { provider: opts.provider, model: opts.model }),
         refs, deltas: [], diffs: new Map(), steps: plan.steps,
         ripple: { reinterpret: [], structuralOnly: [], reachable: 0 }, verdicts: new Map(),
       }),
@@ -234,7 +241,7 @@ export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFl
       deltas: orderByMeaning(deltas), ripple: rip,
       html: renderPrView({
         repoPath: root,
-        repoOverview: await cachedOverview(root, checkpoint),
+        repoOverview: await cachedOverview(root, checkpoint, { provider: opts.provider, model: opts.model }),
         refs, deltas: orderByMeaning(deltas), diffs: new Map([...diffs].map(([k, v]) => [k, v.parsed])),
         steps: plan.steps, ripple: rip, verdicts,
         repoName: path.basename(root) || root,

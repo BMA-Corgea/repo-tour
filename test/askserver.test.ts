@@ -67,11 +67,20 @@ process.stdin.on('end', () => {
   if (text === '__EXIT1__') { process.stderr.write('boom\\n'); process.exit(1); }
   const emit = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
   emit({ type: 'system', subtype: 'init' });
-  // thinking must never reach the reader — emitted here on purpose
-  emit({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: 'hmm' } } });
-  const third = Math.ceil(text.length / 3) || 1;
-  for (let i = 0; i < text.length; i += third) {
-    emit({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: text.slice(i, i + third) } } });
+  // The fixture MODELS the flag, and that is what makes the fallback test able to fail:
+  // with --include-partial-messages it emits token deltas, without it a single whole
+  // message, exactly like the real CLI. An always-streaming fake made the latch
+  // undetectable and the test that guarded it vacuous (review attempt 2).
+  const partial = process.argv.includes('--include-partial-messages');
+  if (partial) {
+    // thinking must never reach the reader — emitted here on purpose
+    emit({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: 'hmm' } } });
+    const third = Math.ceil(text.length / 3) || 1;
+    for (let i = 0; i < text.length; i += third) {
+      emit({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: text.slice(i, i + third) } } });
+    }
+  } else {
+    emit({ type: 'assistant', message: { content: [{ type: 'thinking', thinking: 'hmm' }, { type: 'text', text: text }] } });
   }
   emit({ type: 'result', result: text, usage: { input_tokens: 11, output_tokens: 22 }, total_cost_usd: 0.5 });
   process.exit(0);
@@ -388,6 +397,9 @@ describe('the --include-partial-messages fallback (the plan\'s number-one risk)'
         context: { repoPath: repo },
       });
       expect(text(frames)).toBe('the older CLI still answers');
+      // one whole-message delta, not three: the downgrade is visible, which is the only
+      // reason this test can fail if the fallback breaks
+      expect(frames.filter((f) => f.kind === 'delta')).toHaveLength(1);
       const done = frames.find((f) => f.kind === 'done')!;
       expect(done.data['outputTokens']).toBe(22);
     } finally {

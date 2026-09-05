@@ -51,6 +51,9 @@ const MAX_FILES_SCANNED = 4000;
  * holds the same line on the path a language model can name.
  */
 export function isScreenedPath(rel: string): boolean {
+  // NB: this judges a path as SPELLED. Always screen the RESOLVED path — see `screenedTarget`
+  // — because a symlink with an innocent name is the obvious way around a name-based screen.
+
   return rel.split('/').some((seg, i, all) => {
     if (!seg || seg === '.') return false;
     if (SKIP_DIRS.has(seg)) return true;
@@ -106,13 +109,33 @@ function realpathOfNearest(target: string): string | null {
   }
 }
 
+/**
+ * Is this path screened, either as spelled or as it actually resolves?
+ *
+ * The second half is the one that matters and the one the first version missed: the screen
+ * tested the spelled path while `fetchFile` read the RESOLVED file, so a symlink named
+ * `safe.txt` pointing at `.env` served the secret in full, and `docs -> .git` served the
+ * remote URL with its token in it. `searchRepo` never had the hole because it skips symlinks
+ * outright; this is what makes the two halves agree again.
+ */
+function screenedTarget(root: string, rel: string, abs: string | null): boolean {
+  if (isScreenedPath(rel)) return true;
+  if (!abs) return false;
+  try {
+    const inside = path.relative(fs.realpathSync(path.resolve(root)), abs);
+    return inside !== '' && isScreenedPath(inside);
+  } catch {
+    return false;
+  }
+}
+
 /** Hand over one file, whole, clipped only if it is enormous. */
 export function fetchFile(root: string, rel: string): FetchOutcome {
   const what = `file ${rel}`;
-  if (isScreenedPath(rel)) {
+  const abs = resolveInRepo(root, rel);
+  if (isScreenedPath(rel) || screenedTarget(root, rel, abs)) {
     return { ok: false, what, reason: `refused: ${rel} is not content — hidden files, build output and dependency folders are never served` };
   }
-  const abs = resolveInRepo(root, rel);
   if (!abs) {
     return { ok: false, what, reason: `refused: ${rel} is outside the repository being toured` };
   }
@@ -125,9 +148,13 @@ export function fetchFile(root: string, rel: string): FetchOutcome {
     let names: string[];
     try { names = fs.readdirSync(abs).sort(); }
     catch { return { ok: false, what, reason: `${rel} could not be listed` }; }
-    // Screened here too: a listing that names `.env` is a map to it, and the point of the
-    // screen is that the tutor never learns a private repository's secrets exist.
-    const shown = names.filter((n) => !isScreenedPath(n));
+    // Screened here too, by RESOLVED target: a listing that names `.env` is a map to it, and
+    // so is one that names a symlink pointing at it. The point of the screen is that the
+    // tutor never learns a private repository's secrets exist.
+    const shown = names.filter((n) => {
+      const child = rel === '.' ? n : `${rel}/${n}`;
+      return !isScreenedPath(n) && !screenedTarget(root, child, resolveInRepo(root, child));
+    });
     return { ok: true, what, body: `${rel} is a directory containing:\n${shown.map((n) => `  ${n}`).join('\n')}` };
   }
 

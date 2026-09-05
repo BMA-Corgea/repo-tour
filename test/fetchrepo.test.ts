@@ -232,6 +232,35 @@ describe('secrets are not content (the auto-review finding)', () => {
     expect(s.body).toContain('No occurrence');
   });
 
+  it('is not fooled by a symlink with an innocent name', () => {
+    // The name-based screen tested the path AS SPELLED while fetchFile read the RESOLVED
+    // file, so `safe.txt -> .env` served the secret in full and `docs -> .git` served the
+    // remote URL with its token. Found in review attempt 2; searchRepo never had the hole
+    // because it skips symlinks outright.
+    try {
+      fs.symlinkSync(path.join(root, '.env'), path.join(root, 'safe.txt'));
+      fs.symlinkSync(path.join(root, '.git'), path.join(root, 'docs'));
+    } catch { /* already there, or a platform without symlinks */ }
+    if (!fs.existsSync(path.join(root, 'safe.txt'))) return;
+
+    const file = fetchFile(root, 'safe.txt');
+    expect(file.ok).toBe(false);
+    if (file.ok) return;
+    expect(file.reason).toContain('not content');
+    expect(file.reason).not.toContain('hunter2');
+
+    const viaDir = fetchFile(root, 'docs/config');
+    expect(viaDir.ok).toBe(false);
+
+    // and the listing does not hand over the map to them either
+    const listing = fetchFile(root, '.');
+    expect(listing.ok).toBe(true);
+    if (!listing.ok) return;
+    expect(listing.body).not.toContain('safe.txt');
+    expect(listing.body).not.toContain('docs');
+    expect(listing.body).toContain('README.md');
+  });
+
   it('screens by segment, so a nested dotfile is caught too', () => {
     expect(isScreenedPath('src/.env')).toBe(true);
     expect(isScreenedPath('a/node_modules/b.js')).toBe(true);

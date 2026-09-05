@@ -605,7 +605,15 @@ export class RepoTourServer {
     const job: Job = { repo: key, state: 'running', lines: [`reading PR #${n}`], startedAt: Date.now() };
     this.jobs.set(key, job);
 
-    void runPrFlow(repoPath, { pr: n, onProgress: (line) => job.lines.push(line) })
+    void runPrFlow(repoPath, {
+      pr: n,
+      // The build choice, because it is what WROTE any cached architecture overview — the
+      // writer is part of the interpretation cache key, so passing it is what makes AC4
+      // reach this page for a reader who changed the model in settings.
+      provider: this.choice.provider,
+      model: this.choice.model,
+      onProgress: (line) => job.lines.push(line),
+    })
       .then((result) => {
         this.prTours.set(key, { html: result.html });
         while (this.prTours.size > RepoTourServer.PR_TOUR_KEEP) {

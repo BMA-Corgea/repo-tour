@@ -93,12 +93,29 @@ function scripts(html: string): string {
  */
 function sabotagedPages(cases: Array<{ file: string; remove: string }>): string[] {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-sabotage-'));
+
+  /**
+   * A throwaway COPY of the repository, because the first version edited `src/` in place.
+   * `npm test` must never leave the working tree dirty, and a SIGKILL mid-run used to leave
+   * T-18's own AC1 feature deleted from `src/repoview.ts` — self-announcing, but a trap laid
+   * for whoever ran the suite next (review attempt 2).
+   */
+  const copy = path.join(dir, 'repo');
+  fs.mkdirSync(copy);
+  for (const entry of ['src', 'assets', 'schema', 'package.json', 'tsconfig.json']) {
+    const from = path.join(root, entry);
+    if (fs.existsSync(from)) fs.cpSync(from, path.join(copy, entry), { recursive: true });
+  }
+  // node_modules is linked rather than copied: it is enormous, and nothing sabotages it.
+  try { fs.symlinkSync(path.join(root, 'node_modules'), path.join(copy, 'node_modules')); }
+  catch { /* already there */ }
+
   const script = path.join(dir, 'run.mts');
   fs.writeFileSync(script, `
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-const ROOT = ${JSON.stringify(root)};
+const ROOT = ${JSON.stringify(copy)};
 const DIR = ${JSON.stringify(dir)};
 const CASES = ${JSON.stringify(cases)};
 const { digest } = await import(pathToFileURL(path.join(ROOT, 'src/digest.ts')).href);
