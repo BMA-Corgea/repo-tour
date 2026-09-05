@@ -19,7 +19,6 @@ here and found via the reference table below.
   `../repo-tour-T-12` on disjoint files. Five of the six pieces Evan described on day one are
   shipped; the one left besides these is **T-7, GONS integration** — always the endgame
   rather than the product.
-- **T-12 DONE** on `feature/T-12-build-engine` (not yet merged — waits on T-11, per the
   VSCode-LLM-Tutorial ticket set's order). `src/build/{types,witness,plan,stub,check,index}.ts`:
   digest → `BuildPlan`, the ordered decision list the VS Code extension walks a learner
   through. All 9 acceptance criteria met, each with its own test in `test/build.test.ts`;
@@ -41,7 +40,6 @@ here and found via the reference table below.
   session was messaged. Its `spec_ready` was deliberately NOT cleared: how it lands in the
   Office is GUTS's decision. **repo-tour's T-7 is the counterpart and is still unopened** —
   open it when GUTS says what it needs, not before.
-- **T-12** (feature) — The build-order engine — digest → BuildPlan, and the structural check — gate
 - **T-14** (techdebt) — Harden T-11's consumer tests: prove prepare rebuilds dist, and make alternateCs… — intake
 - **T-13** (feature) — Interpret the decisions — alternatives per build step, and Ask context for a st… — plan
 
@@ -53,7 +51,6 @@ here and found via the reference table below.
 - Nothing is held. Every gate that is Evan's was spent on his own recorded go-aheads
   (GA-3 through GA-7) because he asked not to be stopped mid-flight. **The open loop is his
   read of the notes + Ask panels**, which he has not used yet at the time of writing.
-- **T-12** — waiting at spec_ready on human:owner since 2026-09-04
 - **T-13** — waiting at spec_ready on human:owner since 2026-09-05
 
 ## Recent past (~15 items / ~30 days)
@@ -61,6 +58,7 @@ here and found via the reference table below.
 <!-- One line per completed item, WITH the why. Newest first. Prune from the
      bottom; the permanent record lives in tickets, events.jsonl, and wiki. -->
 
+- 2026-09-05 **T-12 COMPLETE** — The build-order engine — digest → BuildPlan, and the structural check
 - 2026-09-04 **T-11 COMPLETE** — Expose the core as a consumable package — for the VS Code front end
 - 2026-09-04 **T-10 CLOSED duplicate** — Tutor chat during a tour — context-aware Q&A on the current step
 - **2026-08-27** — **T-3 COMPLETE**, the oldest ask on the project: notes carrying which stop

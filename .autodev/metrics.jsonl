@@ -93,3 +93,8 @@
 {"ts":"2026-09-05T00:22:38.346Z","kind":"stage.loopback","ticket":"T-12","from":"auto-review","to":"build","attempts":1,"no_progress_streak":1,"stuck":false}
 {"ts":"2026-09-05T00:42:59.778Z","kind":"stage.advanced","ticket":"T-12","from":"build","to":"auto-review"}
 {"ts":"2026-09-05T00:59:47.486Z","kind":"stage.advanced","ticket":"T-12","from":"auto-review","to":"gate"}
+{"ts":"2026-09-05T00:59:50.186Z","kind":"stage.advanced","ticket":"T-12","from":"gate","to":"verify"}
+{"ts":"2026-09-05T00:59:57.302Z","kind":"stage.advanced","ticket":"T-12","from":"verify","to":"uat"}
+{"ts":"2026-09-05T00:59:57.389Z","kind":"stage.advanced","ticket":"T-12","from":"uat","to":"release"}
+{"ts":"2026-09-05T00:59:57.433Z","kind":"stage.advanced","ticket":"T-12","from":"release","to":"monitor"}
+{"ts":"2026-09-05T00:59:57.479Z","kind":"pipeline.complete","ticket":"T-12","at":"monitor"}
