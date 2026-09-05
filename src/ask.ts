@@ -327,6 +327,55 @@ export function parseFetchRequest(reply: string): FetchRequest | null {
 }
 
 /**
+ * Holds back the first few characters of a streamed reply until it is clear what it is.
+ *
+ * The two features of Q1 and Q4 collide here: the answer is streamed as it is written, but a
+ * reply might turn out to be `FETCH: file src/rank.ts` — machinery, not an answer, and showing
+ * it to the reader would be showing them the plumbing. So the opening is buffered until the
+ * reply has committed to being one or the other, which takes eight characters, and after that
+ * an answer streams through untouched.
+ *
+ * It is deliberately dumb about the decision and defers to `parseFetchRequest` for the real
+ * verdict; all it owes the caller is: never emit the start of a fetch line, and never swallow
+ * the start of an answer.
+ */
+export function createReplyGate(): {
+  push(text: string): string;
+  released(): string;
+  full(): string;
+} {
+  const PROBE = 8; // 'FETCH: f' — enough to tell, short enough to feel immediate
+  let full = '';
+  let released = '';
+  let decided: 'answer' | 'fetch' | null = null;
+
+  /** Strip a leading code fence, or report that we cannot tell yet. */
+  const probeOf = (s: string): string | null => {
+    const t = s.trimStart();
+    if (!t.startsWith('```')) return t;
+    const nl = t.indexOf('\n');
+    return nl === -1 ? null : t.slice(nl + 1).trimStart();
+  };
+
+  return {
+    push(text: string): string {
+      full += text;
+      if (decided === 'fetch') return '';
+      if (decided === 'answer') { released += text; return text; }
+
+      const probe = probeOf(full);
+      if (probe === null || probe.length < PROBE) return '';
+      decided = /^FETCH:/i.test(probe) ? 'fetch' : 'answer';
+      if (decided === 'fetch') return '';
+      released = full;
+      return full;
+    },
+    released: () => released,
+    full: () => full,
+  };
+}
+
+/**
  * Clip a body to what is left of a shared budget.
  *
  * Returns null when there is no room at all, so a caller can tell the model it has spent its
