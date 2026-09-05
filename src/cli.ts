@@ -28,7 +28,8 @@ import { NoCheckpointError } from './checkpoint.js';
 
 import { band } from './prtour.js';
 import { runPrFlow } from './prflow.js';
-import { buildPlan } from './build/index.js';
+import { buildPlan, interpretPlan, type BuildPlan } from './build/index.js';
+import type { InterpretCost } from './interpret.js';
 
 interface Args {
   command: string;
@@ -60,13 +61,21 @@ interface Args {
   head: string | null;
   /** PR mode: refuse to proceed when there is no checkpoint, rather than explaining how to make one */
   noCold: boolean;
+  /**
+   * `plan` only: run T-13's interpret pass over the plan. Off by default — unlike `tour`'s
+   * `interpret` above, `plan` without this flag stays exactly as free and deterministic as
+   * T-12 shipped it (refinement notes, 2026-09-04).
+   */
+  planInterpret: boolean;
+  /** `plan --interpret` only: skip the model entirely and only fold in what is already cached */
+  cachedOnly: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
   const args: Args = {
     command: argv[0] ?? 'help', target: '.', top: 25, write: true, json: false,
     view: null, maxRows: 750, interpret: true, model: DEFAULT_MODEL, fresh: false, port: 7788, state: null, provider: null,
-    pr: null, base: null, head: null, noCold: false,
+    pr: null, base: null, head: null, noCold: false, planInterpret: false, cachedOnly: false,
   };
   const rest = argv.slice(1);
   for (let i = 0; i < rest.length; i++) {
@@ -77,6 +86,8 @@ function parseArgs(argv: string[]): Args {
     else if (a === '--view') { args.view = rest[++i] ?? ''; }
     else if (a === '--max-rows') { args.maxRows = Number(rest[++i] ?? 750); }
     else if (a === '--no-interpret') { args.interpret = false; }
+    else if (a === '--interpret') { args.planInterpret = true; }
+    else if (a === '--cached-only') { args.cachedOnly = true; }
     else if (a === '--fresh') { args.fresh = true; }
     else if (a === '--port') { args.port = Number(rest[++i] ?? 7788); }
     else if (a === '--state') { args.state = rest[++i] ?? null; }
@@ -291,7 +302,7 @@ async function main(): Promise<void> {
   if (args.command !== 'digest' && args.command !== 'tour' && args.command !== 'inspect' && args.command !== 'plan') {
     console.log('usage: repo-tour digest <path> [--top N] [--view FILE] [--max-rows N] [--no-write] [--json]');
     console.log('       repo-tour tour <path> [--view FILE] [--no-write]        the repo page + a tour of the code');
-    console.log('       repo-tour plan <path> [--json]                         digest -> BuildPlan: the ordered decision list');
+    console.log('       repo-tour plan <path> [--json] [--interpret [--cached-only]]   digest -> BuildPlan: the ordered decision list');
     console.log('       repo-tour inspect <path> [--view FILE] [--top N]        the digest quality view (scores, signals)');
     console.log('       repo-tour serve [--port N] [--state FILE]               THE APP: load repos, refresh to see changes');
     console.log('       repo-tour providers                                     which LLMs can write explanations here');
@@ -318,28 +329,52 @@ async function main(): Promise<void> {
 
   const result = await digest(args.target, { write: args.write });
   const m = result.manifest;
+  const quiet = args.command === 'tour';
 
   // `plan` is `digest` plus a projection of it, exactly like `tour` — never a separate
   // artifact, and it does not need any of the code-tour/interpret machinery below.
   if (args.command === 'plan') {
     const root = path.resolve(args.target);
     const built = await buildPlan(result, { root });
+
+    // Without --interpret, plan stays exactly as free and deterministic as T-12 shipped
+    // it: buildPlan's own zeroed, honestly-unmetered cost, untouched (refinement notes).
+    let finalPlan: BuildPlan = built;
+    let planCost: InterpretCost | null = null;
+    if (args.planInterpret) {
+      const interpreted = await interpretPlan(built, result, {
+        root,
+        model: args.model,
+        ...(args.provider ? { provider: args.provider } : {}),
+        cachedOnly: args.cachedOnly,
+        ...(quiet ? {} : { onProgress: (msg: string) => console.error(`  ${msg}`) }),
+      });
+      finalPlan = interpreted.plan;
+      planCost = interpreted.cost;
+    }
+
     const outPath = path.join(root, CACHE_DIR, 'build', 'plan.json');
     fs.mkdirSync(path.dirname(outPath), { recursive: true });
-    fs.writeFileSync(outPath, JSON.stringify(built, null, 2));
+    fs.writeFileSync(outPath, JSON.stringify(finalPlan, null, 2));
 
     if (args.json) {
-      console.log(JSON.stringify(built, null, 2));
+      console.log(JSON.stringify(finalPlan, null, 2));
       return;
     }
 
     console.log(`\nrepo-tour plan — ${root}`);
-    console.log(`  ${built.chapters.length} chapters · ${built.steps.length} steps · ${built.reproduce.length} files to reproduce`);
+    console.log(`  ${finalPlan.chapters.length} chapters · ${finalPlan.steps.length} steps · ${finalPlan.reproduce.length} files to reproduce`);
+    if (planCost) {
+      console.log(
+        `  interpreted        ${planCost.interpretedStops} stops (${planCost.cachedStops} cached) ` +
+        `in ${planCost.calls} call(s) on ${planCost.model}`,
+      );
+      console.log(`  cost               ${planCost.metered ? `$${planCost.usd.toFixed(4)}` : 'this provider does not report usage'}`);
+      for (const f of planCost.failures) console.log(`  ! ${f}`);
+    }
     console.log(`\n  plan               ${outPath}\n`);
     return;
   }
-
-  const quiet = args.command === 'tour';
 
   // `tour` is `digest` plus a projection of it — never a separate artifact.
   const isTour = args.command === 'tour';
