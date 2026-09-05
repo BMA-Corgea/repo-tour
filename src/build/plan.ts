@@ -296,6 +296,34 @@ function stepId(file: string, kind: StepKind, symbolName: string): string {
   return createHash('sha256').update(`${file} ${kind} ${symbolName}`).digest('hex').slice(0, 16);
 }
 
+/**
+ * The recipe above, plus the one property it cannot give on its own: uniqueness.
+ *
+ * Two distinct symbols can legally share a name inside one file — a Python top-level
+ * `def f` redefined further down, a conditionally-defined function under
+ * `if TYPE_CHECKING` — and neither overlaps the other, so `selectLoadBearing` keeps both
+ * and both become steps. The recipe hashes only (file, kind, name), so both would hash to
+ * the SAME id, and an id is a key everywhere else in this model: `dependsOn` points at
+ * one, `fileStepId`/`shapeStepId` are maps of them, and a consumer's TreeView keys on
+ * one. A duplicate id is not a cosmetic clash, it is a broken foreign key.
+ *
+ * So: the n-th LATER occurrence of the same (file, kind, name) — n counted from 1, in
+ * the order steps are emitted, which for symbols is the file's own line order — hashes
+ * `… + ' #' + n` instead. The FIRST occurrence is left exactly as the recipe says, so
+ * every id a collision-free file already had is byte-identical to what it was before this
+ * disambiguation existed. A body edit still cannot move an id: it changes neither the
+ * file, the kind, the name, nor which occurrence within the file a symbol is.
+ */
+function stepIdMinter(): (file: string, kind: StepKind, symbolName: string) => string {
+  const seen = new Map<string, number>();
+  return (file, kind, symbolName) => {
+    const key = `${file} ${kind} ${symbolName}`;
+    const n = seen.get(key) ?? 0;
+    seen.set(key, n + 1);
+    return stepId(file, kind, n === 0 ? symbolName : `${symbolName} #${n}`);
+  };
+}
+
 function sumLoc(paths: string[], fileByPath: Map<string, FileRecord>): number {
   return paths.reduce((sum, p) => sum + Math.max(0, fileByPath.get(p)?.loc ?? 0), 0);
 }
@@ -385,6 +413,7 @@ export async function buildPlan(digest: DigestResult, opts: BuildPlanOptions): P
   };
 
   const steps: Step[] = [];
+  const mintId = stepIdMinter();
   const fileStepId = new Map<string, string>();
   const shapeStepId = new Map<string, string>();
   const fileImportsResolved = new Map<string, string[]>();
@@ -400,7 +429,7 @@ export async function buildPlan(digest: DigestResult, opts: BuildPlanOptions): P
 
     // ---- shape step
     ordinal++;
-    const sId = stepId(chapterPath, 'shape', '');
+    const sId = mintId(chapterPath, 'shape', '');
     shapeStepId.set(chapterPath, sId);
     const shapeText = shapeDecisionText(title, chapterFileCount, chapterLoc);
     steps.push({
@@ -429,7 +458,7 @@ export async function buildPlan(digest: DigestResult, opts: BuildPlanOptions): P
       const fWhy = ex ? ex.symbols.find((s) => s.exported && s.doc !== null)?.doc ?? null : null;
 
       ordinal++;
-      const fId = stepId(filePath, 'file', '');
+      const fId = mintId(filePath, 'file', '');
       fileStepId.set(filePath, fId);
       if (ex) {
         fileImportsResolved.set(
@@ -449,7 +478,7 @@ export async function buildPlan(digest: DigestResult, opts: BuildPlanOptions): P
 
       for (const sym of capped) {
         ordinal++;
-        const symId = stepId(filePath, 'symbol', sym.name);
+        const symId = mintId(filePath, 'symbol', sym.name);
         const sText = symbolDecisionText(sym);
         steps.push({
           id: symId, ordinal, chapter: chapterPath, kind: 'symbol',

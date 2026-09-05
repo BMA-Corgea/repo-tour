@@ -63,6 +63,14 @@ export interface Step {
    * regeneration and a body edit — neither changes the file, the kind, or the symbol's
    * name. A rename DOES change it, which is correct: a moved file is a new decision, not
    * the same one continuing under a new name (refinement notes, 2026-09-04).
+   *
+   * It is also UNIQUE across a plan, which the recipe alone does not guarantee: two
+   * distinct symbols may legally share a name in one file (a Python top-level `def f`
+   * redefined further down), and (file, kind, name) cannot tell them apart. The n-th
+   * LATER occurrence of the same (file, kind, name) — n from 1, in the file's own line
+   * order — hashes `… + ' #' + n` instead. The first occurrence is untouched, so
+   * disambiguation costs no stability: an id moves only when the file, kind, name, or the
+   * symbol's position among its same-named siblings actually moves.
    */
   id: string;
   ordinal: number;

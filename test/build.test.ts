@@ -850,3 +850,84 @@ describe('the build-order engine — witness on a git repo with no commits yet (
     }
   });
 });
+
+
+// ================================================================================
+// AC3 (the uniqueness half) — one file that defines the same name twice
+// ================================================================================
+//
+// A Python module may legally define `f` twice at top level; the later definition simply
+// shadows the earlier one. Both are exported, neither range overlaps the other, so
+// `selectLoadBearing` keeps both and both become symbol steps — and the id recipe
+// `sha256(file + kind + name)` cannot tell them apart on its own. An id is a foreign key
+// in this model (`dependsOn` points at one; so does every consumer's node key), so minting
+// the same id twice is a broken plan, not an untidy one. Ids must be unique AND still
+// survive a body-only edit; this fixture asserts both at once, because a disambiguator
+// that reached for the line number would buy uniqueness by giving up stability.
+
+describe('the build-order engine — ids stay unique when one file redefines a name (AC3)', () => {
+  let root: string;
+  let plan: BuildPlan;
+
+  /** kind + file + start line: stable under a body edit, and distinct per step. */
+  const keyed = (p: BuildPlan) =>
+    p.steps.map((s) => [`${s.kind}|${s.target.file}|${s.target.startLine ?? ''}`, s.id] as const);
+
+  const redefined = (firstBody: string) => [
+    'def f():',
+    `    return ${firstBody}`,
+    '',
+    '',
+    'def g():',
+    '    return 2',
+    '',
+    '',
+    'def f():',
+    '    return 3',
+    '',
+  ].join('\n');
+
+  beforeAll(async () => {
+    root = tmp('repo-tour-build-dupname-');
+    initRepo(root);
+    write(path.join(root, 'src/redefined.py'), redefined('1'));
+    // a second direct code file so this directory is a chapter in its own right
+    write(path.join(root, 'src/other.py'), 'def other():\n    return 0\n');
+    commitAll(root, 'initial');
+
+    const d = await digest(root, { write: false });
+    plan = await buildPlan(d, { root });
+  });
+
+  afterAll(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('both definitions get their own step, and no two steps in the plan share an id', () => {
+    const fSteps = plan.steps.filter(
+      (s) => s.kind === 'symbol' && s.target.file === 'src/redefined.py' && s.decision.question.startsWith('Fill in f '),
+    );
+    expect(fSteps).toHaveLength(2);
+    expect(fSteps.map((s) => s.target.startLine)).toEqual([1, 9]);
+    expect(fSteps[0]!.id).not.toBe(fSteps[1]!.id);
+
+    const ids = plan.steps.map((s) => s.id);
+    const dupes = ids.filter((id, i) => ids.indexOf(id) !== i);
+    expect(dupes, `step ids are not unique: ${dupes.join(', ')}`).toEqual([]);
+    expect(new Set(ids).size).toBe(plan.steps.length);
+    for (const id of ids) expect(id).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it('editing one body changes no id — not even the shadowed definition\'s', async () => {
+    const before = keyed(plan);
+
+    // same line count, different body: the edit a learner makes, and the one AC3 names.
+    write(path.join(root, 'src/redefined.py'), redefined('111'));
+    commitAll(root, 'edit the first f body only');
+
+    const d = await digest(root, { write: false });
+    const after = await buildPlan(d, { root });
+    expect(keyed(after)).toEqual(before);
+    expect(new Set(after.steps.map((s) => s.id)).size).toBe(after.steps.length);
+  });
+});
