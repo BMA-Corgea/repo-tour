@@ -28,7 +28,7 @@ import type { FileExtract, FileRecord } from './types.js';
 import { runLlm, resolveChoice, type LlmChoice } from './llm.js';
 
 /** Bump when the prompt changes — old cached answers were produced by a different question. */
-export const PROMPT_VERSION = 5;
+export const PROMPT_VERSION = 6;
 
 export const DEFAULT_MODEL = 'claude-sonnet-5';
 
@@ -51,6 +51,19 @@ export interface StopMeaning {
    * The full text is untouched and one press away; nothing here replaces it.
    */
   summary: string;
+  /**
+   * Two OTHER reasonable ways this could have been done, and what each would have cost —
+   * asked in the SAME call as `what`/`why`/`summary`, never a second one (repo-tour's own
+   * "one call, cached once" affordability rule, T-1 spec §4.3). Even in `recreate` mode the
+   * learner sees "the author chose X; Y and Z were on the table" — that is the teaching, and
+   * it is what makes divergence (VSCode-LLM-Tutorial T-9/T-10) a change of defaults rather
+   * than new machinery.
+   *
+   * Empty, never invented, when a reply omits the field: a model that wrote a good
+   * what/why/summary but skipped this is a cache entry with no roads-not-taken, not a
+   * failure (refinement notes, 2026-09-04).
+   */
+  alternatives: Array<{ label: string; consequence: string }>;
 }
 
 export interface InterpretCost {
@@ -147,12 +160,15 @@ const SYSTEM = [
   '  thing they most need to know. It must stand alone: a reader who never expands the',
   '  full text should still come away with the point. Do NOT simply copy the first',
   '  sentence of "what", and do NOT drop the "why" if the why is the essential part.',
+  '- "alternatives": exactly two OTHER reasonable ways this could have been done, each as',
+  '  {"label": "...", "consequence": "..."} — what it would have cost or changed. Real',
+  '  alternatives an experienced engineer would weigh, not strawmen.',
   '- If the reason genuinely cannot be inferred from what you were shown, say so in "why"',
   '  in one short sentence. Never invent history, tickets, incidents or motivations.',
   '- Name concrete identifiers from the code when they help.',
   '',
   'Reply with ONLY a JSON array, one object per excerpt, in order:',
-  '[{"n":1,"what":"...","why":"...","summary":"..."}]',
+  '[{"n":1,"what":"...","why":"...","summary":"...","alternatives":[{"label":"...","consequence":"..."},{"label":"...","consequence":"..."}]}]',
   'No prose before or after the JSON. No code fences.',
 ].join('\n');
 
@@ -189,10 +205,29 @@ function buildPrompt(
   return parts.join('\n');
 }
 
+/**
+ * `alternatives`, tolerant of a model that skips the field, gets the shape wrong, or pads
+ * it with junk — a bad entry is dropped rather than let through half-formed, and a missing
+ * or non-array field degrades to `[]` (a cache entry with no roads-not-taken, not a parse
+ * failure: see `StopMeaning.alternatives`'s own doc comment).
+ */
+function parseAlternatives(raw: unknown): Array<{ label: string; consequence: string }> {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((a): a is { label: string; consequence: string } =>
+      typeof a === 'object' && a !== null &&
+      typeof (a as { label?: unknown }).label === 'string' &&
+      typeof (a as { consequence?: unknown }).consequence === 'string')
+    .map((a) => ({ label: a.label.trim(), consequence: a.consequence.trim() }));
+}
+
 function parseAnswer(
   raw: string,
   expected: number,
-): Array<{ n: number; what: string; why: string; summary: string }> | null {
+): Array<{
+  n: number; what: string; why: string; summary: string;
+  alternatives: Array<{ label: string; consequence: string }>;
+}> | null {
   // The model was told to return bare JSON; be forgiving about fences and stray prose.
   const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(raw);
   const body = fenced ? fenced[1]! : raw;
@@ -203,7 +238,7 @@ function parseAnswer(
     const parsed = JSON.parse(body.slice(start, end + 1)) as unknown;
     if (!Array.isArray(parsed)) return null;
     const out = parsed
-      .filter((x): x is { n: number; what: string; why: string; summary?: string } =>
+      .filter((x): x is { n: number; what: string; why: string; summary?: string; alternatives?: unknown } =>
         typeof x === 'object' && x !== null && typeof (x as { what?: unknown }).what === 'string')
       .map((x, i) => ({
         n: typeof x.n === 'number' ? x.n : i + 1,
@@ -215,6 +250,7 @@ function parseAnswer(
           typeof x.summary === 'string' && x.summary.trim().length > 0 ? x.summary : x.what,
           SUMMARY_MAX,
         ),
+        alternatives: parseAlternatives(x.alternatives),
       }));
     return out.length === expected ? out : out.length > 0 ? out : null;
   } catch {
@@ -230,6 +266,14 @@ export interface InterpretOptions {
   /** skip the model entirely and only use what is already cached */
   cachedOnly?: boolean;
   onProgress?: (msg: string) => void;
+  /**
+   * The function that actually asks a model — defaults to the real `runLlm`. Every test in
+   * this repo feeds a canned one instead: interpretation is the only stage that spends real
+   * money and real wall-clock time, and a suite that cannot help spawning `claude` to prove
+   * the fold logic works is a suite nobody can run offline, in CI, or for free (T-13
+   * refinement notes).
+   */
+  runner?: typeof runLlm;
 }
 
 /** Where paid answers live. Content-keyed, so it is shared across every repo scanned. */
@@ -276,9 +320,10 @@ export async function interpretStops(
     if (fs.existsSync(cachePath)) {
       try {
         const cached = JSON.parse(fs.readFileSync(cachePath, 'utf8')) as StopMeaning;
-        // stopKey includes PROMPT_VERSION, so a v4 answer cannot be read here — but a
+        // stopKey includes PROMPT_VERSION, so a pre-v6 answer cannot be read here — but a
         // hand-edited or truncated cache file must degrade, not throw.
         if (!cached.summary) cached.summary = clamp(cached.what ?? '', SUMMARY_MAX);
+        if (!Array.isArray(cached.alternatives)) cached.alternatives = [];
         meanings.set(at, cached);
         cost.cachedStops++;
         return;
@@ -305,7 +350,7 @@ export async function interpretStops(
 
     let reply;
     try {
-      reply = await runLlm(prompt, choice, root);
+      reply = await (opts.runner ?? runLlm)(prompt, choice, root);
     } catch (e) {
       cost.failures.push(`${job.file}: ${(e as Error).message.slice(0, 160)}`);
       continue;
@@ -329,6 +374,7 @@ export async function interpretStops(
         what: a.what.trim(),
         why: (a.why ?? '').trim(),
         summary: clamp((a.summary ?? a.what).trim(), SUMMARY_MAX),
+        alternatives: a.alternatives,
       };
       meanings.set(slot.at, meaning);
       cost.interpretedStops++;
@@ -447,7 +493,7 @@ export async function interpretArchitecture(
 
   let reply;
   try {
-    reply = await runLlm(`${brief}\n\n${ARCH_SYSTEM}`, choice, root);
+    reply = await (opts.runner ?? runLlm)(`${brief}\n\n${ARCH_SYSTEM}`, choice, root);
   } catch (e) {
     cost.failures.push(`architecture: ${(e as Error).message.slice(0, 160)}`);
     return { meaning: null, cost };
