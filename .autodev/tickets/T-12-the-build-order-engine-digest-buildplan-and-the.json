@@ -3,8 +3,8 @@
   "slug": "the-build-order-engine-digest-buildplan-and-the",
   "type": "feature",
   "title": "The build-order engine — digest → BuildPlan, and the structural check",
-  "stage": "build",
-  "status": "building",
+  "stage": "gate",
+  "status": "awaiting_approval",
   "spec": "WHY: the VS Code tutorial walks a learner through BUILDING a repo by its decisions. The ordered decision list is a projection of the digest, computed the way src/tour.ts computes a tour: deterministic, free, disposable. Full design: VSCode-LLM-Tutorial .autodev/specs/T-1-build-tutorials-v1.md §4 (the data model is §4.2 — implement it as written; it is complete from day one on Evan's instruction).\n\nACs:\n1. src/build/plan.ts exports buildPlan(digest: DigestResult, opts): BuildPlan. Chapters come from subsystem tiers ordered after the chapters they import from; files within a chapter in topological import order (leaves first), ties by first-commit date then rank score. Check: a synthetic git fixture with a known import DAG yields the expected order, exact equality.\n2. Step kinds shape / file / symbol as specified; symbol steps are the exported symbols capped at 5 per file by span; test files follow the file they test; generated/vendored/lockfile files never become steps but are listed in plan.reproduce. Check: fixture assertions per kind.\n3. Every step has a stable id = sha256(file + kind + symbol name) that survives regeneration and a rename-free edit. Check: regenerate after editing a body; ids unchanged.\n4. Witness per step from git log --diff-filter=A on the file's own repo; a repo with no history yields nulls, never invented values. Check: fixture with history and one without.\n5. scaffold ranges: loadBearing = symbol-step ranges, boilerplate = the rest; a stub generator keeps the signature line and emits a language-correct placeholder body so the file parses. Check: stubbed TS, JS and Python files each parse with zero tree-sitter ERROR nodes.\n6. src/build/check.ts exports check(learnerSource, referenceExtract, language): a structural report — exported symbols (name+kind) present/missing/extra, resolved imports present/missing, parseErrors. It never compares bodies. Check: a reference body with a renamed local variable passes; a missing export is reported by name.\n7. decision.options is populated with the author's option only (taken:true) and decision.why from the docstring when one exists, whySource set accordingly; interpretation (alternatives) is T-13's. Check: schema test — options.length ≥ 1 here, ≥ 2 after T-13.\n8. A JSON schema for BuildPlan ships at schema/build-plan.schema.json and every generated plan validates. Check: vitest with a schema validator on fixtures.\n9. CLI: repo-tour plan <path> [--json] writes <path>/.repo-tour/build/plan.json and prints chapter/step counts. Check: run on the test fixture.\n\nOut of scope\n- Alternatives per step via the model — T-13\n- Mode A (idea) and divergence/replan — VSCode-LLM-Tutorial T-9 and T-10 (the enum and fields exist here; only 'recreate' is produced)\n- Languages beyond the shipped grammars — deferred: who=human:evan why=repo-tour T-1 §3 fixed grammar coverage",
   "pipeline_version": "feature@v1",
   "modifiers": [],
@@ -23,11 +23,11 @@
     "monitor"
   ],
   "passport": [
-    "2026-09-04 gate spec_ready cleared by agent:claude(on-behalf:evan,GA-8) on go-ahead GA-8 (\"Let's go ahead and loop through it until these are created a\")",
-    "2026-09-04 advanced refine → queue · refine on unrecorded",
-    "2026-09-04 advanced queue → locate · queue on unrecorded",
-    "2026-09-04 advanced locate → plan · locate on unrecorded",
-    "2026-09-04 advanced plan → build · plan on unrecorded"
+    "2026-09-04 advanced plan → build · plan on unrecorded",
+    "2026-09-04 advanced build → auto-review · build on unrecorded",
+    "2026-09-05 moved auto-review → build by agent:claude(on-behalf:evan,GA-8), attempt 1 · why: auto-review REWORK (.autodev/reviews/T-12.md on the branch, reviewer sonnet): (1) step ids collide for same-named symbols in one file — plan.ts:295-297,452; (2) data-classified files are neither steps nor in plan.reproduce — plan.ts:331 — breaks spec §9 #3 byte-for-byte; (3) one-line Python def/class stubs fail python3 -m py_compile — stub.ts:70-77; (4) witness null for a file introduced by rename — witness.ts:46-83 (--diff-filter=A misses R). Attempt 2: model escalated per rework policy. · leaving: Machine review: code review + security review + full preflight (lint, typecheck, unit,… · next: Implement the plan: code + tests on the ticket branch.",
+    "2026-09-05 advanced build → auto-review · build on unrecorded",
+    "2026-09-05 advanced auto-review → gate · auto-review on unrecorded"
   ],
   "assignees": {},
   "links": {},
@@ -76,6 +76,30 @@
       "to": "build",
       "by": "agent:claude(on-behalf:evan,GA-8)",
       "at": "2026-09-04T23:02:41.067Z"
+    },
+    {
+      "from": "build",
+      "to": "auto-review",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-04T23:59:11.860Z"
+    },
+    {
+      "from": "auto-review",
+      "to": "build",
+      "by": "agent:claude(on-behalf:evan,GA-8):auto-review REWORK (.autodev/reviews/T-12.md on the branch, reviewer sonnet): (1) step ids collide for same-named symbols in one file — plan.ts:295-297,452; (2) data-classified files are neither steps nor in plan.reproduce — plan.ts:331 — breaks spec §9 #3 byte-for-byte; (3) one-line Python def/class stubs fail python3 -m py_compile — stub.ts:70-77; (4) witness null for a file introduced by rename — witness.ts:46-83 (--diff-filter=A misses R). Attempt 2: model escalated per rework policy.",
+      "at": "2026-09-05T00:22:38.344Z"
+    },
+    {
+      "from": "build",
+      "to": "auto-review",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-05T00:42:59.771Z"
+    },
+    {
+      "from": "auto-review",
+      "to": "gate",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-05T00:59:47.485Z"
     }
   ],
   "receipts": {
@@ -118,6 +142,23 @@
       "by": "agent:claude(on-behalf:evan,GA-8)",
       "at": "2026-09-04T23:02:41.066Z",
       "model": "unrecorded"
+    },
+    "build": {
+      "evidence": "attempt 2 (rework, coder seat escalated to opus): commits 9e6313a 49bb387 c416cfb 93a49b3 e97c135 aa2b06a on feature/T-12-build-engine; typecheck clean; npm test 167/167 (build.test.ts 49, pipeline 118); each of the four review findings has a test shown to fail when its fix is reverted; nothing-vanishes invariant asserted after all 16 buildPlan calls; python3 -m py_compile on every Python stub fixture",
+      "kind": "other",
+      "fingerprint": "attempt 2 (rework, coder seat escalated to opus): commits 9e6313a 49bb387 c416cfb 93a49b3 e97c135 aa2b06a on feature/T-12-build-engine; typecheck clean; npm test 167/167 (build.test.ts 49, pipeline 118); each of the four review findings has a test shown to fail when its fix is reverted; nothing-vanishes invariant asserted after all 16 buildPlan calls; python3 -m py_compile on every Python stub fixture",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-05T00:42:59.770Z",
+      "model": "unrecorded"
+    },
+    "auto-review": {
+      "evidence": "review record .autodev/reviews/T-12.md (attempt 1 REWORK f09ab37; attempt 2 PASS 0563f01) on feature/T-12-build-engine — all four gating findings closed and revert-verified, 0 test assertions weakened, 167/167; reviewer seat model sonnet, fresh sessions",
+      "kind": "other",
+      "fingerprint": "review record .autodev/reviews/T-12.md (attempt 1 REWORK f09ab37; attempt 2 PASS 0563f01) on feature/T-12-build-engine — all four gating findings closed and revert-verified, 0 test assertions weakened, 167/167; reviewer seat model sonnet, fresh sessions",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-05T00:59:47.484Z",
+      "model": "unrecorded"
     }
-  }
+  },
+  "bounces": {}
 }

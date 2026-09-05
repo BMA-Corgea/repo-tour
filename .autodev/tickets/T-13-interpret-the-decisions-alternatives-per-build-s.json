@@ -3,8 +3,8 @@
   "slug": "interpret-the-decisions-alternatives-per-build-s",
   "type": "feature",
   "title": "Interpret the decisions — alternatives per build step, and Ask context for a step",
-  "stage": "intake",
-  "status": "triage",
+  "stage": "plan",
+  "status": "planning",
   "spec": "WHY: even in recreate mode the learner must see 'the author chose X; Y and Z were on the table' — that is the teaching, and it is what makes Mode A and divergence a change of defaults rather than new machinery (VSCode-LLM-Tutorial spec §4.3, §7). Same interpret call, one more ask.\n\nACs:\n1. StopMeaning gains alternatives: Array<{label, consequence}> (2 by default) written in the SAME call as what/why/summary; PROMPT_VERSION bumps so old cache entries are recomputed. Check: the interpret prompt test asserts the field and the version bump.\n2. src/build/plan.ts applies interpreted meanings to steps: decision.options becomes the author's option + the alternatives, decision.why = meaning.why with whySource 'interpret'; an uninterpreted step keeps the docstring or 'not inferable' honestly. Check: fixture with a stubbed provider yields options.length === 3.\n3. Cost lands on plan.cost with provider, metered flag, tokens and usd — zeros only when metered:false. Check: manifest field test.\n4. AskContext gains an optional build block: { question, options, why, learnerDiff } and buildContextBlock renders it under a labelled heading, learner diff clipped like the PR diff. Check: unit test on the rendered block; ASK_PERSONA unchanged.\n5. Cached by content hash exactly as stops are — planning a repo already toured pays only for the new prompt version. Check: second run reports cachedStops === interpretedStops of the first.\n\nOut of scope\n- Model-written build ORDER — deferred: who=agent:pm why=order is deterministic from the graph (T-12); the model interprets, never orders\n- Replanning after divergence — VSCode-LLM-Tutorial T-10",
   "pipeline_version": "feature@v1",
   "modifiers": [],
@@ -23,7 +23,11 @@
     "monitor"
   ],
   "passport": [
-    "2026-09-04 created as feature \"Interpret the decisions — alternatives per build step, and Ask context for a step\" on feature@v1 by agent:claude(on-behalf:evan,session_01Mxgb5pYk1Jb3C1qwp9RLAV)"
+    "2026-09-05 waiting at gate spec_ready (keyholder human:owner) since 2026-09-05",
+    "2026-09-05 gate spec_ready cleared by agent:claude(on-behalf:evan,GA-8) on go-ahead GA-8 (\"Let's go ahead and loop through it until these are created a\")",
+    "2026-09-05 advanced refine → queue · refine on unrecorded",
+    "2026-09-05 advanced queue → locate · queue on unrecorded",
+    "2026-09-05 advanced locate → plan · locate on unrecorded"
   ],
   "assignees": {},
   "links": {},
@@ -31,7 +35,7 @@
     "T-12"
   ],
   "gates": {
-    "spec_ready": false,
+    "spec_ready": true,
     "merge": false,
     "accept": false,
     "deploy": false,
@@ -45,5 +49,64 @@
     "validator_passed": false,
     "attempts": 0
   },
-  "history": []
+  "history": [
+    {
+      "from": "intake",
+      "to": "refine",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-05T00:03:12.353Z"
+    },
+    {
+      "from": "refine",
+      "to": "queue",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-05T00:03:12.662Z"
+    },
+    {
+      "from": "queue",
+      "to": "locate",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-05T00:03:12.762Z"
+    },
+    {
+      "from": "locate",
+      "to": "plan",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-05T00:03:12.918Z"
+    }
+  ],
+  "receipts": {
+    "intake": {
+      "evidence": "T-13 captured with type feature, source = VSCode-LLM-Tutorial T-1 direction (its spec section 4.3), no open duplicate, routed to feature@v1; --after T-12",
+      "kind": "other",
+      "fingerprint": "T-13 captured with type feature, source = VSCode-LLM-Tutorial T-1 direction (its spec section 4.3), no open duplicate, routed to feature@v1; --after T-12",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-05T00:03:12.350Z",
+      "model": "unrecorded"
+    },
+    "refine": {
+      "evidence": ".autodev/specs/T-13-interpret-decisions.md",
+      "kind": "file",
+      "fingerprint": "sha256:22d8ced8bbc640ed",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-05T00:03:12.587Z",
+      "model": "unrecorded"
+    },
+    "queue": {
+      "evidence": "priority 1 once T-12 lands (--after T-12); nothing else in flight in this shop; VSCode-LLM-Tutorial T-3 waits on this",
+      "kind": "other",
+      "fingerprint": "priority 1 once T-12 lands (--after T-12); nothing else in flight in this shop; VSCode-LLM-Tutorial T-3 waits on this",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-05T00:03:12.758Z",
+      "model": "unrecorded"
+    },
+    "locate": {
+      "evidence": ".autodev/locates/T-13.md",
+      "kind": "file",
+      "fingerprint": "sha256:13be42d29dd78152",
+      "by": "agent:claude(on-behalf:evan,GA-8)",
+      "at": "2026-09-05T00:03:12.914Z",
+      "model": "unrecorded"
+    }
+  }
 }

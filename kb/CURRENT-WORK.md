@@ -25,8 +25,9 @@ here and found via the reference table below.
   session was messaged. Its `spec_ready` was deliberately NOT cleared: how it lands in the
   Office is GUTS's decision. **repo-tour's T-7 is the counterpart and is still unopened** —
   open it when GUTS says what it needs, not before.
-- **T-13** (feature) — Interpret the decisions — alternatives per build step, and Ask context for a st… — intake
-- **T-12** (feature) — The build-order engine — digest → BuildPlan, and the structural check — build
+- **T-12** (feature) — The build-order engine — digest → BuildPlan, and the structural check — gate
+- **T-14** (techdebt) — Harden T-11's consumer tests: prove prepare rebuilds dist, and make alternateCs… — intake
+- **T-13** (feature) — Interpret the decisions — alternatives per build step, and Ask context for a st… — plan
 
 ## Waiting on
 
@@ -37,6 +38,7 @@ here and found via the reference table below.
   (GA-3 through GA-7) because he asked not to be stopped mid-flight. **The open loop is his
   read of the notes + Ask panels**, which he has not used yet at the time of writing.
 - **T-12** — waiting at spec_ready on human:owner since 2026-09-04
+- **T-13** — waiting at spec_ready on human:owner since 2026-09-05
 
 ## Recent past (~15 items / ~30 days)
 

@@ -85,3 +85,11 @@
 {"ts":"2026-09-04T23:43:35.773Z","kind":"stage.advanced","ticket":"T-11","from":"uat","to":"release"}
 {"ts":"2026-09-04T23:43:35.820Z","kind":"stage.advanced","ticket":"T-11","from":"release","to":"monitor"}
 {"ts":"2026-09-04T23:43:35.866Z","kind":"pipeline.complete","ticket":"T-11","at":"monitor"}
+{"ts":"2026-09-04T23:59:11.866Z","kind":"stage.advanced","ticket":"T-12","from":"build","to":"auto-review"}
+{"ts":"2026-09-05T00:03:12.353Z","kind":"stage.advanced","ticket":"T-13","from":"intake","to":"refine"}
+{"ts":"2026-09-05T00:03:12.662Z","kind":"stage.advanced","ticket":"T-13","from":"refine","to":"queue"}
+{"ts":"2026-09-05T00:03:12.763Z","kind":"stage.advanced","ticket":"T-13","from":"queue","to":"locate"}
+{"ts":"2026-09-05T00:03:12.919Z","kind":"stage.advanced","ticket":"T-13","from":"locate","to":"plan"}
+{"ts":"2026-09-05T00:22:38.346Z","kind":"stage.loopback","ticket":"T-12","from":"auto-review","to":"build","attempts":1,"no_progress_streak":1,"stuck":false}
+{"ts":"2026-09-05T00:42:59.778Z","kind":"stage.advanced","ticket":"T-12","from":"build","to":"auto-review"}
+{"ts":"2026-09-05T00:59:47.486Z","kind":"stage.advanced","ticket":"T-12","from":"auto-review","to":"gate"}
