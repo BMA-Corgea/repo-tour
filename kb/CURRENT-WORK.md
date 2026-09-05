@@ -57,7 +57,7 @@ here and found via the reference table below.
   Office is GUTS's decision. **repo-tour's T-7 is the counterpart and is still unopened** —
   open it when GUTS says what it needs, not before.
 - **T-14** (techdebt) — Harden T-11's consumer tests: prove prepare rebuilds dist, and make alternateCs… — intake
-- **T-13** (feature) — Interpret the decisions — alternatives per build step, and Ask context for a st… — auto-review
+- **T-13** (feature) — Interpret the decisions — alternatives per build step, and Ask context for a st… — gate
 - **T-16** (feature) — Module-pattern and .call(this) IIFEs: record their body declarations too — intake
 
 ## Waiting on
