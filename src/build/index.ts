@@ -8,6 +8,7 @@ export { buildPlan, type BuildPlanOptions } from './plan.js';
 export { stubFile, type StubQuestion } from './stub.js';
 export { check } from './check.js';
 export { firstCommits, NULL_WITNESS, type Witness } from './witness.js';
+export { interpretPlan, type InterpretPlanOptions, type InterpretPlanResult } from './interpret.js';
 export type {
   BuildPlan, Chapter, Step, StepKind, Option, Range, CheckReport,
 } from './types.js';
