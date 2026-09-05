@@ -1,6 +1,6 @@
 /**
  * The build-order engine's data model — VSCode-LLM-Tutorial spec §4.2, implemented as
- * written and in full on day one. Evan's instruction (T-1 §7): v1 produces only
+ * written and in full on day one. The owner's instruction (T-1 §7): v1 produces only
  * `mode: 'recreate'`, but `mode` is already an enum, `source` already a union, `chosen`
  * already a field, and `decision.options` is always populated (one entry, `taken: true`,
  * until T-13's interpret pass adds the roads not taken). Not because THIS version needs

@@ -39,7 +39,7 @@ export interface PrProse {
 export interface PrRefs {
   /** the pull request's number, when this came from one */
   number: number | null;
-  /** its page on GitHub — Evan: "it doesn't link to the PR" */
+  /** its page on GitHub — the owner: "it doesn't link to the PR" */
   url: string | null;
   headSha: string;
   /** the commit the comparison is against — the landing point */

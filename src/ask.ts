@@ -1,7 +1,7 @@
 /**
  * The Ask panel's brain: a persona, and everything the reader is currently looking at.
  *
- * Modelled on sql-gauntlet's tutor (`sql-gauntlet/server.js`), which Evan pointed at: a
+ * Modelled on sql-gauntlet's tutor (`sql-gauntlet/server.js`), which the owner pointed at: a
  * persona system prompt, a `buildContextBlock` that flattens the current state into labelled
  * lines, and the local `claude` CLI as the backend so no API key is needed. repo-tour keeps
  * that shape and supplies its own backend — `llm.ts` already has the provider registry, and

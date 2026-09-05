@@ -2,7 +2,7 @@
  * The pull-request page.
  *
  * T-5 and T-8 rendered a PR tour through `renderRepoView`, which made it the repository page
- * with different stops in the sidebar. That one decision produced most of what Evan found
+ * with different stops in the sidebar. That one decision produced most of what the owner found
  * wrong with it: the file tree was the whole repo, the code panel showed whole files with
  * nothing marked, there was no PR to link to, and a stop could only point at a file.
  *
@@ -85,7 +85,7 @@ function fileRow(d: FileDelta, diff: FileDiff | undefined, v: Adjudication | und
  * The diff as data, not as markup.
  *
  * Rendered on the client so it can go through the SAME syntax highlighter the repo page's
- * code panel uses. A diff in plain grey next to a coloured file browser is the seam Evan
+ * code panel uses. A diff in plain grey next to a coloured file browser is the seam the owner
  * spotted — the tour and the code have to look like one product, not two.
  */
 interface DiffPayload {
@@ -106,7 +106,7 @@ function diffPayload(diff: FileDiff | undefined, lang: string | null): DiffPaylo
 /**
  * The PR page's own rules — and ONLY the ones the repo page does not already have.
  *
- * Evan, on the first cut: *"It's very hard to read and I'm not convinced the style follows
+ * The owner, on the first cut: *"It's very hard to read and I'm not convinced the style follows
  * through entirely."* He was right, and the cause was that this file invented its own colour
  * tokens (`--panel`, `--hover`, `--fg`) with DARK fallbacks. None of them exist in any skin,
  * so every one fell back — dark panels dropped onto a light theme, grey text on cream.

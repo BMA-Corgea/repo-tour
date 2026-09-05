@@ -2,7 +2,7 @@
  * The checkpoint — the digest you already have — and the one side PR mode has to compute.
  *
  * The first draft of this module checked out the base commit into a git worktree and
- * digested it. That was wrong, and Evan cut it at the spec gate: "I don't think I care
+ * digested it. That was wrong, and the owner cut it at the spec gate: "I don't think I care
  * about interpreting historical commits yet." Re-reading his original framing showed it
  * had never been needed — he asked to compare a PR against "the ALREADY EXISTING
  * interpretation of the checkpoint". The checkpoint is not computed. It is the digest

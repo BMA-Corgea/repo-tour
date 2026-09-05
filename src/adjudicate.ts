@@ -52,7 +52,7 @@ export interface Adjudication {
   headline: string;
   /**
    * What this PR is PROPOSING TO CHANGE about code that already does something — the thing
-   * Evan asked for and the first two versions of this did not give him:
+   * The owner asked for and the first two versions of this did not give him:
    *
    *   "It needs to use the context of what's actually going on to tell us what the PR is
    *    proposing to change about it."

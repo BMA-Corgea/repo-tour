@@ -12,7 +12,7 @@ One entry per lesson, newest first, each citing the ticket or incident it came f
 
 ## A control that silently declines is a broken control (T-3, 2026-08-26)
 
-Evan: **"the button for note taking doesn't do anything."** He was right, and the cause was
+The owner: **"the button for note taking doesn't do anything."** He was right, and the cause was
 a rule I had written on purpose: Save refused unless lines had already been clicked, and
 said so only by changing a small grey hint line nobody looks at. You typed a thought, hit
 the button, and nothing visible happened.
@@ -36,7 +36,7 @@ where the eye already is. Silent refusal reads as a dead button.**
 
 ## An older tour is still true, so never make it unreachable (T-4, 2026-08-26)
 
-Evan, working it out himself: **"Repo tour keeps resetting because we keep updating the
+The owner, working it out himself: **"Repo tour keeps resetting because we keep updating the
 codebase. We need to be able to keep an old tour pinned even if it's changing. It needs to
 not become unreachable, just a subtle note … while still being able to access it."**
 
@@ -63,7 +63,7 @@ cannot use.
 
 ## A server that restarts itself must be able to STOP itself (T-4, 2026-08-26)
 
-Evan, with a screenshot of his terminal: **"It gets caught up and I can't refresh when you
+The owner, with a screenshot of his terminal: **"It gets caught up and I can't refresh when you
 update it."** The log read:
 
     [tsx] change in ./src/interpret.ts  Process hasn't exited. Killing process...
@@ -101,7 +101,7 @@ so `--port 0` — bind anything free — answered 0, which is not a port anyone 
 
 ## An in-flight build must survive the process that started it (T-4, 2026-08-26)
 
-Evan: **"Does the repo tour building reset every time the app resets? I've tried building it
+The owner: **"Does the repo tour building reset every time the app resets? I've tried building it
 so many times now."**
 
 Yes, and it was my doing twice over. `tsx watch` was added so he would get updates without
@@ -128,7 +128,7 @@ together — one of them makes restarts frequent, so the other must make them su
 
 ## Two safe features combined into a reload loop (T-4, 2026-08-26)
 
-Evan: **"when I click on a chapter to read through it pops me back to the beginning of the
+The owner: **"when I click on a chapter to read through it pops me back to the beginning of the
 tour"** — and he guessed it was another build interfering. It was not. Nothing he did caused
 it, and nothing about chapters was wrong.
 
@@ -154,7 +154,7 @@ and neither test covered the pair. What found it was counting page loads while c
 
 ## "Not built yet" is a claim about the user's work, so it had better be true (T-4, 2026-08-26)
 
-Evan: **"it's showing as not built yet"** — for both repositories, right after they had been
+The owner: **"it's showing as not built yet"** — for both repositories, right after they had been
 built.
 
 The rendered page lived only in a `Map` in the server process. Everything expensive survived
@@ -177,7 +177,7 @@ time the process dies — not about correctness, but about whether their work st
 
 ## Test servers must not write to the real state file (T-4, 2026-08-26)
 
-Evan, looking at the app: **"Did we lose the tours we made?"** His list showed one
+The owner, looking at the app: **"Did we lose the tours we made?"** His list showed one
 throwaway repo from my own testing and nothing else.
 
 The server persists its loaded repositories to `.cache/loaded.json`. Every throwaway server
@@ -199,7 +199,7 @@ screen.**
 
 ## The right photograph for a developer tool is not a photograph of code (T-5, 2026-08-26)
 
-Evan: **"Give me some design on the landing page. It looks ugly and plain. GLP-Strong-App has
+The owner: **"Give me some design on the landing page. It looks ugly and plain. GLP-Strong-App has
 a pexels API key."**
 
 GLP's image fetcher carries the rule that decided this: *"a wrong photograph is worse than no
@@ -230,7 +230,7 @@ gradient, which is a designed state rather than a gap.
 
 ## Two skins ported, and what actually makes a look read (T-5, 2026-08-26)
 
-Evan asked for GIMS-Project's **Classic** and then, from a Tales-of-era screenshot, a **JRPG**
+The owner asked for GIMS-Project's **Classic** and then, from a Tales-of-era screenshot, a **JRPG**
 skin. Both are one file plus one registry row, and both are more about structure than palette.
 
 **Classic** (Win9x desktop): the colours are the least of it. What sells it is three bevel
@@ -252,7 +252,7 @@ would make the tool unreadable, and this is a reading tool before it is a costum
 
 ## Styles are a swappable layer, not decoration (T-5, 2026-08-26)
 
-Evan: **"the buttons are ugly. Check out the way the GLP-Strong-App has styles that can be
+The owner: **"the buttons are ugly. Check out the way the GLP-Strong-App has styles that can be
 one shot. I want this repo set up like that as well."**
 
 GLP-Strong-App's contract, now ported: **a skin is ONE file whose rules are all scoped under
@@ -293,7 +293,7 @@ no resolved path contains a `%xx` escape.
 
 ## The button was not buried — the PAGE was scrolled (T-4, 2026-08-26)
 
-Evan, twice: **"the tour button needs to be scrolled up to"**, then **"the green button is
+The owner, twice: **"the tour button needs to be scrolled up to"**, then **"the green button is
 still tucked in there"** after it had been moved into the sticky header.
 
 Moving it was treating a symptom. `open()` kept the selected file-tree row visible with
@@ -327,7 +327,7 @@ asserting every id the client script reaches for is actually rendered.
 
 ## A generated file cannot be refreshed — the product had to become an app (T-4, 2026-08-26)
 
-Evan: **"does my full refresh doesn't work for updating? ... essentially I need an app that
+The owner: **"does my full refresh doesn't work for updating? ... essentially I need an app that
 can load repos with tours into it. That way a refresh will enable seeing more updates."**
 
 He was describing the fundamental limit of what had been built. `repo-tour tour` wrote a
@@ -399,7 +399,7 @@ bottom — because that ordering is the one thing a folder listing can never sho
 
 ## The LLM is a choice, and adding one is a single entry (T-1, 2026-08-26)
 
-Evan: **"Abstract it one level up so it's not just runClaude, but that you can choose which
+The owner: **"Abstract it one level up so it's not just runClaude, but that you can choose which
 LLM you're using and make it easy to add another one."**
 
 `src/llm.ts` is ported from GONS's `backend/app/llm_adapter.py`, which had already solved the
@@ -440,7 +440,7 @@ something the other cannot know.**
 
 ## Interpretation runs through the local `claude` CLI, not an API (T-1, 2026-08-26)
 
-There is no API key in this project and there is not meant to be. Evan has a Claude
+There is no API key in this project and there is not meant to be. The owner has a Claude
 subscription, so stage 4 spawns the `claude` binary from `PATH` — the same binary and the
 same login as his terminal:
 
@@ -468,7 +468,7 @@ verifies.
 ## Stage 4 is the product, and there is no template that substitutes for it (T-1, 2026-08-26)
 
 Shown a tour stop on `main` that read *"A function at line 71. 95 lines. It is private to
-cli.ts, so it can be changed in place."*, Evan said: **"that sure is saying very little
+cli.ts, so it can be changed in place."*, the owner said: **"that sure is saying very little
 about how it works. We've explained nothing and we move on after this step."**
 
 The instinct was to enrich the template — pull call graphs and control flow off the AST and
@@ -491,7 +491,7 @@ Cached by content hash, so it is paid once.
 Stage 4's first answers were good and too long for the coachmark bubble, so the prompt was
 told to "BE SHORT" — capping the explanation at 40 words to fit the UI.
 
-Evan reversed it: **"We might need to readjust how we portray information so that we can
+The owner reversed it: **"We might need to readjust how we portray information so that we can
 have longer explanations. I'm thinking like a textbook paragraph's worth of information."**
 
 He was right, and the mistake was structural: a floating spotlight bubble is a UI for
@@ -508,7 +508,7 @@ the highlighted lines are the spotlight, so the dim overlay was never needed.
 ## I built the machinery's UI instead of the product's UI (T-1, 2026-08-26)
 
 The first demo was a dashboard of score, churn, in-degree, LOC and classification, with a
-tour that walked a viewer through *the dashboard*. Evan's verdict: **"There's no code on
+tour that walked a viewer through *the dashboard*. The owner's verdict: **"There's no code on
 the screen... This is nothing like the github repo format we were looking to recreate...
 I need to know almost nothing about the score, churn, in LOG, class, or lang."**
 
@@ -711,7 +711,7 @@ count says.
 
 ## Writing a lesson down does not prevent it — only a test does
 
-**2026-08-27, T-9.** On 2026-08-26 Evan rejected the first demo because it showed the
+**2026-08-27, T-9.** On 2026-08-26 the owner rejected the first demo because it showed the
 ranking rubric instead of the repository. That lesson was written into this file the same
 day: *the signals are how the engine decides what to show you, not what you want to read.*
 

@@ -32,7 +32,7 @@ here and found via the reference table below.
   not pushed/merged; full details and per-AC verification in `.autodev/handoffs/T-11.md`.
   **T-12** (the build-order engine this package's `./build` export will point at) is running
   in parallel in
-  `../repo-tour-T-12` on disjoint files. Five of the six pieces Evan described on day one are
+  `../repo-tour-T-12` on disjoint files. Five of the six pieces the owner described on day one are
   shipped; the one left besides these is **T-7, GONS integration** — always the endgame
   rather than the product.
   VSCode-LLM-Tutorial ticket set's order). `src/build/{types,witness,plan,stub,check,index}.ts`:
@@ -55,9 +55,9 @@ here and found via the reference table below.
   `build` block for the VS Code tutor (T-6); `repo-tour plan --interpret [--cached-only]`
   wired into the CLI. Every test injects a canned runner — none spawns `claude`. 193 tests
   green (176 + 17). Full detail: `.autodev/handoffs/T-13.md`.
-- Nothing else in flight here. **Five of the six pieces Evan described on day one are shipped.**
+- Nothing else in flight here. **Five of the six pieces the owner described on day one are shipped.**
   The one left is **T-7, GONS integration** — always the endgame rather than the product.
-- **The GONS side is now open on the OTHER shop.** 2026-08-27, on Evan's instruction, GUTS
+- **The GONS side is now open on the OTHER shop.** 2026-08-27, on the owner's instruction, GUTS
   ticket **T-55** was filed ("Bring repo-tour's PR tours into the GONS Office PR section")
   with a first-hand brief at `GUTS/.autodev/handoffs/T-55.md`, and the live `guts-bridge`
   session was messaged. Its `spec_ready` was deliberately NOT cleared: how it lands in the
@@ -71,7 +71,7 @@ here and found via the reference table below.
 <!-- Holds: "waiting at <gate> on <keyholder> since <date>, ping sent to
      <channel>" — no session should discover a hold by archaeology (ruling 24). -->
 
-- Nothing is held. Every gate that is Evan's was spent on his own recorded go-aheads
+- Nothing is held. Every gate that is the owner's was spent on his own recorded go-aheads
   (GA-3 through GA-7) because he asked not to be stopped mid-flight. **The open loop is his
   read of the notes + Ask panels**, which he has not used yet at the time of writing.
 
@@ -90,7 +90,7 @@ here and found via the reference table below.
   every gate since the first spec on the reasoning that a tour has to be worth taking notes
   on before notes are worth having. A note records the NARRATIVE that was on screen, not just
   the location — that is what makes it readable a week later.
-- **2026-08-27** — The Ask panel follows sql-gauntlet's tutor, which Evan pointed at: a
+- **2026-08-27** — The Ask panel follows sql-gauntlet's tutor, which the owner pointed at: a
   persona plus a labelled context block, over the local `claude` CLI. Why labelled: the notes
   are the human's and the meaning is the machine's, and an answer confusing the two would be
   worse than none. Asked about `src/server.ts` from a summary alone, it named "loosen the
@@ -101,7 +101,7 @@ here and found via the reference table below.
   and syntax-highlighted, a link out to GitHub, and narration that says what the PR is doing
   rather than reciting its score. Why the rebuild: the tour had been rendered through
   `renderRepoView`, so it WAS the repo page — one decision that caused five of the six faults
-  Evan listed.
+  The owner listed.
 - **2026-08-27** — The stop text had been opening with `MEANING MOVED · 0.60 · 2 lines`.
   Why that matters more than the others: it is the same failure as the metrics demo rejected
   on 2026-08-26, whose lesson was already in `kb/wiki/lessons.md`. Now enforced by a test
@@ -115,7 +115,7 @@ here and found via the reference table below.
 
 - 2026-08-27 **T-9 COMPLETE** — A real PR view: the diff on screen, and narration about the change not the score
 - **2026-08-27** — **T-8 COMPLETE.** The app's "Pull requests" tab was a decorative span and
-  PR mode only ran from the CLI, so Evan clicked it and nothing happened. Why it slipped
+  PR mode only ran from the CLI, so the owner clicked it and nothing happened. Why it slipped
   through T-5: criterion 9 was verified by checking the PR tour renders through the same
   function, which is not the same as being reachable by a person. Three of the four defects
   found here were invisible to a green suite — a cache in front of the renderer (no test ran
@@ -127,24 +127,24 @@ here and found via the reference table below.
 - **2026-08-27** — **T-5 COMPLETE.** PR mode: a pull request toured by how far its *meaning*
   moved, not how many lines changed. Also two-level narration for both tour kinds — a
   tweet-sized summary by default, full text one press away. Why: every stop was an 80–140
-  word paragraph, and skimming thirty to find the two that matter is the overwhelm Evan
+  word paragraph, and skimming thirty to find the two that matter is the overwhelm the owner
   described.
 - **2026-08-27** — T-5's central comparison was rebuilt mid-build after it failed on real
   code. Why: diffing two free-prose interpretations scored a pure local-variable rename at
   0.47 "meaning moved" — the model had written a *different essay* about the same code, ~50%
   overlap. Free prose is not stable enough to diff. `adjudicate.ts` asks the model the
   question directly; the same fixture then scored 0.00.
-- **2026-08-27** — **T-1 COMPLETE.** Accepted by Evan (GA-3), then release and monitor, both
+- **2026-08-27** — **T-1 COMPLETE.** Accepted by the owner (GA-3), then release and monitor, both
   recorded honestly rather than faked green: there is no production service, so "released"
   means the tool builds and runs from a clean `main` — verified live.
 
-- **2026-08-26** — Product surface rebuilt on Evan's rejection of the metrics demo. Why it
+- **2026-08-26** — Product surface rebuilt on the owner's rejection of the metrics demo. Why it
   went wrong: the ranking signals are how the engine picks what to show, not what a reader
   wants; putting them on screen showed the rubric instead of the repo. Now: repo page with
   real code, tour anchored to line ranges, narration leading with the author's own
   docstrings (7 of 14 stops on autoSQL quote the author directly).
 - **2026-08-26** — T-1 completed through verify: stage 5 rollup, incremental re-digest, and
-  a generated tour. Why the tour is here and not deferred: Evan asked to see a demo, and a
+  a generated tour. Why the tour is here and not deferred: the owner asked to see a demo, and a
   tour is a projection of the digest, so it cost a renderer rather than a new subsystem.
 - **2026-08-26** — verify found a defect no unit test could: the digest was scanning its own
   `.repo-tour/` cache on a second run, inventing ~100 additions and a false 44% reuse figure.
@@ -160,13 +160,13 @@ here and found via the reference table below.
 - **2026-08-26** — Stages 1–3 built (inventory, extract, rank) in Node + TypeScript.
   Why this shape: ordering is the cost-control mechanism — every free, exact stage runs
   first so the paid stage only ever reads what survived.
-- **2026-08-26** — Language decided: **Node + TypeScript** with `web-tree-sitter`, by Evan.
+- **2026-08-26** — Language decided: **Node + TypeScript** with `web-tree-sitter`, by the owner.
   Why: the engine and the tour UI talk constantly; Python would put a serialization seam
   through the middle of the product. Cost accepted: the only non-Python repo in the estate.
 - **2026-08-26** — Onboarding closed out (3 of 4 goals; `about` left open by choice).
   Why it looked unstarted: session 1 captured every answer into the transcript but never
   marked the steps, so the board read 0/4 when it was really 3/4.
-- **2026-08-25** — T-1 spec approved by Evan (GA-1), `spec_ready` cleared.
+- **2026-08-25** — T-1 spec approved by the owner (GA-1), `spec_ready` cleared.
 
 ## Reference table (where the past lives)
 

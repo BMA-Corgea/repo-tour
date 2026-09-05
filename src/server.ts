@@ -1304,7 +1304,7 @@ setInterval(refresh, 4000);
  * exists to prevent. A PR build was rendered with `building(\`${repo} — PR #3\`, …)`, so the
  * page polled `/api/job?path=<that decorated label>`, matched no job, read back `idle`
  * forever, and hung. Leaving and returning worked, because the route checks the finished
- * tour directly — which is exactly what Evan saw.
+ * tour directly — which is exactly what the owner saw.
  *
  *   label    what the reader is told is being read
  *   jobKey   the key the job is actually stored under

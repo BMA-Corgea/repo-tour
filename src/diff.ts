@@ -2,7 +2,7 @@
  * Unified diffs, parsed into something a page can render.
  *
  * Deterministic and model-free: this is the "what literally changed" layer that T-9 exists
- * to put back on screen. Evan's words: *"We agreed that it's not about the diffs and we need
+ * to put back on screen. The owner's words: *"We agreed that it's not about the diffs and we need
  * to go deeper, but we absolutely need the diffs so that we know what is happening."*
  *
  * Both halves of that sentence matter. The tour's ORDER and its narration are about meaning;

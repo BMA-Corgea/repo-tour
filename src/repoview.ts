@@ -944,7 +944,7 @@ const TOUR_BOOTSTRAP = `
 /**
  * Fill in the Pull requests tab after the page loads.
  *
- * Evan, on the first version: "there's nothing that indicates that PRs are available to
+ * The owner, on the first version: "there's nothing that indicates that PRs are available to
  * view… Nothing on the front page or in here indicates that a PR interpretation is being
  * loaded." A tab that looks exactly like the two dead ones beside it tells a reader nothing.
  * So it carries the real count, and says so out loud while one is being read.

@@ -1072,7 +1072,7 @@ describe('a build survives the process dying', () => {
     // The server restarts — on a code change, on a crash, on Ctrl-C — and an in-process
     // build dies with it. Without a marker the card goes back to "no tour yet", which is the
     // worst possible presentation: minutes of work gone, and the only signal says you never
-    // started. This cost Evan several attempts in a row while the watcher was restarting on
+    // started. This cost the owner several attempts in a row while the watcher was restarting on
     // every commit.
     const { RepoTourServer } = await import('../src/server.js');
     const own = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-resume-'));
@@ -1351,7 +1351,7 @@ describe('the app can be stopped', () => {
 // ---------------------------------------------------------------------------
 // T-5 §8 — two levels of explanation. Criteria 11-14.
 //
-// The rule these pin down is Evan's correction at the spec gate: the default level is the
+// The rule these pin down is the owner's correction at the spec gate: the default level is the
 // whole explanation COMPRESSED, and the press restores the ORIGINAL. Criterion 12 is a
 // byte-identity requirement, which makes `fullText` a contract rather than an
 // implementation detail — these tests exist so nobody "tidies" it later.
@@ -1911,7 +1911,7 @@ describe('T-9 — the PR page is about the change, not the score', () => {
   });
 
   it('the page is built from the house components, not its own', () => {
-    // Evan: "I'm not convinced the style follows through entirely." The cause was invented
+    // the owner: "I'm not convinced the style follows through entirely." The cause was invented
     // colour tokens with dark fallbacks. These are the shared ones.
     expect(html).toContain('class="topbar"');
     expect(html).toContain('class="layout"');
@@ -1982,7 +1982,7 @@ describe('the diff parser', () => {
 });
 
 describe('a build in progress polls the job it is actually waiting on', () => {
-  // Evan: "When I stayed on the page constructing the interpretation it hung. I left and
+  // the owner: "When I stayed on the page constructing the interpretation it hung. I left and
   // came back and it was instantly done." The page polled a decorated LABEL as though it
   // were a job key, matched nothing, read back `idle` forever, and would have navigated to
   // the repo tour rather than the PR even if it had finished.

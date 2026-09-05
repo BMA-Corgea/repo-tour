@@ -1,1 +1,0 @@
-{"ts":"2026-08-27T17:23:33.409Z","ticket":"T-5","lean":false,"source":"ticket-flag","worktree":"isolated","risk":"medium","reason":"multi-file feature adding a new mode over the digest engine (new PR source, digest comparison, interpretation diff, new CLI command) in an existing repo with live work — full ceremony and isolation earned"}

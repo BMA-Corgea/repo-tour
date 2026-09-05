@@ -1,6 +1,6 @@
 # Decision — repo-tour is built in Node + TypeScript
 
-**Decided:** 2026-08-26 · **By:** human:evan, in session, on the PM's recommendation
+**Decided:** 2026-08-26 · **By:** human:owner, in session, on the PM's recommendation
 **Status:** locked for T-1 and everything downstream
 **Ticket:** T-1 (digest engine) · spec §6
 
@@ -9,7 +9,7 @@
 The digest engine — and the tour UI it feeds — are written in **Node + TypeScript**,
 parsing with **`web-tree-sitter`** (WASM grammars).
 
-Evan's words: *"Let's go with the recommendation for node."*
+The owner's words: *"Let's go with the recommendation for node."*
 
 ## Why
 
@@ -21,7 +21,7 @@ Evan's words: *"Let's go with the recommendation for node."*
 
 ## What it costs, stated plainly
 
-This is the **only non-Python repo in Evan's estate** — GUTS, GIMS and GONS are all
+This is the **only non-Python repo in the owner's estate** — GUTS, GIMS and GONS are all
 Python. Consequences to expect:
 
 - No shared libraries with the rest of the estate. repo-tour reads other repos as *data*,

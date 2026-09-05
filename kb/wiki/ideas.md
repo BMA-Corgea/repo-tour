@@ -11,7 +11,7 @@ whatever was already worked out about it. Newest first.
 
 ---
 
-## Theme music for the JRPG skin — muted by default (Evan, 2026-08-26)
+## Theme music for the JRPG skin — muted by default (the owner, 2026-08-26)
 
 **His words:** *"I have half a mind to make it have a default muted JRPG theme when you choose
 that theme."*

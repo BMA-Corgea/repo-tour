@@ -8,7 +8,7 @@
  * implementations of "how long is the short version" drift within a week. T-5 criterion 14
  * is a test that both builders call THIS function.
  *
- * The rule it enforces (T-5 §8, from Evan's correction at the spec gate): the default
+ * The rule it enforces (T-5 §8, from the owner's correction at the spec gate): the default
  * level is the whole explanation COMPRESSED, never a selection between the interpretation's
  * fields. `what` and `why` are equally likely to hold the point; showing one and hiding the
  * other would bury the best sentence on the page about half the time.
