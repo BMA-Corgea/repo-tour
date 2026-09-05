@@ -215,16 +215,35 @@ function complement(ranges: Range[], loc: number): Range[] {
 }
 
 /**
- * The exported symbols worth a step: biggest span first, capped at five, then restored to
- * file order for presentation. Overlapping candidates are skipped once a bigger one is
- * taken — `extract.ts` marks a class's public methods `exported` whenever the class is,
- * so a class and its own methods can both be candidates, and their ranges nest. The class
- * (bigger span, sorts first) wins the slot; its members are treated as subsumed by that
- * same step rather than double-stubbed.
+ * A candidate is a `variable` only if its own span is real code, not a one-line alias —
+ * `const fs = require('fs')` or `import x = y` never earns a step, but a multi-line
+ * object/config literal (T-15's own `server.js`-shaped fixture) does. `function`/`method`/
+ * `class` are always eligible: their span is their own body, never a bare reference.
+ */
+function isEligibleCandidate(s: SymbolRecord): boolean {
+  if (s.kind === 'function' || s.kind === 'method' || s.kind === 'class') return true;
+  if (s.kind === 'variable') return s.endLine - s.line + 1 >= 3;
+  return false;
+}
+
+/**
+ * The symbols worth a step: biggest span first, capped at five, then restored to file
+ * order for presentation. Overlapping candidates are skipped once a bigger one is taken —
+ * `extract.ts` marks a class's public methods `exported` whenever the class is, so a class
+ * and its own methods can both be candidates, and their ranges nest. The class (bigger
+ * span, sorts first) wins the slot; its members are treated as subsumed by that same step
+ * rather than double-stubbed.
+ *
+ * Candidates are the file's exported symbols — UNLESS it exports nothing at all (T-15: a
+ * plain script or a CommonJS module has no ESM `export`, but its top-level functions are
+ * still exactly what a learner needs stubbed), in which case every recorded symbol is a
+ * candidate instead. Either way, `isEligibleCandidate` still screens out one-line variable
+ * aliases before the span sort ever sees them.
  */
 function selectLoadBearing(symbols: SymbolRecord[]): SymbolRecord[] {
   const exported = symbols.filter((s) => s.exported);
-  const bySpanDesc = exported
+  const candidates = (exported.length > 0 ? exported : symbols).filter(isEligibleCandidate);
+  const bySpanDesc = candidates
     .slice()
     .sort((a, b) => (b.endLine - b.line) - (a.endLine - a.line) || a.line - b.line);
 
