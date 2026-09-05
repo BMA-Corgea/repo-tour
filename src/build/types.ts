@@ -111,7 +111,12 @@ export interface BuildPlan {
   generatedAt: string;
   /** repo-tour's own cost shape; `metered: false` here is an honest "no model ran", never a zero pretending to be a measurement */
   cost: InterpretCost;
-  /** generated / vendored / lockfile paths: reproduced by the automated writer, never taught (AC2) */
+  /**
+   * Every inventoried path that is copied rather than taught: generated, vendored,
+   * lockfile, `data`, and anything binary (AC2). Together with the `file` steps' targets
+   * this covers EVERY file the digest inventoried, with no overlap — the invariant that
+   * makes automated mode able to reproduce the reference byte-for-byte (T-1 spec §9-3).
+   */
   reproduce: string[];
 }
 

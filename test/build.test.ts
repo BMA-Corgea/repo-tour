@@ -12,7 +12,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { digest } from '../src/digest.js';
+import { digest, type DigestResult } from '../src/digest.js';
 import { extract } from '../src/extract.js';
 import { buildArchitecture } from '../src/architecture.js';
 import { buildPlan } from '../src/build/plan.js';
@@ -44,6 +44,39 @@ function commitAll(dir: string, message: string): void {
 
 function tmp(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+}
+
+/**
+ * The plan's completeness invariant, asserted against EVERY plan this suite builds.
+ *
+ * A `BuildPlan` has exactly two destinations for a file: a `file` step (taught) or
+ * `plan.reproduce` (copied). Their union must be every path the digest inventoried, and
+ * they must not overlap. Without this, a whole classification bucket can silently vanish
+ * from a plan and every other assertion in this file still passes — which is precisely
+ * how `data`-classified files (any binary asset, any CSV/JSON/font) came to be dropped
+ * entirely, breaking the parent spec's §9 criterion 3 ("walking every step in automated
+ * mode reproduces the reference's source files byte-for-byte") for any repo with assets.
+ */
+function expectNothingDropped(d: DigestResult, plan: BuildPlan): void {
+  const inventoried = d.inventory.files.map((f) => f.path).sort();
+  const taught = plan.steps.filter((s) => s.kind === 'file').map((s) => s.target.file);
+  const covered = [...new Set([...taught, ...plan.reproduce])].sort();
+
+  const missing = inventoried.filter((p) => !covered.includes(p));
+  expect(missing, `inventoried but neither taught nor reproduced: ${missing.join(', ')}`).toEqual([]);
+  expect(covered).toEqual(inventoried);
+
+  const both = taught.filter((p) => plan.reproduce.includes(p));
+  expect(both, `both taught and reproduced: ${both.join(', ')}`).toEqual([]);
+  expect(new Set(taught).size, 'a file was taught twice').toBe(taught.length);
+
+  // a symbol step never points at a file with no file step of its own
+  const taughtSet = new Set(taught);
+  for (const s of plan.steps) {
+    if (s.kind === 'symbol') {
+      expect(taughtSet.has(s.target.file), `symbol step on un-taught file ${s.target.file}`).toBe(true);
+    }
+  }
 }
 
 // ================================================================================
@@ -101,6 +134,7 @@ describe('the build-order engine — a known DAG (AC1, AC2, AC3, AC4, AC7)', () 
     // test is silently exercising the tier fallback instead of the primary path.
     expect(buildArchitecture(d).subsystems.length).toBe(2);
     plan = await buildPlan(d, { root });
+    expectNothingDropped(d, plan);
   });
 
   afterAll(() => {
@@ -191,6 +225,7 @@ describe('the build-order engine — a known DAG (AC1, AC2, AC3, AC4, AC7)', () 
 
     const dAfterEdit = await digest(root, { write: false });
     const planAfterEdit = await buildPlan(dAfterEdit, { root });
+    expectNothingDropped(dAfterEdit, planAfterEdit);
     const afterEdit = new Map(planAfterEdit.steps.map((s) => [`${s.target.file}:${s.kind}`, s.id] as const));
     for (const [key, id] of before) expect(afterEdit.get(key)).toBe(id);
 
@@ -200,6 +235,7 @@ describe('the build-order engine — a known DAG (AC1, AC2, AC3, AC4, AC7)', () 
     commitAll(root, 'rename alpha/base.ts');
     const dAfterRename = await digest(root, { write: false });
     const planAfterRename = await buildPlan(dAfterRename, { root });
+    expectNothingDropped(dAfterRename, planAfterRename);
     const renamedStep = planAfterRename.steps.find((s) => s.kind === 'file' && s.target.file === 'alpha/renamed.ts');
     expect(renamedStep).toBeDefined();
     expect(renamedStep!.id).not.toBe(baseFileIdBefore);
@@ -289,6 +325,7 @@ describe('the build-order engine — the tier fallback (AC1 write-ahead risk)', 
     expect(buildArchitecture(d).subsystems.length).toBeLessThan(2);
 
     const plan = await buildPlan(d, { root });
+    expectNothingDropped(d, plan);
     expect(plan.chapters.map((c) => c.key)).toEqual(['lib', 'src']);
     expect(plan.steps.map((s) => s.target.file)).toEqual([
       'lib', 'lib/only2.ts', 'lib/only2.ts', 'src', 'src/only.ts', 'src/only.ts',
@@ -308,6 +345,7 @@ describe('the build-order engine — the tier fallback (AC1 write-ahead risk)', 
       const d = await digest(bare, { write: false });
       expect(d.manifest.repos).toEqual([]);
       const plan = await buildPlan(d, { root: bare });
+      expectNothingDropped(d, plan);
 
       expect(plan.chapters.map((c) => c.key)).toEqual(['src']);
       expect(plan.chapters.some((c) => c.key === '')).toBe(false);
@@ -341,6 +379,7 @@ describe('the build-order engine — the symbol cap (AC2)', () => {
 
       const d = await digest(root, { write: false });
       const plan = await buildPlan(d, { root });
+      expectNothingDropped(d, plan);
 
       const symbolSteps = plan.steps.filter((s) => s.kind === 'symbol' && s.target.file === 'src/many.ts');
       expect(symbolSteps).toHaveLength(5);
@@ -664,6 +703,7 @@ describe('the build-order engine — the JSON schema (AC8)', () => {
 
       const d = await digest(root, { write: false });
       const plan = await buildPlan(d, { root });
+      expectNothingDropped(d, plan);
       const errors = validateBuildPlan(schema, plan);
       expect(errors).toEqual([]);
     } finally {
@@ -680,6 +720,7 @@ describe('the build-order engine — the JSON schema (AC8)', () => {
 
       const d = await digest(root, { write: false });
       const plan = await buildPlan(d, { root });
+      expectNothingDropped(d, plan);
       const bad = { ...plan, mode: 'bogus' };
       const errors = validateBuildPlan(schema, bad);
       expect(errors.length).toBeGreaterThan(0);
@@ -698,6 +739,7 @@ describe('the build-order engine — the JSON schema (AC8)', () => {
 
       const d = await digest(root, { write: false });
       const plan = await buildPlan(d, { root }) as Partial<BuildPlan>;
+      expectNothingDropped(d, plan as BuildPlan);
       delete plan.reproduce;
       const errors = validateBuildPlan(schema, plan);
       expect(errors.some((e) => e.includes('missing required key "reproduce"'))).toBe(true);
@@ -804,6 +846,7 @@ describe('the build-order engine — why and whySource (AC7)', () => {
 
       const d = await digest(root, { write: false });
       const plan = await buildPlan(d, { root });
+      expectNothingDropped(d, plan);
 
       const fileStep = plan.steps.find((s) => s.kind === 'file' && s.target.file === 'src/a.ts')!;
       expect(fileStep.decision.why).toBe('Sends a job through the shouter.');
@@ -843,6 +886,7 @@ describe('the build-order engine — witness on a git repo with no commits yet (
       }]);
 
       const plan = await buildPlan(d, { root });
+      expectNothingDropped(d, plan);
       expect(plan.source.head).toBeNull();
       for (const s of plan.steps) expect(s.witness).toEqual({ sha: null, date: null, subject: null });
     } finally {
@@ -897,6 +941,7 @@ describe('the build-order engine — ids stay unique when one file redefines a n
 
     const d = await digest(root, { write: false });
     plan = await buildPlan(d, { root });
+    expectNothingDropped(d, plan);
   });
 
   afterAll(() => {
@@ -927,7 +972,75 @@ describe('the build-order engine — ids stay unique when one file redefines a n
 
     const d = await digest(root, { write: false });
     const after = await buildPlan(d, { root });
+    expectNothingDropped(d, after);
     expect(keyed(after)).toEqual(before);
     expect(new Set(after.steps.map((s) => s.id)).size).toBe(after.steps.length);
+  });
+});
+
+
+// ================================================================================
+// AC2 (the completeness half) — a repo with a binary asset and a data file
+// ================================================================================
+//
+// `data` is the classification most real repos are full of: images, fonts, CSVs, YAML,
+// anything inventory.ts has no grammar for. It is not code to teach — but it IS bytes the
+// automated writer has to lay down, or the reference is not reproduced byte-for-byte
+// (T-1 spec §9, criterion 3). It used to be neither: filtered out of the step buckets and
+// never added to `reproduce`, so those files disappeared from the plan without a trace.
+
+describe('the build-order engine — data files are reproduced, never dropped (AC2)', () => {
+  let root: string;
+  let d: DigestResult;
+  let plan: BuildPlan;
+
+  beforeAll(async () => {
+    root = tmp('repo-tour-build-data-');
+    initRepo(root);
+    write(path.join(root, 'src/a.ts'), 'export function a(): number {\n  return 1;\n}\n');
+    write(path.join(root, 'src/b.ts'), "import { a } from './a.js';\n\nexport function b(): number {\n  return a() + 1;\n}\n");
+
+    // A real binary file: the PNG signature plus a stub IHDR chunk. Written as bytes
+    // rather than a string on purpose — the NUL in there is exactly the probe inventory.ts
+    // (and git) use to call a file binary, and it must reach disk as one byte, not as an
+    // escape in this file's own source.
+    fs.mkdirSync(path.join(root, 'assets'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'assets/logo.png'), Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+      0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+      0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89,
+    ]));
+    // ...and a TEXT data file, so this covers both halves of `data`: binary-by-probe and
+    // classified-data-by-extension.
+    write(path.join(root, 'data/rows.csv'), 'id,name\n1,alpha\n2,beta\n');
+    commitAll(root, 'initial');
+
+    d = await digest(root, { write: false });
+    plan = await buildPlan(d, { root });
+  });
+
+  afterAll(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('the fixture really is what it claims: a binary asset and a non-code data file', () => {
+    const byPath = new Map(d.inventory.files.map((f) => [f.path, f] as const));
+    expect(byPath.get('assets/logo.png')?.classification).toBe('data');
+    expect(byPath.get('assets/logo.png')?.binary).toBe(true);
+    expect(byPath.get('data/rows.csv')?.classification).toBe('data');
+  });
+
+  it('both land in plan.reproduce, and neither becomes a step', () => {
+    expect(plan.reproduce).toContain('assets/logo.png');
+    expect(plan.reproduce).toContain('data/rows.csv');
+    for (const s of plan.steps) {
+      expect(s.target.file).not.toBe('assets/logo.png');
+      expect(s.target.file).not.toBe('data/rows.csv');
+    }
+  });
+
+  it('every inventoried file is either taught or reproduced — the plan drops nothing', () => {
+    expectNothingDropped(d, plan);
   });
 });

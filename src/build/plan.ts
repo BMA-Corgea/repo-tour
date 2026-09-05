@@ -341,9 +341,20 @@ export async function buildPlan(digest: DigestResult, opts: BuildPlanOptions): P
   const roots = rawSeeds.map((s) => s.path).sort((a, b) => b.length - a.length);
   const ownerOf = (p: string): string | null => roots.find((r) => p === r || p.startsWith(`${r}/`)) ?? null;
 
-  // ---- 1. bucket every file: reproduce (never taught), source/structural/test by chapter
-  // or misc, or genuinely out of scope (`data` — spec §4.1's table names exactly five
-  // buckets and `data` is in none of them: not code to write, not boilerplate to copy).
+  // ---- 1. bucket every file. There are exactly TWO destinations and every inventoried
+  // file reaches one of them: taught (it gets a step) or reproduced (`plan.reproduce`).
+  //
+  //   source, structural -> steps
+  //   test               -> steps, spliced in after the file they name
+  //   generated, vendored, lockfile, data — and anything binary -> reproduce
+  //
+  // `data` used to fall through both and vanish, which is the one outcome this bucketing
+  // may never produce: the parent spec's §9 criterion 3 is that walking every step in
+  // AUTOMATED mode reproduces the reference byte-for-byte, and a file in neither bucket is
+  // a file the automated writer is never told about. An image, a font, a CSV is not code
+  // to write — but it is very much bytes to copy, so `reproduce` is where it belongs.
+  // Anything else new that inventory.ts learns to classify lands there too, by default:
+  // the test says "reproduce it", never "drop it".
   const chapterSourceFiles = new Map<string, string[]>();
   const chapterTestFiles = new Map<string, string[]>();
   for (const s of rawSeeds) { chapterSourceFiles.set(s.path, []); chapterTestFiles.set(s.path, []); }
@@ -352,11 +363,13 @@ export async function buildPlan(digest: DigestResult, opts: BuildPlanOptions): P
   const reproduce: string[] = [];
 
   for (const f of digest.inventory.files) {
-    if (f.classification === 'generated' || f.classification === 'vendored' || f.classification === 'lockfile') {
+    const teachable =
+      !f.binary &&
+      (f.classification === 'source' || f.classification === 'structural' || f.classification === 'test');
+    if (!teachable) {
       reproduce.push(f.path);
       continue;
     }
-    if (f.classification !== 'source' && f.classification !== 'structural' && f.classification !== 'test') continue;
 
     const owner = ownerOf(f.path);
     const isTest = f.classification === 'test';
