@@ -65,6 +65,7 @@ here and found via the reference table below.
   open it when GUTS says what it needs, not before.
 - **T-14** (techdebt) — Harden T-11's consumer tests: prove prepare rebuilds dist, and make alternateCs… — intake
 - **T-16** (feature) — Module-pattern and .call(this) IIFEs: record their body declarations too — intake
+- **T-18** (feature) — Finish the tutor — give it the code, a memory, and a way into your notes — gate
 
 ## Waiting on
 
@@ -80,6 +81,7 @@ here and found via the reference table below.
 <!-- One line per completed item, WITH the why. Newest first. Prune from the
      bottom; the permanent record lives in tickets, events.jsonl, and wiki. -->
 
+- 2026-09-05 **T-17 COMPLETE** — The owner's name leaves the public repo
 - 2026-09-05 **T-13 COMPLETE** — Interpret the decisions — alternatives per build step, and Ask context for a st…
 - 2026-09-05 **T-15 COMPLETE** — Script-style JS yields no load-bearing ranges: IIFE bodies are invisible to ext…
 - 2026-09-05 **T-12 COMPLETE** — The build-order engine — digest → BuildPlan, and the structural check
