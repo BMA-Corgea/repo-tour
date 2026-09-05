@@ -10,7 +10,6 @@ here and found via the reference table below.
 <!-- What is in motion right now: one line per active ticket/effort —
      what, why, where it stands, what is next. Never pruned while live. -->
 
-- **T-15 DONE** — script-style JS yielded zero symbol steps (found live on sql-gauntlet:
   every `public/*.js` file's body sat inside a top-level IIFE, invisible to `extract.ts`;
   `server.js`/`tools/*.js` had real top-level symbols but none `exported`, invisible to
   `plan.ts`'s candidate filter). Fixed both: `extract.ts` recurses one level into a
@@ -59,7 +58,6 @@ here and found via the reference table below.
   open it when GUTS says what it needs, not before.
 - **T-14** (techdebt) — Harden T-11's consumer tests: prove prepare rebuilds dist, and make alternateCs… — intake
 - **T-13** (feature) — Interpret the decisions — alternatives per build step, and Ask context for a st… — auto-review
-- **T-15** (bug) — Script-style JS yields no load-bearing ranges: IIFE bodies are invisible to ext… — gate
 - **T-16** (feature) — Module-pattern and .call(this) IIFEs: record their body declarations too — intake
 
 ## Waiting on
@@ -71,13 +69,13 @@ here and found via the reference table below.
   (GA-3 through GA-7) because he asked not to be stopped mid-flight. **The open loop is his
   read of the notes + Ask panels**, which he has not used yet at the time of writing.
 - **T-13** — waiting at spec_ready on human:owner since 2026-09-05
-- **T-15** — waiting at spec_ready on human:owner since 2026-09-05
 
 ## Recent past (~15 items / ~30 days)
 
 <!-- One line per completed item, WITH the why. Newest first. Prune from the
      bottom; the permanent record lives in tickets, events.jsonl, and wiki. -->
 
+- 2026-09-05 **T-15 COMPLETE** — Script-style JS yields no load-bearing ranges: IIFE bodies are invisible to ext…
 - 2026-09-05 **T-12 COMPLETE** — The build-order engine — digest → BuildPlan, and the structural check
 - 2026-09-04 **T-11 COMPLETE** — Expose the core as a consumable package — for the VS Code front end
 - 2026-09-04 **T-10 CLOSED duplicate** — Tutor chat during a tour — context-aware Q&A on the current step
