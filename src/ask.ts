@@ -61,6 +61,20 @@ export interface AskContext {
   importers?: string[];
   /** everything the reader has written down */
   notes?: AskNote[];
+  /**
+   * The build step in view, when the reader is walking a generated tutorial rather than
+   * touring a finished repository (VSCode-LLM-Tutorial T-6). A flattened copy of the ONE
+   * decision the learner is inside of (`src/build/types.ts`'s `Step.decision`) — not the
+   * whole `BuildPlan` — because the assistant is answering about this step, not auditing
+   * the plan.
+   */
+  build?: {
+    question: string;
+    options: Array<{ label: string; consequence: string; taken: boolean }>;
+    why: string;
+    /** the learner's file against the author's reference, once they have written anything */
+    learnerDiff?: string;
+  };
 }
 
 export interface AskMessage {
@@ -98,6 +112,20 @@ export function buildContextBlock(ctx: AskContext): string {
     lines.push(`The tour is currently saying:\n${ctx.stopTitle ? ctx.stopTitle + '\n' : ''}${clip(ctx.stopText ?? '', 2000)}`);
   }
   if (ctx.diff) lines.push(`The diff of that file:\n${clip(ctx.diff, 8000)}`);
+
+  if (ctx.build) {
+    // Its own heading, like the notes below: this is the decision the learner is INSIDE of
+    // right now, not a fact about the file on screen, and it deserves to read as one.
+    lines.push('--- THE BUILD STEP ---');
+    lines.push(`Question: ${ctx.build.question}`);
+    for (const o of ctx.build.options) {
+      lines.push(`[${o.taken ? 'author' : 'alternative'}] ${o.label} — ${o.consequence}`);
+    }
+    lines.push(`Why: ${ctx.build.why}`);
+    if (ctx.build.learnerDiff) {
+      lines.push(`The learner's file against the author's:\n${clip(ctx.build.learnerDiff, 8000)}`);
+    }
+  }
 
   if (ctx.notes && ctx.notes.length) {
     lines.push(`--- THE READER'S OWN NOTES (${ctx.notes.length}) ---`);
