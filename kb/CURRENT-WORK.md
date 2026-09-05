@@ -16,10 +16,15 @@ here and found via the reference table below.
   `plan.ts`'s candidate filter). Fixed both: `extract.ts` recurses one level into a
   top-level IIFE's body (all 4 documented shapes, both grammars, confirmed identical);
   `plan.ts` falls back to "all recorded symbols" as candidates when a file exports
-  nothing, screened by a triviality filter (function/method/class always eligible, a
-  variable only if it spans >= 3 lines). Repro-tested first (4 scenarios, committed RED),
-  185/185 tests green, T-12's 49 review fixtures byte-unchanged. Live-reverified on
-  sql-gauntlet: 0 -> 35 symbol steps across the 7 named files (5 each, the cap). Branch
+  nothing — in every language, which is AC2's intent — screened, on that fallback path
+  ONLY, by a triviality filter (function/method/class/interface/enum always eligible,
+  variable/type only if they span >= 3 lines). A file that exports something keeps exactly
+  T-12's candidate set. That scoping is the rework: review attempt 1 (`93bed9f`) gated on
+  the filter also running over the exported path, which cost a types-only module all its
+  steps; fixed in `3e75bb2`, pinned by five tests committed RED in `806c847`. Repro-tested
+  first in both attempts, 190/190 tests green, T-12's 49 review fixtures byte-unchanged.
+  Live-reverified on sql-gauntlet, cache cleared: 0 -> 35 symbol steps across the 7 named
+  files (5 each, the cap), unchanged by the rework. Branch
   `feature/T-15-script-symbols`, worktree `../repo-tour-T-15`. Full detail:
   `.autodev/handoffs/T-15.md`.
   package (`exports` map, injectable asset roots, a `prepare` build) so
