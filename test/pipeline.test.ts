@@ -1367,6 +1367,7 @@ describe('every stop is tweet-sized by default, and expanding restores the origi
       'Discovery had to survive repos-inside-repos, which is the shape the first real ' +
       'target turned out to have.',
     summary: 'Walks the tree, treating every nested .git as its own repo, and hashes files so later runs can tell what changed.',
+    alternatives: [],
   };
 
   it('criterion 11 — a written summary is used as-is and stays under the cap', () => {
@@ -1506,8 +1507,8 @@ describe('the meaning delta separates a re-wording from a change of subject', ()
 
   it('criterion 4 — a refactor is reported as a refactor, in words', () => {
     // A genuine paraphrase: the verbs move, the subjects do not.
-    const same = { what: 'Ranks files by churn, in-degree and size.', why: 'Size alone buries the important small files.', summary: 's' };
-    const reworded = { what: 'Orders files by churn, in-degree and size.', why: 'Size alone hides the important small files.', summary: 's' };
+    const same = { what: 'Ranks files by churn, in-degree and size.', why: 'Size alone buries the important small files.', summary: 's', alternatives: [] };
+    const reworded = { what: 'Orders files by churn, in-degree and size.', why: 'Size alone hides the important small files.', summary: 's', alternatives: [] };
     const d = fileDelta({
       path: 'src/rank.ts', status: 'M', linesChanged: 900,
       before: [same], after: [reworded],
@@ -1523,15 +1524,15 @@ describe('the meaning delta separates a re-wording from a change of subject', ()
   it('criterion 5 — a small semantic change outranks a large cosmetic one', () => {
     const cosmetic = fileDelta({
       path: 'src/big.ts', status: 'M', linesChanged: 900,
-      before: [{ what: 'Formats the report for the terminal.', why: 'Readability.', summary: 's' }],
-      after: [{ what: 'Formats the report for the terminal.', why: 'Readability.', summary: 's' }],
+      before: [{ what: 'Formats the report for the terminal.', why: 'Readability.', summary: 's', alternatives: [] }],
+      after: [{ what: 'Formats the report for the terminal.', why: 'Readability.', summary: 's', alternatives: [] }],
       beforeExtract: asExtract('src/big.ts', [sym('formatReport')]),
       afterExtract: asExtract('src/big.ts', [sym('formatReport')]),
     });
     const semantic = fileDelta({
       path: 'src/small.ts', status: 'M', linesChanged: 12,
-      before: [{ what: 'Caches digests keyed by content hash.', why: 'Renames stay free.', summary: 's' }],
-      after: [{ what: 'Caches digests keyed by file path.', why: 'Simpler invalidation for the watcher.', summary: 's' }],
+      before: [{ what: 'Caches digests keyed by content hash.', why: 'Renames stay free.', summary: 's', alternatives: [] }],
+      after: [{ what: 'Caches digests keyed by file path.', why: 'Simpler invalidation for the watcher.', summary: 's', alternatives: [] }],
       beforeExtract: asExtract('src/small.ts', [sym('cacheKey')]),
       afterExtract: asExtract('src/small.ts', [sym('cacheKey')]),
     });
@@ -1545,8 +1546,8 @@ describe('the meaning delta separates a re-wording from a change of subject', ()
   it('a public surface change is a floor the prose cannot talk down', () => {
     const d = fileDelta({
       path: 'src/api.ts', status: 'M', linesChanged: 3,
-      before: [{ what: 'Exposes the client.', why: 'Entry point.', summary: 's' }],
-      after: [{ what: 'Exposes the client.', why: 'Entry point.', summary: 's' }],
+      before: [{ what: 'Exposes the client.', why: 'Entry point.', summary: 's', alternatives: [] }],
+      after: [{ what: 'Exposes the client.', why: 'Entry point.', summary: 's', alternatives: [] }],
       beforeExtract: asExtract('src/api.ts', [sym('connect'), sym('disconnect')]),
       afterExtract: asExtract('src/api.ts', [sym('connect')]),
     });
@@ -1575,7 +1576,7 @@ describe('the meaning delta separates a re-wording from a change of subject', ()
   it('an uninterpreted side is said out loud, not scored as calm', () => {
     const d = fileDelta({
       path: 'src/x.ts', status: 'M', linesChanged: 40,
-      before: [], after: [{ what: 'Does a thing.', why: '', summary: 's' }],
+      before: [], after: [{ what: 'Does a thing.', why: '', summary: 's', alternatives: [] }],
     });
     expect(d.interpreted).toBe(false);
     expect(d.reason).toMatch(/not interpreted/);
@@ -1589,8 +1590,8 @@ describe('a direct verdict beats a guess from two summaries', () => {
       path: 'src/rank.ts', status: 'M', linesChanged: 16,
       // the interpretations genuinely differ - this is the real failure that forced
       // adjudicate.ts to exist, kept here so a regression cannot pass quietly
-      before: [{ what: 'Counts commit touches per file across every repo, tallying git log output into a churn map.', why: 'Churn is a ranking signal.', summary: 's' }],
-      after: [{ what: 'Walks each repo history, shelling out to git log and normalising paths via path.posix.normalize into one unified map.', why: 'Heavily edited files are hotter.', summary: 's' }],
+      before: [{ what: 'Counts commit touches per file across every repo, tallying git log output into a churn map.', why: 'Churn is a ranking signal.', summary: 's', alternatives: [] }],
+      after: [{ what: 'Walks each repo history, shelling out to git log and normalising paths via path.posix.normalize into one unified map.', why: 'Heavily edited files are hotter.', summary: 's', alternatives: [] }],
       beforeExtract: asExtract('src/rank.ts', [sym('churnByFile')]),
       afterExtract: asExtract('src/rank.ts', [sym('churnByFile')]),
       adjudication: { magnitude: 0, headline: 'Five local variables renamed; behaviour unchanged.', kind: 'refactor', source: 'model' },
@@ -1603,8 +1604,8 @@ describe('a direct verdict beats a guess from two summaries', () => {
   it('without a verdict the same input scores high — which is why the verdict exists', () => {
     const d = fileDelta({
       path: 'src/rank.ts', status: 'M', linesChanged: 16,
-      before: [{ what: 'Counts commit touches per file across every repo, tallying git log output into a churn map.', why: 'Churn is a ranking signal.', summary: 's' }],
-      after: [{ what: 'Walks each repo history, shelling out to git log and normalising paths via path.posix.normalize into one unified map.', why: 'Heavily edited files are hotter.', summary: 's' }],
+      before: [{ what: 'Counts commit touches per file across every repo, tallying git log output into a churn map.', why: 'Churn is a ranking signal.', summary: 's', alternatives: [] }],
+      after: [{ what: 'Walks each repo history, shelling out to git log and normalising paths via path.posix.normalize into one unified map.', why: 'Heavily edited files are hotter.', summary: 's', alternatives: [] }],
       beforeExtract: asExtract('src/rank.ts', [sym('churnByFile')]),
       afterExtract: asExtract('src/rank.ts', [sym('churnByFile')]),
     });
@@ -2135,6 +2136,80 @@ describe('T-3 — notes carry provenance, and the assistant can read them', () =
     expect(html).toContain('The multiplier drops to 0.05.');
     expect(html).toContain('Scores every file by churn, in-degree and size.');
     expect(html).toContain('src/digest.ts');
+  });
+});
+
+describe('T-13 — the build step reaches the tutor too', () => {
+  it('renders under its own heading, with the author and alternatives labelled', () => {
+    const block = buildContextBlock({
+      repo: 'repo-tour',
+      build: {
+        question: 'Fill in shout — how should this function do its job?',
+        options: [
+          { label: 'Uppercase the string in place', consequence: 'Simple; one pass.', taken: true },
+          { label: 'Use a regex replace', consequence: 'Slower, no benefit here.', taken: false },
+          { label: 'Delegate to a locale-aware library', consequence: 'Correct for Turkish "i", but a new dependency.', taken: false },
+        ],
+        why: 'Logs read better in all caps.',
+        learnerDiff: '-  return s;\n+  return s.toUpperCase();',
+      },
+    });
+    expect(block).toContain('--- THE BUILD STEP ---');
+    expect(block).toContain('Question: Fill in shout — how should this function do its job?');
+    expect(block).toContain('[author] Uppercase the string in place — Simple; one pass.');
+    expect(block).toContain('[alternative] Use a regex replace — Slower, no benefit here.');
+    expect(block).toContain('[alternative] Delegate to a locale-aware library — Correct for Turkish "i", but a new dependency.');
+    expect(block).toContain('Why: Logs read better in all caps.');
+    expect(block).toContain("The learner's file against the author's:");
+    expect(block).toContain('s.toUpperCase()');
+  });
+
+  it('is absent entirely when the reader is not inside a build step', () => {
+    const block = buildContextBlock({ repo: 'repo-tour' });
+    expect(block).not.toContain('THE BUILD STEP');
+  });
+
+  it('omits the learner-diff line when there is nothing to compare yet', () => {
+    const block = buildContextBlock({
+      build: { question: 'q', options: [{ label: 'the author\'s way', consequence: 'c', taken: true }], why: 'w' },
+    });
+    expect(block).toContain('--- THE BUILD STEP ---');
+    expect(block).not.toContain("The learner's file against the author's:");
+  });
+
+  it('clips the learner diff exactly like the PR diff, at 8000 characters', () => {
+    const long = 'x'.repeat(9000);
+    const block = buildContextBlock({
+      build: { question: 'q', options: [], why: 'w', learnerDiff: long },
+    });
+    expect(block).toContain('(truncated)');
+    expect(block).toContain(`${'x'.repeat(8000)}\n`);
+    expect(block).not.toContain('x'.repeat(8001));
+  });
+
+  it('ASK_PERSONA is byte-for-byte unchanged by this ticket', () => {
+    // A snapshot, not a regex: T-13 touches ask.ts to add the build block, and this
+    // proves the one thing it must never touch along the way.
+    expect(ASK_PERSONA).toBe([
+      'You are helping someone read a repository they did not write, inside repo-tour.',
+      'They can see a page: a file, its diff if this is a pull request, and an explanation of',
+      'what the code is for. You are given the same things, plus any notes they have taken.',
+      '',
+      'How to answer:',
+      '- Answer the question asked. Do not restate the context back at them.',
+      '- Ground every claim in what you were given. If the answer needs code you cannot see,',
+      '  say which file you would need rather than guessing at its contents.',
+      '- NEVER claim to have read a file, run a command, or checked a test. You have not. You',
+      '  were handed some text.',
+      '- When they ask about their notes, answer FROM the notes, and say which note you mean',
+      '  ("your note on rank.ts:24"). Do not invent notes they did not write.',
+      '- Be concise: usually under 200 words. Plain text. Fenced blocks for code. No headings.',
+      '- If something in the diff looks wrong, say so plainly and say why. You are helping them',
+      '  review, not reassuring them.',
+      '- If you genuinely cannot tell, say that. "I cannot tell from what I can see here" is a',
+      '  useful answer and a guess dressed as fact is not.',
+      '- Do not use tools, read files, or run commands. Answer directly in plain text.',
+    ].join('\n'));
   });
 });
 
