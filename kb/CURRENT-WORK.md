@@ -14,7 +14,11 @@ here and found via the reference table below.
   VSCode-LLM-Tutorial ticket set's order). `src/build/{types,witness,plan,stub,check,index}.ts`:
   digest → `BuildPlan`, the ordered decision list the VS Code extension walks a learner
   through. All 9 acceptance criteria met, each with its own test in `test/build.test.ts`;
-  `repo-tour plan <path> [--json]` wired into the CLI. Why it exists: repo-tour's own
+  `repo-tour plan <path> [--json]` wired into the CLI. The auto-review returned **REWORK**
+  on four reproduced defects (step-id collisions, `data` files dropped from the plan,
+  one-line Python stubs that real Python rejects, a null witness on a rename); all four are
+  fixed on the branch, each with a test that fails when the fix is reverted — 167 tests
+  green. Why it exists: repo-tour's own
   digest/architecture/extract/git-history stages already contain everything a "how was
   this built, in order" projection needs — this ticket is that projection, computed the
   way `src/tour.ts` computes a tour, never a separate hand-written artifact. Next: T-13
