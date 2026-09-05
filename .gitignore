@@ -1,4 +1,8 @@
 node_modules/
+# and a SYMLINK named node_modules, which the trailing-slash pattern does not match.
+# A worktree that links to the main checkout's modules committed one on 2026-09-05,
+# and merging it replaced the real directory with a link to itself.
+node_modules
 dist/
 .repo-tour/
 *.log
