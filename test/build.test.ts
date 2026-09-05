@@ -18,7 +18,7 @@ import { buildArchitecture } from '../src/architecture.js';
 import { buildPlan } from '../src/build/plan.js';
 import { stubFile } from '../src/build/stub.js';
 import { check } from '../src/build/check.js';
-import type { BuildPlan } from '../src/build/types.js';
+import type { BuildPlan, Range } from '../src/build/types.js';
 import type { FileExtract, FileRecord } from '../src/types.js';
 
 function git(cwd: string, ...args: string[]): void {
@@ -428,6 +428,46 @@ async function parseErrorsOf(source: string, language: string, ext: string): Pro
   }
 }
 
+/**
+ * The check tree-sitter cannot make: hand the stub to the REAL interpreter.
+ *
+ * `parseErrorsOf` counts tree-sitter ERROR nodes, and tree-sitter's Python grammar is
+ * more forgiving than CPython about indentation — it happily accepted
+ * `class X(Exception): pass` followed by an indented `raise`, which `python3` rejects with
+ * `IndentationError: unexpected indent`. A stub that does not compile is not a stub; every
+ * Python fixture in this file goes through both checks.
+ */
+function expectPythonCompiles(source: string): void {
+  const dir = tmp('repo-tour-pycompile-');
+  try {
+    const file = path.join(dir, 'stubbed.py');
+    fs.writeFileSync(file, source);
+    try {
+      execFileSync('python3', ['-m', 'py_compile', file], { stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (err) {
+      const stderr = String((err as { stderr?: Buffer }).stderr ?? err);
+      throw new Error(`python3 -m py_compile rejected this stub:\n${stderr}\n----- stub -----\n${source}`);
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * The ranges the REAL `extract()` reports for the named symbols — never hand-counted line
+ * numbers, which would let this file drift away from what `buildPlan` actually passes to
+ * `stubFile`. Returned in file order, the order `selectLoadBearing` produces.
+ */
+async function pythonRangesFor(source: string, names: string[]): Promise<Range[]> {
+  const ex = await extractOf(source, 'python', 'py');
+  const ranges = names.map((n) => {
+    const sym = ex.symbols.find((s) => s.name === n);
+    expect(sym, `extract() reported no python symbol named ${n}`).toBeDefined();
+    return { startLine: sym!.line, endLine: sym!.endLine };
+  });
+  return ranges.sort((a, b) => a.startLine - b.startLine);
+}
+
 describe('the build-order engine — the scaffold writer (AC5)', () => {
   it('a stubbed TypeScript function still parses, with zero ERROR nodes', async () => {
     const source = "export function run(job: string): string {\n  const shouted = job.toUpperCase();\n  return shouted;\n}\n";
@@ -459,6 +499,7 @@ describe('the build-order engine — the scaffold writer (AC5)', () => {
     expect(stubbed).toContain('raise NotImplementedError');
     expect(stubbed).toContain('TODO(step 3)');
     expect(await parseErrorsOf(stubbed, 'python', 'py')).toBe(0);
+    expectPythonCompiles(stubbed);
   });
 
   it('a stubbed Python class still parses, and measures its own body indentation', async () => {
@@ -467,6 +508,7 @@ describe('the build-order engine — the scaffold writer (AC5)', () => {
     // the body used 2-space indent; the stub must match it, not assume 4
     expect(stubbed).toBe('class Engine:\n  raise NotImplementedError  # TODO(this step): fill this in\n');
     expect(await parseErrorsOf(stubbed, 'python', 'py')).toBe(0);
+    expectPythonCompiles(stubbed);
   });
 
   it('a plain exported constant has no body to hide and is left untouched, byte for byte', () => {
@@ -1042,5 +1084,101 @@ describe('the build-order engine — data files are reproduced, never dropped (A
 
   it('every inventoried file is either taught or reproduced — the plan drops nothing', () => {
     expectNothingDropped(d, plan);
+  });
+});
+
+
+// ================================================================================
+// AC5 (the half tree-sitter could not see) — every Python body shape, real interpreter
+// ================================================================================
+//
+// `extract()` genuinely reports `line === endLine` for `class X(Exception): pass` and
+// `def f(): return 1` — the body is ON the signature line — so appending an indented
+// `raise` after it is an IndentationError. tree-sitter's Python grammar accepts that
+// output with zero ERROR nodes, which is why AC5's own check missed it; `python3 -m
+// py_compile` does not. Same family, found by the same sweep: a multi-line signature,
+// where keeping only the range's first line left an unterminated `def wide(`.
+
+const PY_SHAPES = [
+  'class EmptyError(Exception): pass',
+  '',
+  'def add(a, b): return a + b',
+  '',
+  'def wide(',
+  '    a,',
+  '    b,',
+  '):',
+  '    return a + b',
+  '',
+  'class Engine:',
+  '    @property',
+  '    def name(self):',
+  '        return self._n',
+  '',
+  '    async def run(self, job):',
+  '        return job',
+  '',
+].join('\n');
+
+describe('the build-order engine — stubbed Python compiles, not just parses (AC5)', () => {
+  const questions = Array.from({ length: 6 }, (_, i) => ({ ordinal: i + 1, question: `q${i + 1}` }));
+
+  it('one-line def, one-line class and a multi-line signature all keep their own body shape', async () => {
+    const ranges = await pythonRangesFor(PY_SHAPES, ['EmptyError', 'add', 'wide', 'Engine']);
+    const stubbed = stubFile(PY_SHAPES, ranges, 'python', questions);
+
+    // an inline body is replaced ON the header line, never under it
+    expect(stubbed).toContain('class EmptyError(Exception): raise NotImplementedError  # TODO(step 1):');
+    expect(stubbed).toContain('def add(a, b): raise NotImplementedError  # TODO(step 2):');
+    // a multi-line signature survives whole, colon and all, then a block body
+    expect(stubbed).toContain('def wide(\n    a,\n    b,\n):\n    raise NotImplementedError');
+    // and nothing load-bearing leaks through
+    expect(stubbed).not.toContain('return a + b');
+    expect(stubbed).not.toContain('return self._n');
+
+    expect(await parseErrorsOf(stubbed, 'python', 'py')).toBe(0);
+    expectPythonCompiles(stubbed);
+  });
+
+  it('a decorated method and an async def keep their decorator, their async, and compile', async () => {
+    const ranges = await pythonRangesFor(PY_SHAPES, ['name', 'run']);
+    const stubbed = stubFile(PY_SHAPES, ranges, 'python', questions);
+
+    // the decorator sits OUTSIDE the symbol's range and must survive byte for byte
+    expect(stubbed).toContain('    @property\n    def name(self):\n        raise NotImplementedError');
+    expect(stubbed).toContain('    async def run(self, job):\n        raise NotImplementedError');
+    expect(stubbed).not.toContain('return self._n');
+    expect(stubbed).not.toContain('return job');
+
+    expect(await parseErrorsOf(stubbed, 'python', 'py')).toBe(0);
+    expectPythonCompiles(stubbed);
+  });
+
+  it('the stub the REAL pipeline produces for these shapes compiles too', async () => {
+    const root = tmp('repo-tour-build-pystub-');
+    try {
+      initRepo(root);
+      write(path.join(root, 'src/shapes.py'), PY_SHAPES);
+      write(path.join(root, 'src/other.py'), 'def other():\n    return 0\n');
+      commitAll(root, 'initial');
+
+      const d = await digest(root, { write: false });
+      const plan = await buildPlan(d, { root });
+      expectNothingDropped(d, plan);
+
+      // exactly what a caller writing a scaffold would use: the file step's own ranges
+      // and the symbol steps' own questions, not a hand-built argument list.
+      const fileStep = plan.steps.find((s) => s.kind === 'file' && s.target.file === 'src/shapes.py')!;
+      expect(fileStep.scaffold.loadBearing.length).toBeGreaterThan(0);
+      const symbolQuestions = plan.steps
+        .filter((s) => s.kind === 'symbol' && s.target.file === 'src/shapes.py')
+        .map((s) => ({ ordinal: s.ordinal, question: s.decision.question }));
+
+      const stubbed = stubFile(PY_SHAPES, fileStep.scaffold.loadBearing, 'python', symbolQuestions);
+      expect(await parseErrorsOf(stubbed, 'python', 'py')).toBe(0);
+      expectPythonCompiles(stubbed);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
