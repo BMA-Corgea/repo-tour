@@ -29,7 +29,7 @@ import { buildArchitecture } from '../architecture.js';
 import type { InterpretCost } from '../interpret.js';
 import type { DigestResult } from '../digest.js';
 import type { TierDigest } from '../rollup.js';
-import type { FileExtract, FileRecord, ImportGraph, SymbolRecord } from '../types.js';
+import type { FileExtract, FileRecord, ImportGraph, SymbolKind, SymbolRecord } from '../types.js';
 import { firstCommits, NULL_WITNESS, type Witness } from './witness.js';
 import type { BuildPlan, Chapter, Option, Range, Step, StepKind } from './types.js';
 
@@ -214,16 +214,33 @@ function complement(ranges: Range[], loc: number): Range[] {
   return out;
 }
 
+/** The minimum span, in lines, a `variable`/`type` needs before it can earn its own step. */
+const TRIVIAL_SPAN = 3;
+
 /**
- * A candidate is a `variable` only if its own span is real code, not a one-line alias —
- * `const fs = require('fs')` or `import x = y` never earns a step, but a multi-line
- * object/config literal (T-15's own `server.js`-shaped fixture) does. `function`/`method`/
- * `class` are always eligible: their span is their own body, never a bare reference.
+ * The kinds whose recorded span is always their own body/declaration rather than a
+ * reference to something defined elsewhere — load-bearing at any size. `variable` and
+ * `type` are the only kinds left out, and they are the only ones a one-line alias can
+ * ever be.
+ */
+const ALWAYS_ELIGIBLE = new Set<SymbolKind>(['function', 'method', 'class', 'interface', 'enum']);
+
+/**
+ * The FALLBACK path's screen, and ONLY that path's — see `selectLoadBearing`. Once "this
+ * file exports nothing" makes every recorded symbol a candidate, the file's own imports
+ * become candidates too: a one-line `const fs = require('fs')` or an import alias is a
+ * reference, not code a learner could fill in, and must never take a slot from a real
+ * function. So on that path a `variable`/`type` earns a step only when its own span is
+ * real code — a multi-line config object (T-15's `server.js`-shaped fixture) or a
+ * structural type literal, never a one-liner.
+ *
+ * Deliberately NOT applied to the exported path (T-15 review, 2026-09-04): a file that
+ * exports something keeps exactly the candidates T-12 shipped — every exported symbol, any
+ * kind, any span — so a types-only module keeps its `interface`/`type`/`enum` steps and a
+ * one-line exported `const` keeps its step.
  */
 function isEligibleCandidate(s: SymbolRecord): boolean {
-  if (s.kind === 'function' || s.kind === 'method' || s.kind === 'class') return true;
-  if (s.kind === 'variable') return s.endLine - s.line + 1 >= 3;
-  return false;
+  return ALWAYS_ELIGIBLE.has(s.kind) || s.endLine - s.line + 1 >= TRIVIAL_SPAN;
 }
 
 /**
@@ -234,15 +251,17 @@ function isEligibleCandidate(s: SymbolRecord): boolean {
  * span, sorts first) wins the slot; its members are treated as subsumed by that same step
  * rather than double-stubbed.
  *
- * Candidates are the file's exported symbols — UNLESS it exports nothing at all (T-15: a
- * plain script or a CommonJS module has no ESM `export`, but its top-level functions are
- * still exactly what a learner needs stubbed), in which case every recorded symbol is a
- * candidate instead. Either way, `isEligibleCandidate` still screens out one-line variable
- * aliases before the span sort ever sees them.
+ * Candidates are the file's exported symbols, unfiltered — exactly what T-12 shipped —
+ * UNLESS the file exports nothing at all (T-15: a plain script or a CommonJS module has no
+ * ESM `export`, but its top-level functions are still exactly what a learner needs
+ * stubbed), in which case every recorded symbol is a candidate instead, screened by
+ * `isEligibleCandidate`. The screen belongs to that fallback alone: it exists to stop the
+ * one-line requires and aliases the fallback itself made eligible, so a file that DOES
+ * export something is untouched by this ticket, in every language.
  */
 function selectLoadBearing(symbols: SymbolRecord[]): SymbolRecord[] {
   const exported = symbols.filter((s) => s.exported);
-  const candidates = (exported.length > 0 ? exported : symbols).filter(isEligibleCandidate);
+  const candidates = exported.length > 0 ? exported : symbols.filter(isEligibleCandidate);
   const bySpanDesc = candidates
     .slice()
     .sort((a, b) => (b.endLine - b.line) - (a.endLine - a.line) || a.line - b.line);
