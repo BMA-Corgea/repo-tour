@@ -261,3 +261,207 @@ describe('T-15 — existing (already-exported) fixtures produce byte-identical p
     }
   });
 });
+
+// ================================================================================
+// REWORK (attempt 2) — WHICH candidate path the triviality filter belongs to
+// ================================================================================
+//
+// The T-15 review (`.autodev/reviews/T-15.md`, Angle 3) found `isEligibleCandidate`
+// wired across BOTH candidate paths in `selectLoadBearing`, not only the new fallback,
+// so it silently dropped symbol steps from ordinary TS/ESM files that were already
+// working. The corrected spec's out-of-scope line draws the line precisely:
+//
+//   * a file that EXPORTS something is unchanged by this ticket, in every language —
+//     candidates are every exported symbol, any kind, any span, capped at 5, exactly
+//     what T-12 shipped and exactly what these fixtures produce on `main`;
+//   * a file that exports NOTHING takes the exported-or-all fallback, in every
+//     language, and the triviality filter runs THERE and nowhere else.
+//
+// (a)/(b) below pin the exported path (both were 0 steps under the reviewed code);
+// (c)/(d)/(e) pin the fallback path, including its filter. Each fixture writes a
+// second direct-code file for the same reason (b) further up does: so
+// `chooseSubsystems` picks the directory as a real architecture part rather than
+// exercising the unrelated tier fallback.
+
+/** The symbol-step names a real `digest()` → `buildPlan()` run mints for one file. */
+async function symbolStepNames(files: Record<string, string>, file: string): Promise<string[]> {
+  const root = tmp('repo-tour-scripts-candidates-');
+  try {
+    for (const [rel, body] of Object.entries(files)) write(path.join(root, rel), body);
+    const d = await digest(root, { write: false });
+    const plan = await buildPlan(d, { root, witness: false });
+    return plan.steps
+      .filter((s) => s.kind === 'symbol' && s.target.file === file)
+      .map((s) => /^Fill in (.+?) — /.exec(s.decision.question)?.[1] ?? s.decision.question);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+// ---- (a) the exported path: a types-only module ---------------------------------
+
+const TYPES_ONLY_SOURCE = [
+  'export interface Widget {',
+  '  id: string;',
+  '  label: string;',
+  '}',
+  '',
+  'export type WidgetId = string;',
+  '',
+  'export enum WidgetKind {',
+  '  Button,',
+  '  Panel,',
+  '}',
+  '',
+].join('\n');
+
+describe('T-15 rework (a) — a types-only module keeps every one of its exported symbols', () => {
+  it('an ESM/TS file exporting only interface/type/enum gets a step each, as on main', async () => {
+    const names = await symbolStepNames(
+      {
+        'src/widget.ts': TYPES_ONLY_SOURCE,
+        'src/other.ts': 'export function helperOther(): number {\n  return 1;\n}\n',
+      },
+      'src/widget.ts',
+    );
+    // The base behaviour, derived from the rule this path has had since T-12: candidates
+    // are the exported symbols — no kind screen, no span screen — capped at 5. Three
+    // exports, no two of them overlapping, so three steps in file order. The reviewed
+    // (pre-rework) code produced 0 here, because `interface`/`type`/`enum` are not
+    // `function`/`method`/`class`/`variable`.
+    expect(names).toEqual(['Widget', 'WidgetId', 'WidgetKind']);
+  });
+});
+
+// ---- (b) the exported path: a one-line exported const ---------------------------
+
+describe('T-15 rework (b) — a one-line exported const still earns its step', () => {
+  it('a file whose only export is `export const PI = 3.14159;` gets exactly 1 symbol step', async () => {
+    const names = await symbolStepNames(
+      {
+        'src/constants.ts': 'export const PI = 3.14159;\n',
+        'src/other.ts': 'export function helperOther(): number {\n  return 1;\n}\n',
+      },
+      'src/constants.ts',
+    );
+    // Same rule as (a): every exported symbol, any span. The >= 3-line screen belongs to
+    // the fallback path only, so a deliberate one-line public constant keeps its step.
+    // The reviewed (pre-rework) code produced 0 here.
+    expect(names).toEqual(['PI']);
+  });
+});
+
+// ---- (c) the fallback path in Python --------------------------------------------
+
+const PRIVATE_PY_SOURCE = [
+  'import json',
+  '',
+  '',
+  'def _helper_one(payload):',
+  '    """Normalise a payload."""',
+  '    return json.dumps(payload)',
+  '',
+  '',
+  'def _helper_two(payload):',
+  '    return _helper_one(payload).upper()',
+  '',
+].join('\n');
+
+describe('T-15 rework (c) — the exported-or-all fallback is language-neutral: it fires for Python too', () => {
+  it("a module whose only top-level defs are _private exports nothing, so the fallback gives both defs steps — AC2's intent, not a side effect", async () => {
+    const names = await symbolStepNames(
+      {
+        'src/helpers.py': PRIVATE_PY_SOURCE,
+        'src/other.py': 'def other_helper():\n    return 1\n',
+      },
+      'src/helpers.py',
+    );
+    // `extract()` marks a leading-underscore Python symbol `exported: false`, so this
+    // whole module exports nothing and every recorded symbol becomes a candidate — the
+    // same rule the ticket's CommonJS `server.js` relies on. Both are `function`s, so the
+    // fallback's triviality filter passes them through. On main this file got 0 steps
+    // (no candidates at all); that is the behaviour AC2 changes on purpose.
+    expect(names).toEqual(['_helper_one', '_helper_two']);
+  });
+});
+
+// ---- (d) the fallback path in a zero-export TS script ---------------------------
+
+const SIDE_EFFECT_TS_SOURCE = [
+  'function registerGlobal(): void {',
+  '  const target = globalThis as Record<string, unknown>;',
+  "  target.widgetRegistry = target.widgetRegistry ?? {};",
+  '  const registry = target.widgetRegistry as Record<string, unknown>;',
+  "  registry.button = { kind: 'button' };",
+  "  registry.panel = { kind: 'panel' };",
+  '  if (Object.keys(registry).length === 0) {',
+  "    throw new Error('empty registry');",
+  '  }',
+  '}',
+  '',
+  'registerGlobal();',
+  '',
+].join('\n');
+
+describe('T-15 rework (d) — a TS side-effect script with no exports at all', () => {
+  it('its one 10-line function becomes the file\'s single symbol step', async () => {
+    const names = await symbolStepNames(
+      {
+        'src/register.ts': SIDE_EFFECT_TS_SOURCE,
+        'src/other.ts': 'export function helperOther(): number {\n  return 1;\n}\n',
+      },
+      'src/register.ts',
+    );
+    // No `export` keyword anywhere, so the fallback fires exactly as it does for a
+    // CommonJS script; the trailing `registerGlobal();` call is an expression statement,
+    // not a declaration, and contributes nothing. On main this file got 0 steps.
+    expect(names).toEqual(['registerGlobal']);
+  });
+});
+
+// ---- (e) the fallback path's triviality filter ----------------------------------
+
+const REQUIRE_PLUS_FUNCTION_SOURCE = [
+  "const fs = require('fs');",
+  '',
+  'function collectSources(dir) {',
+  '  const out = [];',
+  '  const stack = [dir];',
+  '  while (stack.length > 0) {',
+  '    const current = stack.pop();',
+  '    const entries = fs.readdirSync(current, { withFileTypes: true });',
+  '    for (const entry of entries) {',
+  '      if (entry.name.startsWith(\'.\')) {',
+  '        continue;',
+  '      }',
+  '      if (entry.isDirectory()) {',
+  '        stack.push(`${current}/${entry.name}`);',
+  '        continue;',
+  '      }',
+  '      if (entry.name.endsWith(\'.js\')) {',
+  '        out.push(`${current}/${entry.name}`);',
+  '      }',
+  '    }',
+  '  }',
+  '  return out;',
+  '}',
+  '',
+  'module.exports = collectSources;',
+  '',
+].join('\n');
+
+describe('T-15 rework (e) — the fallback\'s triviality filter, on the only path it runs', () => {
+  it('a no-export JS file with a 1-line require and a 20-line function gets exactly 1 step, the function', async () => {
+    const names = await symbolStepNames(
+      {
+        'src/collect.js': REQUIRE_PLUS_FUNCTION_SOURCE,
+        'src/other.js': 'function helperOther() {\n  return 1;\n}\n',
+      },
+      'src/collect.js',
+    );
+    // `const fs = require('fs')` is a one-line `variable` — a reference, not code a
+    // learner fills in — and is only a candidate at all because the fallback fired. The
+    // filter drops it; `collectSources` is a `function`, eligible at any span.
+    expect(names).toEqual(['collectSources']);
+  });
+});
