@@ -19,6 +19,22 @@ here and found via the reference table below.
   `../repo-tour-T-12` on disjoint files. Five of the six pieces Evan described on day one are
   shipped; the one left besides these is **T-7, GONS integration** — always the endgame
   rather than the product.
+- **T-12 DONE** on `feature/T-12-build-engine` (not yet merged — waits on T-11, per the
+  VSCode-LLM-Tutorial ticket set's order). `src/build/{types,witness,plan,stub,check,index}.ts`:
+  digest → `BuildPlan`, the ordered decision list the VS Code extension walks a learner
+  through. All 9 acceptance criteria met, each with its own test in `test/build.test.ts`;
+  `repo-tour plan <path> [--json]` wired into the CLI. The auto-review returned **REWORK**
+  on four reproduced defects (step-id collisions, `data` files dropped from the plan,
+  one-line Python stubs that real Python rejects, a null witness on a rename); all four are
+  fixed on the branch, each with a test that fails when the fix is reverted — 167 tests
+  green. Why it exists: repo-tour's own
+  digest/architecture/extract/git-history stages already contain everything a "how was
+  this built, in order" projection needs — this ticket is that projection, computed the
+  way `src/tour.ts` computes a tour, never a separate hand-written artifact. Next: T-13
+  (interpret: alternatives per step) reads this module's output and does not need to
+  change its ordering or step shape. Full detail: `.autodev/handoffs/T-12.md`.
+- Nothing else in flight here. **Five of the six pieces Evan described on day one are shipped.**
+  The one left is **T-7, GONS integration** — always the endgame rather than the product.
 - **The GONS side is now open on the OTHER shop.** 2026-08-27, on Evan's instruction, GUTS
   ticket **T-55** was filed ("Bring repo-tour's PR tours into the GONS Office PR section")
   with a first-hand brief at `GUTS/.autodev/handoffs/T-55.md`, and the live `guts-bridge`

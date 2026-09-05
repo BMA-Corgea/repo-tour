@@ -1,0 +1,146 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/BMA-Corgea/repo-tour/schema/build-plan.schema.json",
+  "title": "BuildPlan",
+  "description": "The build-order engine's output (repo-tour T-12; data model from VSCode-LLM-Tutorial T-1 spec S4.2). A BuildPlan is a projection of a repo-tour digest, computed fresh every time (src/tour.ts doctrine): never hand-written, never patched in place, always safe to regenerate.",
+  "type": "object",
+  "required": ["schemaVersion", "source", "mode", "chapters", "steps", "generatedAt", "cost", "reproduce"],
+  "additionalProperties": true,
+  "definitions": {
+    "range": {
+      "type": "object",
+      "required": ["startLine", "endLine"],
+      "properties": {
+        "startLine": { "type": "integer", "minimum": 1 },
+        "endLine": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "option": {
+      "type": "object",
+      "required": ["id", "label", "consequence", "taken"],
+      "properties": {
+        "id": { "type": "string" },
+        "label": { "type": "string" },
+        "consequence": { "type": "string" },
+        "taken": { "type": "boolean" }
+      }
+    },
+    "witness": {
+      "type": "object",
+      "required": ["sha", "date", "subject"],
+      "properties": {
+        "sha": { "type": ["string", "null"] },
+        "date": { "type": ["string", "null"] },
+        "subject": { "type": ["string", "null"] }
+      }
+    },
+    "chapter": {
+      "type": "object",
+      "required": ["key", "title", "subtitle", "tierPath"],
+      "properties": {
+        "key": { "type": "string" },
+        "title": { "type": "string" },
+        "subtitle": { "type": "string" },
+        "tierPath": { "type": "string" }
+      }
+    },
+    "step": {
+      "type": "object",
+      "required": ["id", "ordinal", "chapter", "kind", "decision", "target", "scaffold", "dependsOn", "witness"],
+      "properties": {
+        "id": { "type": "string" },
+        "ordinal": { "type": "integer", "minimum": 1 },
+        "chapter": { "type": "string" },
+        "kind": { "enum": ["shape", "file", "symbol"] },
+        "decision": {
+          "type": "object",
+          "required": ["question", "options", "authorChoice", "chosen", "why", "whySource"],
+          "properties": {
+            "question": { "type": "string" },
+            "options": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "$ref": "#/definitions/option" }
+            },
+            "authorChoice": { "type": "string" },
+            "chosen": { "type": ["string", "null"] },
+            "why": { "type": "string" },
+            "whySource": { "enum": ["interpret", "docstring", "none"] }
+          }
+        },
+        "target": {
+          "type": "object",
+          "required": ["file"],
+          "properties": {
+            "file": { "type": "string" },
+            "startLine": { "type": "integer", "minimum": 1 },
+            "endLine": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "scaffold": {
+          "type": "object",
+          "required": ["loadBearing", "boilerplate"],
+          "properties": {
+            "loadBearing": { "type": "array", "items": { "$ref": "#/definitions/range" } },
+            "boilerplate": { "type": "array", "items": { "$ref": "#/definitions/range" } }
+          }
+        },
+        "dependsOn": { "type": "array", "items": { "type": "string" } },
+        "witness": { "$ref": "#/definitions/witness" }
+      }
+    },
+    "cost": {
+      "type": "object",
+      "required": ["provider", "metered", "calls", "cachedStops", "interpretedStops", "inputTokens", "outputTokens", "usd", "model", "failures"],
+      "properties": {
+        "provider": { "type": "string" },
+        "metered": { "type": "boolean" },
+        "calls": { "type": "integer", "minimum": 0 },
+        "cachedStops": { "type": "integer", "minimum": 0 },
+        "interpretedStops": { "type": "integer", "minimum": 0 },
+        "inputTokens": { "type": "integer", "minimum": 0 },
+        "outputTokens": { "type": "integer", "minimum": 0 },
+        "usd": { "type": "number", "minimum": 0 },
+        "model": { "type": "string" },
+        "failures": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "sourceRepo": {
+      "type": "object",
+      "required": ["kind", "root", "head"],
+      "properties": {
+        "kind": { "const": "repo" },
+        "root": { "type": "string" },
+        "head": { "type": ["string", "null"] }
+      }
+    },
+    "sourceIdea": {
+      "type": "object",
+      "required": ["kind", "text"],
+      "properties": {
+        "kind": { "const": "idea" },
+        "text": { "type": "string" }
+      }
+    },
+    "sourceBoth": {
+      "type": "object",
+      "required": ["kind", "root", "head", "text"],
+      "properties": {
+        "kind": { "const": "both" },
+        "root": { "type": "string" },
+        "head": { "type": ["string", "null"] },
+        "text": { "type": "string" }
+      }
+    }
+  },
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "source": { "oneOf": [{ "$ref": "#/definitions/sourceRepo" }, { "$ref": "#/definitions/sourceIdea" }, { "$ref": "#/definitions/sourceBoth" }] },
+    "mode": { "enum": ["recreate", "guided", "idea"] },
+    "chapters": { "type": "array", "items": { "$ref": "#/definitions/chapter" } },
+    "steps": { "type": "array", "items": { "$ref": "#/definitions/step" } },
+    "generatedAt": { "type": "string" },
+    "cost": { "$ref": "#/definitions/cost" },
+    "reproduce": { "type": "array", "items": { "type": "string" } }
+  }
+}

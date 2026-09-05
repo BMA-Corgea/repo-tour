@@ -28,6 +28,7 @@ import { NoCheckpointError } from './checkpoint.js';
 
 import { band } from './prtour.js';
 import { runPrFlow } from './prflow.js';
+import { buildPlan } from './build/index.js';
 
 interface Args {
   command: string;
@@ -287,9 +288,10 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (args.command !== 'digest' && args.command !== 'tour' && args.command !== 'inspect') {
+  if (args.command !== 'digest' && args.command !== 'tour' && args.command !== 'inspect' && args.command !== 'plan') {
     console.log('usage: repo-tour digest <path> [--top N] [--view FILE] [--max-rows N] [--no-write] [--json]');
     console.log('       repo-tour tour <path> [--view FILE] [--no-write]        the repo page + a tour of the code');
+    console.log('       repo-tour plan <path> [--json]                         digest -> BuildPlan: the ordered decision list');
     console.log('       repo-tour inspect <path> [--view FILE] [--top N]        the digest quality view (scores, signals)');
     console.log('       repo-tour serve [--port N] [--state FILE]               THE APP: load repos, refresh to see changes');
     console.log('       repo-tour providers                                     which LLMs can write explanations here');
@@ -316,6 +318,27 @@ async function main(): Promise<void> {
 
   const result = await digest(args.target, { write: args.write });
   const m = result.manifest;
+
+  // `plan` is `digest` plus a projection of it, exactly like `tour` — never a separate
+  // artifact, and it does not need any of the code-tour/interpret machinery below.
+  if (args.command === 'plan') {
+    const root = path.resolve(args.target);
+    const built = await buildPlan(result, { root });
+    const outPath = path.join(root, CACHE_DIR, 'build', 'plan.json');
+    fs.mkdirSync(path.dirname(outPath), { recursive: true });
+    fs.writeFileSync(outPath, JSON.stringify(built, null, 2));
+
+    if (args.json) {
+      console.log(JSON.stringify(built, null, 2));
+      return;
+    }
+
+    console.log(`\nrepo-tour plan — ${root}`);
+    console.log(`  ${built.chapters.length} chapters · ${built.steps.length} steps · ${built.reproduce.length} files to reproduce`);
+    console.log(`\n  plan               ${outPath}\n`);
+    return;
+  }
+
   const quiet = args.command === 'tour';
 
   // `tour` is `digest` plus a projection of it — never a separate artifact.
