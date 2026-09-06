@@ -15,7 +15,7 @@ here and found via the reference table below.
   the code (`repoview.ts`'s `__askContext` sends the path, the digest's meaning, importers,
   the stop's narration — never the source). It never remembers (one in-memory array in
   `askpanel.ts`, erased by a reload). And it can never contribute to the notes. Scope is
-  Evan's own ruling: he answered ten questions on a decision form
+  the owner's own ruling: he answered ten questions on a decision form
   (`https://claude.ai/code/artifact/c5780bc2-d1c4-44c6-8e27-15051d496950`, 2026-09-05, all
   ten, every recommendation taken) — send the code AND let the tutor fetch more through the
   server (read-only, every fetch shown; the model still gets no real tools, which is why
