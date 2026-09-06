@@ -24,7 +24,7 @@ here and found via the reference table below.
   strongest by default; a keep button that pre-fills the note box; clickable citations that
   flag a file it was never shown; both the repo tour and the PR page. Acceptance is HIS test
   drive (Q10) — the first gate since 27 August that genuinely waits, and where this now sits.
-  **MERGED to local main `6b60e3e`, not pushed.** Two review rounds: attempt 1 REWORK on three
+  **MERGED to local main `31f275e`, not pushed.** Two review rounds: attempt 1 REWORK on three
   blockers — an SSE path that could end with no terminal event (the reader watched eight
   lookups scroll past and was then left with a deleted answer), page tests that were finding
   their own source text embedded in the toured page (four features deleted, all 21 still
