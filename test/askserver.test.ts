@@ -12,6 +12,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { request } from 'node:http';
 import type http from 'node:http';
 
 let base: string;
@@ -59,12 +60,23 @@ if (fs.existsSync(dir + '/echo-argv-fail')) {
 const replies = JSON.parse(fs.readFileSync(dir + '/replies.json', 'utf8'));
 const n = Number(fs.readFileSync(dir + '/calls.json', 'utf8'));
 fs.writeFileSync(dir + '/calls.json', String(n + 1));
+// What the 2026-10-07 tests read: how it was called, and which process to watch die.
+fs.writeFileSync(dir + '/argv.json', JSON.stringify(process.argv.slice(2)));
+fs.writeFileSync(dir + '/pid', String(process.pid));
+// A model that thinks before it speaks, for as many ms as the fixture says.
+const slow = fs.existsSync(dir + '/slow') ? Number(fs.readFileSync(dir + '/slow', 'utf8')) : 0;
 const text = replies[Math.min(n, replies.length - 1)];
 // read stdin so the parent's write never blocks
 let input = '';
 process.stdin.on('data', (d) => { input += d; });
-process.stdin.on('end', () => {
+process.stdin.on('end', () => setTimeout(reply, slow));
+function reply() {
   if (text === '__EXIT1__') { process.stderr.write('boom\\n'); process.exit(1); }
+  // The one-shot shape \`run\` asks for: a single JSON envelope.
+  if (process.argv[process.argv.indexOf('--output-format') + 1] === 'json') {
+    process.stdout.write(JSON.stringify({ result: text, usage: { input_tokens: 11, output_tokens: 22 }, total_cost_usd: 0.5 }));
+    process.exit(0);
+  }
   const emit = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
   emit({ type: 'system', subtype: 'init' });
   // The fixture MODELS the flag, and that is what makes the fallback test able to fail:
@@ -84,7 +96,7 @@ process.stdin.on('end', () => {
   }
   emit({ type: 'result', result: text, usage: { input_tokens: 11, output_tokens: 22 }, total_cost_usd: 0.5 });
   process.exit(0);
-});
+}
 `);
   fs.chmodSync(scriptPath, 0o755);
   process.env['REPO_TOUR_CLAUDE_BIN'] = scriptPath;
@@ -98,6 +110,7 @@ afterAll(() => {
 beforeEach(() => {
   fs.rmSync(state, { force: true });
   fs.rmSync(path.join(path.dirname(state), 'llm.json'), { force: true });
+  fs.rmSync(path.join(base, 'slow'), { force: true });
 });
 
 interface Frame { kind: string; data: Record<string, unknown> }
@@ -112,7 +125,11 @@ async function ask(
   let status = 0;
   const res = {
     writableEnded: false,
+    writableFinished: false,
+    destroyed: false,
     writeHead(code: number) { status = code; return this; },
+    flushHeaders() {},
+    on() { return this; },
     write(chunk: string) { written += chunk; return true; },
     end() { (this as { writableEnded: boolean }).writableEnded = true; return this; },
   } as unknown as http.ServerResponse;
@@ -130,7 +147,8 @@ async function ask(
 
   return written
     .split('\n\n')
-    .filter((b) => b.trim())
+    // A heartbeat is a comment block, and carries no event.
+    .filter((b) => b.trim() && !b.startsWith(':'))
     .map((block) => {
       const kind = /^event: (.+)$/m.exec(block)![1]!;
       const data = /^data: (.+)$/m.exec(block)![1]!;
@@ -508,5 +526,137 @@ describe('the route is only reachable from its own page', () => {
       context: { repoPath: repo },
     }, {});
     expect(text(frames)).toBe('answered anyway');
+  });
+});
+
+// ---------------------------------------------------------------- 2026-10-07, the owner's test drive
+//
+// He asked a question and got one lookup, then "Error in input stream". The model thought for
+// 34 s between the lookup and its next words, so nothing crossed the wire; a Docker container
+// restarting changed the machine's network, and Firefox closed every connection with no
+// traffic over the next five seconds. The server never noticed: it finished the answer, and
+// paid for it, after the reader had already been shown an error. These run over a REAL
+// socket, because the fake response above can neither go quiet on a wire nor hang up.
+
+/** Start a listening server with a fast heartbeat. */
+async function liveServer(): Promise<{ port: number; close: () => Promise<void> }> {
+  const { RepoTourServer } = await import('../src/server.js');
+  const s = new RepoTourServer({ statePath: state, interpret: false, port: 0, heartbeatMs: 25 });
+  s.addRepo(repo);
+  return s.listen();
+}
+
+const until = async (ok: () => boolean, ms: number): Promise<boolean> => {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    if (ok()) return true;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  return ok();
+};
+
+const alive = (pid: number): boolean => {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+};
+
+describe('a silent model does not leave a silent stream (2026-10-07)', () => {
+  it('sends its headers at once, then a heartbeat while the model thinks', async () => {
+    scriptReplies(['the answer']);
+    fs.writeFileSync(path.join(base, 'slow'), '800');
+    const { port, close } = await liveServer();
+    try {
+      const t0 = Date.now();
+      const got = await new Promise<{ status: number; headersMs: number; body: string }>((resolve, reject) => {
+        const req = request({
+          host: '127.0.0.1', port, path: '/api/ask', method: 'POST',
+          headers: { 'content-type': 'application/json', 'sec-fetch-site': 'same-origin' },
+        }, (res) => {
+          const headersMs = Date.now() - t0;
+          let body = '';
+          res.setEncoding('utf8');
+          res.on('data', (d: string) => { body += d; });
+          res.on('end', () => resolve({ status: res.statusCode ?? 0, headersMs, body }));
+          res.on('error', reject);
+        });
+        req.on('error', reject);
+        req.end(JSON.stringify({ messages: [{ role: 'user', content: 'q' }], context: { repoPath: repo } }));
+      });
+
+      expect(got.status).toBe(200);
+      // The browser has a live response long before the model's first word.
+      expect(got.headersMs).toBeLessThan(500);
+      // And the wire is never quiet while it waits: beats come before the first event.
+      const beforeFirstEvent = got.body.slice(0, got.body.indexOf('event: '));
+      expect(beforeFirstEvent.match(/^: working$/gm)?.length ?? 0).toBeGreaterThanOrEqual(5);
+      // The beats are invisible to the answer, which still arrives whole and finishes.
+      const frames = got.body.split('\n\n').filter((b) => b.startsWith('event: '));
+      expect(frames.filter((b) => b.startsWith('event: delta')).map((b) => JSON.parse(/^data: (.+)$/m.exec(b)![1]!).text).join(''))
+        .toBe('the answer');
+      expect(frames.at(-1)).toMatch(/^event: done/);
+    } finally {
+      await close();
+    }
+  }, 30_000);
+
+  it('stops the model, and spends nothing more, when the reader hangs up', async () => {
+    // Left alone, this would look a file up and go round again: two paid calls.
+    scriptReplies(['FETCH: file src/other.ts', 'an answer nobody will read']);
+    fs.writeFileSync(path.join(base, 'slow'), '5000');
+    fs.rmSync(path.join(base, 'pid'), { force: true });
+    const { port, close } = await liveServer();
+    try {
+      const req = request({
+        host: '127.0.0.1', port, path: '/api/ask', method: 'POST',
+        headers: { 'content-type': 'application/json', 'sec-fetch-site': 'same-origin' },
+      });
+      req.on('error', () => { /* we are the ones hanging up */ });
+      req.end(JSON.stringify({ messages: [{ role: 'user', content: 'q' }], context: { repoPath: repo } }));
+
+      expect(await until(() => fs.existsSync(path.join(base, 'pid')), 5000)).toBe(true);
+      const pid = Number(fs.readFileSync(path.join(base, 'pid'), 'utf8'));
+      expect(alive(pid)).toBe(true);
+
+      req.destroy();
+
+      // Killed now, not five seconds from now when it would have finished on its own.
+      expect(await until(() => !alive(pid), 2000)).toBe(true);
+      // And the loop did not go round again for a reader who is gone.
+      await new Promise((r) => setTimeout(r, 300));
+      expect(callCount()).toBe(1);
+    } finally {
+      await close();
+    }
+  }, 30_000);
+});
+
+describe('a model call is a plain model call (2026-10-07)', () => {
+  // `--allowedTools ''` only ever added to an allow list. Under bypass permissions the CLI it
+  // started had 37 tools, ran the toured repo's hooks and obeyed its CLAUDE.md.
+  const isolated = (argv: string[]): void => {
+    expect(argv).toContain('--safe-mode');
+    expect(argv).toContain('--tools');
+    expect(argv[argv.indexOf('--tools') + 1]).toBe('');
+    expect(argv).toContain('--strict-mcp-config');
+    expect(argv).toContain('--no-session-persistence');
+    expect(argv).not.toContain('--allowedTools');
+  };
+  const argv = (): string[] => JSON.parse(fs.readFileSync(path.join(base, 'argv.json'), 'utf8')) as string[];
+
+  it('in one shot, the way a tour is written', async () => {
+    scriptReplies(['written']);
+    const { runLlm } = await import('../src/llm.js');
+    const reply = await runLlm('q', { provider: 'claude', model: 'm' }, repo, 10_000);
+    expect(reply.text).toBe('written');
+    isolated(argv());
+  });
+
+  it('streamed, the way the tutor answers', async () => {
+    scriptReplies(['answered']);
+    const { runLlmStream } = await import('../src/llm.js');
+    let streamed = '';
+    const reply = await runLlmStream('q', { provider: 'claude', model: 'm' }, repo, (t) => { streamed += t; }, 10_000);
+    expect(reply.text).toBe('answered');
+    expect(streamed).toBe('answered');
+    isolated(argv());
   });
 });

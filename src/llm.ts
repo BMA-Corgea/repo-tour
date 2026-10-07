@@ -17,7 +17,7 @@
  * with zeros and a `metered: false`, which is honest; inventing a number would not be.
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -40,6 +40,14 @@ export interface Availability {
 /** A piece of the answer as it is written. */
 export type LlmDelta = (text: string) => void;
 
+/** What every call is given. `signal` ends it early: whoever it was for has gone. */
+export interface RunOpts {
+  model: string;
+  cwd: string;
+  timeoutMs: number;
+  signal?: AbortSignal;
+}
+
 export interface Provider {
   readonly id: string;
   readonly label: string;
@@ -55,7 +63,7 @@ export interface Provider {
   readonly strongest: string;
   /** whether it can run here, right now */
   available(): Promise<Availability>;
-  run(prompt: string, opts: { model: string; cwd: string; timeoutMs: number }): Promise<LlmReply>;
+  run(prompt: string, opts: RunOpts): Promise<LlmReply>;
   /**
    * The same call, delivering the answer as it arrives.
    *
@@ -65,7 +73,7 @@ export interface Provider {
    */
   runStream?(
     prompt: string,
-    opts: { model: string; cwd: string; timeoutMs: number },
+    opts: RunOpts,
     onDelta: LlmDelta,
   ): Promise<LlmReply>;
 }
@@ -140,10 +148,32 @@ export function killLlmChildren(): void {
   liveChildren.clear();
 }
 
+/**
+ * Kill `child` when `signal` fires: a model call nobody is waiting for any more.
+ *
+ * Returns the cleanup a normal exit runs, so a finished call never leaves a listener behind.
+ */
+function cancelOn(
+  signal: AbortSignal | undefined, child: ChildProcess, timer: NodeJS.Timeout,
+  reject: (e: Error) => void,
+): () => void {
+  if (!signal) return () => {};
+  const cancel = (): void => {
+    clearTimeout(timer);
+    liveChildren.delete(child);
+    child.kill('SIGKILL');
+    reject(new Error('cancelled: nobody is waiting for this answer'));
+  };
+  signal.addEventListener('abort', cancel, { once: true });
+  return () => signal.removeEventListener('abort', cancel);
+}
+
 function runProcess(
   bin: string, args: string[], input: string, cwd: string, timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<RunResult> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(new Error('cancelled: nobody is waiting for this answer')); return; }
     const child = spawn(bin, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
     liveChildren.add(child);
     let stdout = '';
@@ -153,12 +183,14 @@ function runProcess(
       child.kill('SIGKILL');
       reject(new Error(`timed out after ${Math.round(timeoutMs / 1000)}s`));
     }, timeoutMs);
+    const uncancel = cancelOn(signal, child, timer, reject);
 
     child.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
     child.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
-    child.on('error', (e) => { clearTimeout(timer); liveChildren.delete(child); reject(e); });
+    child.on('error', (e) => { clearTimeout(timer); uncancel(); liveChildren.delete(child); reject(e); });
     child.on('close', (code) => {
       clearTimeout(timer);
+      uncancel();
       liveChildren.delete(child);
       resolve({ code, stdout, stderr });
     });
@@ -180,9 +212,10 @@ function runProcess(
  */
 function streamProcess(
   bin: string, args: string[], input: string, cwd: string, timeoutMs: number,
-  onLine: (line: string) => void,
+  onLine: (line: string) => void, signal?: AbortSignal,
 ): Promise<RunResult> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(new Error('cancelled: nobody is waiting for this answer')); return; }
     const child = spawn(bin, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
     liveChildren.add(child);
     let stdout = '';
@@ -193,6 +226,7 @@ function streamProcess(
       child.kill('SIGKILL');
       reject(new Error(`timed out after ${Math.round(timeoutMs / 1000)}s`));
     }, timeoutMs);
+    const uncancel = cancelOn(signal, child, timer, reject);
 
     child.stdout.on('data', (d: Buffer) => {
       const chunk = d.toString();
@@ -207,11 +241,12 @@ function streamProcess(
       }
     });
     child.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
-    child.on('error', (e) => { clearTimeout(timer); liveChildren.delete(child); reject(e); });
+    child.on('error', (e) => { clearTimeout(timer); uncancel(); liveChildren.delete(child); reject(e); });
     child.on('close', (code) => {
       clearTimeout(timer);
+      uncancel();
       liveChildren.delete(child);
-      if (pending.trim()) onLine(pending);
+      if (pending.trim() && !signal?.aborted) onLine(pending);
       resolve({ code, stdout, stderr });
     });
 
@@ -232,10 +267,32 @@ async function version(bin: string): Promise<string> {
 /**
  * Claude Code's CLI. The default, and the only one that reports what it spent.
  *
- * `--allowedTools ''` matters: it answers about the excerpt it was handed rather than
- * wandering off to read the repository, which is a much larger trust question than
- * "summarise these forty lines".
+ * It must answer about the excerpt it was handed, not wander off to read the repository,
+ * which is a much larger trust question than "summarise these forty lines". See `ISOLATED`.
  */
+
+/**
+ * The flags that make a claude call a plain model call: no tools, and nothing from the repo
+ * it is answering about or from this machine's own Claude Code setup.
+ *
+ * This used to be `--allowedTools ''`, and that never meant "no tools": it only adds to an
+ * allow list. Under the bypass permission mode this machine runs by default, the CLI it
+ * started had 37 tools, Bash among them. It also ran the toured repo's hooks, obeyed its
+ * CLAUDE.md, and wrote a session into that repo's history. A project file telling it to end
+ * every reply with one word got that word back (measured 2026-10-07, claude 2.1.293). For a
+ * tool whose whole job is reading other people's code, that hands the toured repo's author
+ * the reader's machine.
+ *
+ *   --safe-mode               no CLAUDE.md, skills, plugins, hooks or MCP from anywhere
+ *   --tools ''                no built-in tools: the model answers from what it is given
+ *   --strict-mcp-config       no MCP servers, the account's connectors included
+ *   --no-session-persistence  nothing written into the toured repo's session history
+ *
+ * Measured on the same prompt: 37 tools to 0, two hooks to none, the CLAUDE.md answer to the
+ * plain one, and a sixth of the cost. Note that this also drops the machine's own settings,
+ * effort level included, so the model runs at its default effort.
+ */
+const ISOLATED = ['--safe-mode', '--tools', '', '--strict-mcp-config', '--no-session-persistence'];
 /**
  * Whether this machine's claude CLI understands `--include-partial-messages`.
  *
@@ -275,13 +332,13 @@ const claude: Provider = {
     return { ok: true, detail: v || bin };
   },
 
-  async run(prompt, { model, cwd, timeoutMs }) {
+  async run(prompt, { model, cwd, timeoutMs, signal }) {
     const bin = resolveBin('claude', 'REPO_TOUR_CLAUDE_BIN');
     if (!bin) throw new Error('the claude CLI is not installed');
 
     const r = await runProcess(
-      bin, ['-p', '--model', model, '--output-format', 'json', '--allowedTools', ''],
-      prompt, cwd, timeoutMs,
+      bin, ['-p', '--model', model, '--output-format', 'json', ...ISOLATED],
+      prompt, cwd, timeoutMs, signal,
     );
     if (r.code !== 0) throw new Error(`claude exited ${r.code}: ${r.stderr.trim().slice(0, 200)}`);
 
@@ -311,14 +368,14 @@ const claude: Provider = {
    * The final `result` line carries `total_cost_usd` and `usage`, so AC6's promise — that the
    * figures stay real once this stops being one blob — costs nothing.
    */
-  async runStream(prompt, { model, cwd, timeoutMs }, onDelta) {
+  async runStream(prompt, { model, cwd, timeoutMs, signal }, onDelta) {
     const bin = resolveBin('claude', 'REPO_TOUR_CLAUDE_BIN');
     if (!bin) throw new Error('the claude CLI is not installed');
 
     const attempt = async (partial: boolean): Promise<{ r: RunResult; reply: LlmReply; streamed: string }> => {
       const args = ['-p', '--model', model, '--output-format', 'stream-json', '--verbose'];
       if (partial) args.push('--include-partial-messages');
-      args.push('--allowedTools', '');
+      args.push(...ISOLATED);
 
       let streamed = '';
       let final = '';
@@ -354,7 +411,7 @@ const claude: Provider = {
           outputTokens = d.usage?.output_tokens ?? 0;
           usd = d.total_cost_usd ?? 0;
         }
-      });
+      }, signal);
 
       const text = (final || streamed).trim();
       return { r, reply: { text, inputTokens, outputTokens, usd, metered: true }, streamed };
@@ -404,7 +461,7 @@ const codex: Provider = {
     return { ok: true, detail: v || bin };
   },
 
-  async run(prompt, { cwd, timeoutMs }) {
+  async run(prompt, { cwd, timeoutMs, signal }) {
     const bin = resolveBin('codex', 'REPO_TOUR_CODEX_BIN');
     if (!bin) throw new Error('the codex CLI is not installed');
 
@@ -414,7 +471,7 @@ const codex: Provider = {
         bin,
         ['exec', '--ephemeral', '--skip-git-repo-check', '--sandbox', 'read-only',
           '-C', cwd, '--output-last-message', out, '-'],
-        prompt, cwd, timeoutMs,
+        prompt, cwd, timeoutMs, signal,
       );
       const text = fs.existsSync(out) ? fs.readFileSync(out, 'utf8').trim() : '';
       if (r.code !== 0 && !text) {
@@ -455,12 +512,12 @@ const ollama: Provider = {
     }
   },
 
-  async run(prompt, { model, timeoutMs }) {
+  async run(prompt, { model, timeoutMs, signal }) {
     const res = await fetch(`${OLLAMA_URL()}/api/generate`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ model, prompt, stream: false }),
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: signal ? AbortSignal.any([AbortSignal.timeout(timeoutMs), signal]) : AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) throw new Error(`ollama responded ${res.status}`);
     const body = await res.json() as { response?: string; prompt_eval_count?: number; eval_count?: number };
@@ -520,13 +577,14 @@ export async function runLlm(
  */
 export async function runLlmStream(
   prompt: string, choice: LlmChoice, cwd: string, onDelta: LlmDelta, timeoutMs = 300_000,
+  signal?: AbortSignal,
 ): Promise<LlmReply> {
   const provider = providerById(choice.provider);
   if (!provider) throw new Error(`no such provider: ${choice.provider}`);
   if (provider.runStream) {
-    return provider.runStream(prompt, { model: choice.model, cwd, timeoutMs }, onDelta);
+    return provider.runStream(prompt, { model: choice.model, cwd, timeoutMs, signal }, onDelta);
   }
-  const reply = await provider.run(prompt, { model: choice.model, cwd, timeoutMs });
+  const reply = await provider.run(prompt, { model: choice.model, cwd, timeoutMs, signal });
   if (reply.text) onDelta(reply.text);
   return reply;
 }
