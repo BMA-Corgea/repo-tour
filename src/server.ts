@@ -710,9 +710,10 @@ export class RepoTourServer {
       // Nothing between this and the browser should be holding the answer back.
       'x-accel-buffering': 'no',
     });
-    // Out now, not with the first event: until the first lookup or the first words, the browser
-    // would otherwise be holding a request with no answer of any kind.
-    res.flushHeaders();
+    // A byte now, not at the first event. Headers alone are not enough: Firefox resolves
+    // `fetch()` only at the first BODY byte, so until then the panel cannot tell a slow answer
+    // from a dead server (review attempt 3, measured in Firefox 157).
+    res.write(': open\n\n');
     const send = (kind: string, data: unknown): void => {
       if (res.writableEnded) return;
       res.write(`event: ${kind}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -799,6 +800,8 @@ export class RepoTourServer {
      */
     const reader = new AbortController();
     res.on('close', () => { if (!res.writableFinished) reader.abort(); });
+    // Gone before there was anyone listening for it: `close` will not fire again.
+    if (res.destroyed) reader.abort();
 
     try {
       // Bounded twice over, and the second bound is not decoration: the first version of this
@@ -906,8 +909,9 @@ export class RepoTourServer {
       // fix; "request failed" tells them nothing. A call killed because the reader left has
       // nobody to tell.
       if (!reader.signal.aborted) fail(e instanceof Error ? (e.message.split('\n')[0] ?? e.message) : String(e));
+    } finally {
+      clearInterval(heartbeat);
     }
-    clearInterval(heartbeat);
     // The backstop. Nothing above should reach here without having finished, but a stream
     // that closes silently is invisible to the reader and expensive to have already paid for.
     if (!reader.signal.aborted) fail('the tutor stopped without answering');

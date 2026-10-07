@@ -95,14 +95,37 @@ describe('the line drops mid-answer', () => {
     expect(send.disabled).toBe(false);
   });
 
-  it('still says a stopped server is a stopped server', async () => {
-    const { log, send, input } = runPanel(async () => { throw new TypeError('Failed to fetch'); });
+  // Every browser says "nothing answered" as a TypeError, each in its own words. Testing only
+  // Chrome's let Firefox, the owner's browser, show its raw text instead of the hint (AC11).
+  for (const [browser, words] of [
+    ['Chrome', 'Failed to fetch'],
+    ['Firefox', 'NetworkError when attempting to fetch resource.'],
+    ['Safari', 'Load failed'],
+  ] as const) {
+    it(`still says a stopped server is a stopped server (${browser})`, async () => {
+      const { log, send, input } = runPanel(async () => { throw new TypeError(words); });
+      input.value = 'q';
+      send.fire('click');
+      await settle();
+
+      const shown = log.all().map((e) => e.textContent).join('\n');
+      expect(shown).toContain('OFFLINE');
+      expect(shown).not.toContain(words);
+      expect(shown).not.toContain('dropped');
+    });
+  }
+
+  it('passes on a refusal in the server\'s own words', async () => {
+    const { log, send, input } = runPanel(async () => new Response(
+      JSON.stringify({ error: 'the Ask panel is only reachable from its own page' }),
+      { status: 403, headers: { 'content-type': 'application/json' } },
+    ));
     input.value = 'q';
     send.fire('click');
     await settle();
 
     const shown = log.all().map((e) => e.textContent).join('\n');
-    expect(shown).toContain('OFFLINE');
-    expect(shown).not.toContain('dropped');
+    expect(shown).toContain('the Ask panel is only reachable from its own page');
+    expect(shown).not.toContain('OFFLINE');
   });
 });

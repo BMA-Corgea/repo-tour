@@ -345,7 +345,11 @@ export function askPanelScript(opts: AskPanelOptions): string {
         if (connected) { fail(DROPPED_HINT); return; }
         // A static export has no server to answer. Say what to run, rather than failing
         // silently or spinning — this page is designed to be openable from a file:// URL.
-        fail(e && e.message && e.message !== 'Failed to fetch' ? e.message : OFFLINE_HINT);
+        // Nothing answering is a TypeError in every browser, each in its own words (Chrome
+        // "Failed to fetch", Firefox "NetworkError when attempting to fetch resource.", Safari
+        // "Load failed"); the server's own refusals arrive as a plain Error with its message.
+        // Checked by name, because a page's TypeError and a test VM's are different objects.
+        fail(e && e.name === 'TypeError' ? OFFLINE_HINT : (e && e.message) || OFFLINE_HINT);
       })
       .finally(function () {
         if (live) { live.el.remove(); live = null; }

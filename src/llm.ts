@@ -43,6 +43,10 @@ export type LlmDelta = (text: string) => void;
 /** What every call is given. `signal` ends it early: whoever it was for has gone. */
 export interface RunOpts {
   model: string;
+  /**
+   * Where the caller is working. The bundled CLI providers deliberately do NOT run there: see
+   * `emptyDir`. It stays in the contract for a provider that genuinely needs a place to stand.
+   */
   cwd: string;
   timeoutMs: number;
   signal?: AbortSignal;
@@ -272,8 +276,8 @@ async function version(bin: string): Promise<string> {
  */
 
 /**
- * The flags that make a claude call a plain model call: no tools, and nothing from the repo
- * it is answering about or from this machine's own Claude Code setup.
+ * The flags that make a claude call a plain model call: no tools, and no configuration from
+ * the repository it is answering about. The other half of that is `emptyDir`.
  *
  * This used to be `--allowedTools ''`, and that never meant "no tools": it only adds to an
  * allow list. Under the bypass permission mode this machine runs by default, the CLI it
@@ -283,16 +287,48 @@ async function version(bin: string): Promise<string> {
  * tool whose whole job is reading other people's code, that hands the toured repo's author
  * the reader's machine.
  *
- *   --safe-mode               no CLAUDE.md, skills, plugins, hooks or MCP from anywhere
+ *   --safe-mode               no CLAUDE.md, skills, plugins, hooks or MCP
+ *   --setting-sources user    no project or local settings. `--safe-mode` is a troubleshooting
+ *                             switch, not a sandbox: it keeps settings-based auth, so without
+ *                             this a repo's `.claude/settings.json` could still run an
+ *                             `apiKeyHelper` command, or set `ANTHROPIC_BASE_URL` and receive the
+ *                             reader's login and the prompt (review attempt 3, reproduced)
  *   --tools ''                no built-in tools: the model answers from what it is given
  *   --strict-mcp-config       no MCP servers, the account's connectors included
- *   --no-session-persistence  nothing written into the toured repo's session history
+ *   --no-session-persistence  nothing written into any repo's session history
  *
- * Measured on the same prompt: 37 tools to 0, two hooks to none, the CLAUDE.md answer to the
- * plain one, and a sixth of the cost. Note that this also drops the machine's own settings,
- * effort level included, so the model runs at its default effort.
+ * Measured on the same prompt: 37 tools to 0, hooks to none, a project `apiKeyHelper` that ran
+ * to one that does not, the CLAUDE.md answer to the plain one, and a fifth of the cost. What
+ * still comes from this machine, by design: admin-managed settings, and the permission mode
+ * (inert with no tools). What no longer does: the owner's effort level, so the model runs at
+ * its default effort.
  */
-const ISOLATED = ['--safe-mode', '--tools', '', '--strict-mcp-config', '--no-session-persistence'];
+const ISOLATED = [
+  '--safe-mode', '--setting-sources', 'user', '--tools', '', '--strict-mcp-config', '--no-session-persistence',
+];
+
+/**
+ * Where every model call runs: an empty directory of its own, never the repository.
+ *
+ * A CLI started inside a repo picks up that repo's configuration (CLAUDE.md, `.claude/`,
+ * `.mcp.json`, codex's AGENTS.md), and each CLI version decides afresh which flags keep
+ * which part of it out. With no tools the working directory serves no purpose, so standing
+ * somewhere empty costs nothing and closes the whole class at once, whatever the version.
+ */
+let emptyDirPath: string | null = null;
+function emptyDir(): string {
+  if (emptyDirPath && fs.existsSync(emptyDirPath)) return emptyDirPath;
+  emptyDirPath = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-llm-'));
+  return emptyDirPath;
+}
+
+const UNKNOWN_OPTION = /unknown option|unrecognized option|unknown argument|unexpected argument/i;
+
+/** The CLI's own words, plus what to do when they mean it is too old for these flags. */
+function cliError(r: RunResult): Error {
+  const hint = UNKNOWN_OPTION.test(r.stderr) ? ' (repo-tour needs a newer Claude Code: run `claude update`)' : '';
+  return new Error(`claude exited ${r.code}: ${r.stderr.trim().slice(0, 200)}${hint}`);
+}
 /**
  * Whether this machine's claude CLI understands `--include-partial-messages`.
  *
@@ -332,15 +368,15 @@ const claude: Provider = {
     return { ok: true, detail: v || bin };
   },
 
-  async run(prompt, { model, cwd, timeoutMs, signal }) {
+  async run(prompt, { model, timeoutMs, signal }) {
     const bin = resolveBin('claude', 'REPO_TOUR_CLAUDE_BIN');
     if (!bin) throw new Error('the claude CLI is not installed');
 
     const r = await runProcess(
       bin, ['-p', '--model', model, '--output-format', 'json', ...ISOLATED],
-      prompt, cwd, timeoutMs, signal,
+      prompt, emptyDir(), timeoutMs, signal,
     );
-    if (r.code !== 0) throw new Error(`claude exited ${r.code}: ${r.stderr.trim().slice(0, 200)}`);
+    if (r.code !== 0) throw cliError(r);
 
     const envelope = JSON.parse(r.stdout) as {
       result?: string;
@@ -368,7 +404,7 @@ const claude: Provider = {
    * The final `result` line carries `total_cost_usd` and `usage`, so AC6's promise — that the
    * figures stay real once this stops being one blob — costs nothing.
    */
-  async runStream(prompt, { model, cwd, timeoutMs, signal }, onDelta) {
+  async runStream(prompt, { model, timeoutMs, signal }, onDelta) {
     const bin = resolveBin('claude', 'REPO_TOUR_CLAUDE_BIN');
     if (!bin) throw new Error('the claude CLI is not installed');
 
@@ -383,7 +419,7 @@ const claude: Provider = {
       let outputTokens = 0;
       let usd = 0;
 
-      const r = await streamProcess(bin, args, prompt, cwd, timeoutMs, (line) => {
+      const r = await streamProcess(bin, args, prompt, emptyDir(), timeoutMs, (line) => {
         let d: StreamLine;
         try { d = JSON.parse(line) as StreamLine; }
         catch { return; }  // hook chatter and blank frames are not our business
@@ -426,14 +462,18 @@ const claude: Provider = {
       // Deliberately NOT matching the flag's own name: a CLI that echoes its argv in an error
       // banner would turn any transient failure into a permanent, process-lifetime downgrade
       // to whole-message streaming, with no way back short of a restart.
-      if (!/unknown option|unrecognized option|unknown argument|unexpected argument/i.test(out.r.stderr)) {
-        throw new Error(`claude exited ${out.r.code}: ${out.r.stderr.trim().slice(0, 200)}`);
-      }
+      if (!UNKNOWN_OPTION.test(out.r.stderr)) throw cliError(out.r);
       partialMessagesSupported = false;
     }
 
     const out = await attempt(false);
-    if (out.r.code !== 0) throw new Error(`claude exited ${out.r.code}: ${out.r.stderr.trim().slice(0, 200)}`);
+    if (out.r.code !== 0) {
+      // Refused without --include-partial-messages too, so that flag was never the problem (an
+      // older CLI that lacks `--safe-mode`, say). Forget the verdict rather than keep a wrong
+      // one for the life of the process.
+      if (UNKNOWN_OPTION.test(out.r.stderr)) partialMessagesSupported = null;
+      throw cliError(out.r);
+    }
     // The non-partial path never called onDelta, so the caller has seen nothing yet.
     if (!out.streamed && out.reply.text) onDelta(out.reply.text);
     return out.reply;
@@ -461,17 +501,20 @@ const codex: Provider = {
     return { ok: true, detail: v || bin };
   },
 
-  async run(prompt, { cwd, timeoutMs, signal }) {
+  async run(prompt, { timeoutMs, signal }) {
     const bin = resolveBin('codex', 'REPO_TOUR_CODEX_BIN');
     if (!bin) throw new Error('the codex CLI is not installed');
 
     const out = path.join(os.tmpdir(), `repo-tour-codex-${process.pid}-${Date.now()}.txt`);
+    // In an empty directory, like claude: out of reach of the toured repo's AGENTS.md. Its
+    // read-only sandbox is still a shell, which is not "no tools" (a follow-up in the ledger).
+    const where = emptyDir();
     try {
       const r = await runProcess(
         bin,
         ['exec', '--ephemeral', '--skip-git-repo-check', '--sandbox', 'read-only',
-          '-C', cwd, '--output-last-message', out, '-'],
-        prompt, cwd, timeoutMs, signal,
+          '-C', where, '--output-last-message', out, '-'],
+        prompt, where, timeoutMs, signal,
       );
       const text = fs.existsSync(out) ? fs.readFileSync(out, 'utf8').trim() : '';
       if (r.code !== 0 && !text) {
@@ -517,7 +560,10 @@ const ollama: Provider = {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ model, prompt, stream: false }),
-      signal: signal ? AbortSignal.any([AbortSignal.timeout(timeoutMs), signal]) : AbortSignal.timeout(timeoutMs),
+      // AbortSignal.any arrived in Node 20.3; without it, the timeout alone still bounds the call.
+      signal: signal && typeof AbortSignal.any === 'function'
+        ? AbortSignal.any([AbortSignal.timeout(timeoutMs), signal])
+        : AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) throw new Error(`ollama responded ${res.status}`);
     const body = await res.json() as { response?: string; prompt_eval_count?: number; eval_count?: number };
