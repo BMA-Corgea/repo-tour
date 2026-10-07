@@ -24,7 +24,22 @@ here and found via the reference table below.
   strongest by default; a keep button that pre-fills the note box; clickable citations that
   flag a file it was never shown; both the repo tour and the PR page. Acceptance is HIS test
   drive (Q10) — the first gate since 27 August that genuinely waits, and where this now sits.
-  **MERGED to local main `31f275e`, not pushed.** Two review rounds: attempt 1 REWORK on three
+  **2026-10-07: his first test drive found a defect, now reworked and back at his gate.** He
+  got one lookup, then "Error in input stream", and lost the answer: the stream was silent
+  while the model thought (34 s), a Docker container restart changed the machine's network,
+  and Firefox closes quiet connections when that happens. Fixed: a byte at once and a 2 s
+  heartbeat; a reader who hangs up stops the model; the panel says a dropped line and a
+  stopped server in plain words in every browser. Also found: every model call (tutor AND
+  narration) ran as a full Claude Code agent inside the toured repo, with 37 tools in bypass
+  mode, its hooks, its CLAUDE.md and its settings. Now every call runs in an empty directory
+  with `--safe-mode --setting-sources user --tools '' --strict-mcp-config
+  --no-session-persistence`, and runs at the model's default effort, not the owner's global
+  one (he has been told). Review attempt 3 REWORK (a toured repo's settings could still run an
+  `apiKeyHelper` or redirect his login), attempt 4 PASS. **Merged to local main `a901a90`, not
+  pushed**; `dist/` rebuilt (GONS and the VS Code tutor run it). Verified on merged main:
+  clean-room 359/359, a Firefox drive through a simulated network change, and his own 7788
+  server. Follow-ups filed: T-19 (codex still gets a read-only shell), T-20 (tidy-ups).
+  The 09-05 build, for the record: **merged to main `31f275e`** (on GitHub since). Two review rounds: attempt 1 REWORK on three
   blockers — an SSE path that could end with no terminal event (the reader watched eight
   lookups scroll past and was then left with a deleted answer), page tests that were finding
   their own source text embedded in the toured page (four features deleted, all 21 still
@@ -32,9 +47,10 @@ here and found via the reference table below.
   reproduction, plus four take-ups including a symlink named `safe.txt` that defeated the
   secrets screen the first fix had just added. 348/348 green, clean-room merge-verify PASS on
   the integrated branch, live-driven in a real browser on merged main with zero page errors.
-  Branch `feature/T-18-finish-the-tutor`, worktree `../repo-tour-T-18`. Full detail:
-  `.autodev/handoffs/T-18.md`; for the test drive, a server is up on http://localhost:7801
-  with sql-gauntlet loaded.
+  Branch `feature/T-18-finish-the-tutor` (pre-T-17-rewrite hashes: never merge it again),
+  worktree `../repo-tour-T-18`; the rework was cut fresh from main as
+  `feature/T-18-stream-heartbeat`. Full detail: `.autodev/handoffs/T-18.md`. For the test
+  drive: his own `./start.sh` server on 7788 restarts itself onto new code.
 
   every `public/*.js` file's body sat inside a top-level IIFE, invisible to `extract.ts`;
   `server.js`/`tools/*.js` had real top-level symbols but none `exported`, invisible to
@@ -82,31 +98,44 @@ here and found via the reference table below.
   wired into the CLI. Every test injects a canned runner — none spawns `claude`. 193 tests
   green (176 + 17). Full detail: `.autodev/handoffs/T-13.md`.
 - Nothing else in flight here. **Five of the six pieces the owner described on day one are shipped.**
-  The one left is **T-7, GONS integration** — always the endgame rather than the product.
+  The sixth, GONS integration, was built on the GUTS side (below), so **T-7 is not needed**.
 - **The GONS side is now open on the OTHER shop.** 2026-08-27, on the owner's instruction, GUTS
   ticket **T-55** was filed ("Bring repo-tour's PR tours into the GONS Office PR section")
   with a first-hand brief at `GUTS/.autodev/handoffs/T-55.md`, and the live `guts-bridge`
   session was messaged. Its `spec_ready` was deliberately NOT cleared: how it lands in the
-  Office is GUTS's decision. **repo-tour's T-7 is the counterpart and is still unopened** —
-  open it when GUTS says what it needs, not before.
+  Office is GUTS's decision. **Update 2026-10-07: GUTS built it, so T-7 is not needed.** GUTS
+  closed T-55 on 2026-09-27 and folded it into GUTS **T-212** (slice C3: open a change's
+  repo-tour from its ticket page). C3 landed on gons `main` `a518a49` on 2026-10-05 and is
+  switched on (`GONS_FOREMAN_ACT`). GONS runs THIS checkout's CLI (`pr <tree> --base <sha>
+  --head <sha>`, in a temp dir) and reads `DEFAULT_MODEL` from `dist/interpret.js`
+  (`gons/backend/app/foreman_tour.py`). So keep `dist/` built and that CLI shape stable.
+  Known gap, logged LOW on GUTS's side: the Ask panel in a GONS-served tour needs this repo's
+  own server running.
 - **T-14** (techdebt) — Harden T-11's consumer tests: prove prepare rebuilds dist, and make alternateCs… — intake
 - **T-16** (feature) — Module-pattern and .call(this) IIFEs: record their body declarations too — intake
 - **T-18** (feature) — Finish the tutor — give it the code, a memory, and a way into your notes — uat
+- **T-19** (bug) — The codex provider still gets a shell: its read-only sandbox is not 'no tools' — intake
+- **T-20** (techdebt) — Isolation tidy-ups from T-18 review attempt 4: latch test, empty-dir cleanup, c… — intake
 
 ## Waiting on
 
 <!-- Holds: "waiting at <gate> on <keyholder> since <date>, ping sent to
      <channel>" — no session should discover a hold by archaeology (ruling 24). -->
 
-- Nothing is held. Every gate that is the owner's was spent on his own recorded go-aheads
-  (GA-3 through GA-7) because he asked not to be stopped mid-flight. **The open loop is his
-  read of the notes + Ask panels**, which he has not used yet at the time of writing.
+- **T-18 waits at the accept gate on the owner, since 2026-10-07** (his own test drive, Q10:
+  three questions the tour does not cover, answers right, one worth keeping as a note). His
+  first drive that day found the stream defect; the rework is merged and his server runs it.
+  Told in the session that found it; no page sent.
 
 ## Recent past (~15 items / ~30 days)
 
 <!-- One line per completed item, WITH the why. Newest first. Prune from the
      bottom; the permanent record lives in tickets, events.jsonl, and wiki. -->
 
+- 2026-10-07 **T-18 rework merged** (`a901a90`) — the owner's test drive lost an answer to a
+  silent stream that Firefox closed on a network change; and every model call turned out to
+  be a full agent inside the toured repo. Why it took two review rounds: `--safe-mode` looked
+  like a sandbox and is not; only not standing in the repo closes the class.
 - 2026-09-05 **T-17 COMPLETE** — The owner's name leaves the public repo
 - 2026-09-05 **T-13 COMPLETE** — Interpret the decisions — alternatives per build step, and Ask context for a st…
 - 2026-09-05 **T-15 COMPLETE** — Script-style JS yields no load-bearing ranges: IIFE bodies are invisible to ext…
