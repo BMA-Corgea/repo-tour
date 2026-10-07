@@ -45,6 +45,8 @@ export function askPanelScript(opts: AskPanelOptions): string {
   var NOTES_KEY = ${JSON.stringify(opts.notesKey)};
   var CHAT_KEY = ${JSON.stringify(opts.chatKey)};
   var OFFLINE_HINT = ${JSON.stringify(opts.offlineHint)};
+  // The server answered, then the connection broke: it is running, the line to it is not.
+  var DROPPED_HINT = 'The connection to repo-tour dropped before the answer arrived. Ask again.';
   var log = document.getElementById('asklog');
   var input = document.getElementById('askinput');
   var send = document.getElementById('asksend');
@@ -299,6 +301,7 @@ export function askPanelScript(opts: AskPanelOptions): string {
 
     var ctx = (window.__askContext ? window.__askContext() : {}) || {};
     ctx.notes = readNotes();
+    var connected = false;
 
     fetch('/api/ask', {
       method: 'POST',
@@ -310,6 +313,7 @@ export function askPanelScript(opts: AskPanelOptions): string {
           return res.json().then(function (j) { throw new Error(j.error || 'that did not work'); },
             function () { throw new Error('that did not work'); });
         }
+        connected = true;
         var cites = null;
         return readStream(res, function (kind, data) {
           if (kind === 'fetch') {
@@ -336,6 +340,9 @@ export function askPanelScript(opts: AskPanelOptions): string {
         });
       })
       .catch(function (e) {
+        // A stream that broke after it started is a dropped line, not a stopped server. Say
+        // so in words, not the browser's ("Error in input stream" is Firefox's).
+        if (connected) { fail(DROPPED_HINT); return; }
         // A static export has no server to answer. Say what to run, rather than failing
         // silently or spinning — this page is designed to be openable from a file:// URL.
         fail(e && e.message && e.message !== 'Failed to fetch' ? e.message : OFFLINE_HINT);
