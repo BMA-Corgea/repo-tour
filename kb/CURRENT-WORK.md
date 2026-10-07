@@ -10,96 +10,10 @@ here and found via the reference table below.
 <!-- What is in motion right now: one line per active ticket/effort —
      what, why, where it stands, what is next. Never pruned while live. -->
 
-- **T-18** (feature) — Finish the tutor — give it the code, a memory, and a way into your notes — uat
-  the reader's notes; three gaps stop it serving the moment it exists for. It is never given
-  the code (`repoview.ts`'s `__askContext` sends the path, the digest's meaning, importers,
-  the stop's narration — never the source). It never remembers (one in-memory array in
-  `askpanel.ts`, erased by a reload). And it can never contribute to the notes. Scope is
-  the owner's own ruling: he answered ten questions on a decision form
-  (`https://claude.ai/code/artifact/c5780bc2-d1c4-44c6-8e27-15051d496950`, 2026-09-05, all
-  ten, every recommendation taken) — send the code AND let the tutor fetch more through the
-  server (read-only, every fetch shown; the model still gets no real tools, which is why
-  server-mediated beat a real toolbelt); always carry the repo overview + stop list; one
-  saved transcript per tour stamped by stop; streamed answers; the tutor gets its own model,
-  strongest by default; a keep button that pre-fills the note box; clickable citations that
-  flag a file it was never shown; both the repo tour and the PR page. Acceptance is HIS test
-  drive (Q10) — the first gate since 27 August that genuinely waits, and where this now sits.
-  **2026-10-07: his first test drive found a defect, now reworked and back at his gate.** He
-  got one lookup, then "Error in input stream", and lost the answer: the stream was silent
-  while the model thought (34 s), a Docker container restart changed the machine's network,
-  and Firefox closes quiet connections when that happens. Fixed: a byte at once and a 2 s
-  heartbeat; a reader who hangs up stops the model; the panel says a dropped line and a
-  stopped server in plain words in every browser. Also found: every model call (tutor AND
-  narration) ran as a full Claude Code agent inside the toured repo, with 37 tools in bypass
-  mode, its hooks, its CLAUDE.md and its settings. Now every call runs in an empty directory
-  with `--safe-mode --setting-sources user --tools '' --strict-mcp-config
-  --no-session-persistence`, and runs at the model's default effort, not the owner's global
-  one (he has been told). Review attempt 3 REWORK (a toured repo's settings could still run an
-  `apiKeyHelper` or redirect his login), attempt 4 PASS. **Merged to local main `a901a90`, not
-  pushed**; `dist/` rebuilt (GONS and the VS Code tutor run it). Verified on merged main:
-  clean-room 359/359, a Firefox drive through a simulated network change, and his own 7788
-  server. Follow-ups filed: T-19 (codex still gets a read-only shell), T-20 (tidy-ups).
-  The 09-05 build, for the record: **merged to main `31f275e`** (on GitHub since). Two review rounds: attempt 1 REWORK on three
-  blockers — an SSE path that could end with no terminal event (the reader watched eight
-  lookups scroll past and was then left with a deleted answer), page tests that were finding
-  their own source text embedded in the toured page (four features deleted, all 21 still
-  green), and AC11 failing its own stated check. Attempt 2 PASS, all three re-verified by
-  reproduction, plus four take-ups including a symlink named `safe.txt` that defeated the
-  secrets screen the first fix had just added. 348/348 green, clean-room merge-verify PASS on
-  the integrated branch, live-driven in a real browser on merged main with zero page errors.
-  Branch `feature/T-18-finish-the-tutor` (pre-T-17-rewrite hashes: never merge it again),
-  worktree `../repo-tour-T-18`; the rework was cut fresh from main as
-  `feature/T-18-stream-heartbeat`. Full detail: `.autodev/handoffs/T-18.md`. For the test
-  drive: his own `./start.sh` server on 7788 restarts itself onto new code.
-
-  every `public/*.js` file's body sat inside a top-level IIFE, invisible to `extract.ts`;
-  `server.js`/`tools/*.js` had real top-level symbols but none `exported`, invisible to
-  `plan.ts`'s candidate filter). Fixed both: `extract.ts` recurses one level into a
-  top-level IIFE's body (all 4 documented shapes, both grammars, confirmed identical);
-  `plan.ts` falls back to "all recorded symbols" as candidates when a file exports
-  nothing — in every language, which is AC2's intent — screened, on that fallback path
-  ONLY, by a triviality filter (function/method/class/interface/enum always eligible,
-  variable/type only if they span >= 3 lines). A file that exports something keeps exactly
-  T-12's candidate set. That scoping is the rework: review attempt 1 (`93bed9f`) gated on
-  the filter also running over the exported path, which cost a types-only module all its
-  steps; fixed in `3e75bb2`, pinned by five tests committed RED in `806c847`. Repro-tested
-  first in both attempts, 190/190 tests green, T-12's 49 review fixtures byte-unchanged.
-  Live-reverified on sql-gauntlet, cache cleared: 0 -> 35 symbol steps across the 7 named
-  files (5 each, the cap), unchanged by the rework. Branch
-  `feature/T-15-script-symbols`, worktree `../repo-tour-T-15`. Full detail:
-  `.autodev/handoffs/T-15.md`.
-  package (`exports` map, injectable asset roots, a `prepare` build) so
-  `VSCode-LLM-Tutorial`'s extension can `import()` it as a `file:` dependency (that repo's
-  T-1 spec, §3/§10). 6 commits on `feature/T-11-core-package` in worktree `../repo-tour-T-11`,
-  not pushed/merged; full details and per-AC verification in `.autodev/handoffs/T-11.md`.
-  **T-12** (the build-order engine this package's `./build` export will point at) is running
-  in parallel in
-  `../repo-tour-T-12` on disjoint files. Five of the six pieces the owner described on day one are
-  shipped; the one left besides these is **T-7, GONS integration** — always the endgame
-  rather than the product.
-  VSCode-LLM-Tutorial ticket set's order). `src/build/{types,witness,plan,stub,check,index}.ts`:
-  digest → `BuildPlan`, the ordered decision list the VS Code extension walks a learner
-  through. All 9 acceptance criteria met, each with its own test in `test/build.test.ts`;
-  `repo-tour plan <path> [--json]` wired into the CLI. The auto-review returned **REWORK**
-  on four reproduced defects (step-id collisions, `data` files dropped from the plan,
-  one-line Python stubs that real Python rejects, a null witness on a rename); all four are
-  fixed on the branch, each with a test that fails when the fix is reverted — 167 tests
-  green. Why it exists: repo-tour's own
-  digest/architecture/extract/git-history stages already contain everything a "how was
-  this built, in order" projection needs — this ticket is that projection, computed the
-  way `src/tour.ts` computes a tour, never a separate hand-written artifact. Next: T-13
-  (interpret: alternatives per step) reads this module's output and does not need to
-  change its ordering or step shape. Full detail: `.autodev/handoffs/T-12.md`.
-  `src/build/interpret.ts#interpretPlan` folds two alternatives — and what each would have
-  cost — into every `symbol`/`file` step's decision, asked in the SAME model call that
-  already writes `what`/`why`/`summary` (`src/interpret.ts`, `PROMPT_VERSION` 5 → 6); a step
-  nothing could interpret keeps T-12's own honest defaults. The Ask panel's context gains a
-  `build` block for the VS Code tutor (T-6); `repo-tour plan --interpret [--cached-only]`
-  wired into the CLI. Every test injects a canned runner — none spawns `claude`. 193 tests
-  green (176 + 17). Full detail: `.autodev/handoffs/T-13.md`.
-- Nothing else in flight here. **Five of the six pieces the owner described on day one are shipped.**
-  The sixth, GONS integration, was built on the GUTS side (below), so **T-7 is not needed**.
-- **The GONS side is now open on the OTHER shop.** 2026-08-27, on the owner's instruction, GUTS
+- Nothing in flight here; four tickets wait at intake (below). **All six pieces the owner described
+  on day one are shipped**: the sixth, GONS integration, was built on the GUTS side (below), so
+  **T-7 is not needed**.
+- **GONS integration: built on the GUTS side, so this repo has nothing to do.** 2026-08-27, on the owner's instruction, GUTS
   ticket **T-55** was filed ("Bring repo-tour's PR tours into the GONS Office PR section")
   with a first-hand brief at `GUTS/.autodev/handoffs/T-55.md`, and the live `guts-bridge`
   session was messaged. Its `spec_ready` was deliberately NOT cleared: how it lands in the
@@ -113,7 +27,6 @@ here and found via the reference table below.
   own server running.
 - **T-14** (techdebt) — Harden T-11's consumer tests: prove prepare rebuilds dist, and make alternateCs… — intake
 - **T-16** (feature) — Module-pattern and .call(this) IIFEs: record their body declarations too — intake
-- **T-18** (feature) — Finish the tutor — give it the code, a memory, and a way into your notes — uat
 - **T-19** (bug) — The codex provider still gets a shell: its read-only sandbox is not 'no tools' — intake
 - **T-20** (techdebt) — Isolation tidy-ups from T-18 review attempt 4: latch test, empty-dir cleanup, c… — intake
 
@@ -122,20 +35,17 @@ here and found via the reference table below.
 <!-- Holds: "waiting at <gate> on <keyholder> since <date>, ping sent to
      <channel>" — no session should discover a hold by archaeology (ruling 24). -->
 
-- **T-18 waits at the accept gate on the owner, since 2026-10-07** (his own test drive, Q10:
-  three questions the tour does not cover, answers right, one worth keeping as a note). His
-  first drive that day found the stream defect; the rework is merged and his server runs it.
-  Told in the session that found it; no page sent.
+- Nothing is held. T-18's accept gate was spent on the owner's own words (GA-12).
 
 ## Recent past (~15 items / ~30 days)
 
 <!-- One line per completed item, WITH the why. Newest first. Prune from the
      bottom; the permanent record lives in tickets, events.jsonl, and wiki. -->
 
-- 2026-10-07 **T-18 rework merged** (`a901a90`) — the owner's test drive lost an answer to a
-  silent stream that Firefox closed on a network change; and every model call turned out to
-  be a full agent inside the toured repo. Why it took two review rounds: `--safe-mode` looked
-  like a sandbox and is not; only not standing in the repo closes the class.
+- 2026-10-07 **T-18 COMPLETE** — the tutor, accepted by the owner (GA-12: "it looks good. I approve")
+  after a rework from his first test drive: a silent stream Firefox closed on a network change,
+  and every model call running as a full agent inside the toured repo. Why two review rounds:
+  `--safe-mode` looked like a sandbox and is not; only standing outside the repo closes the class.
 - 2026-09-05 **T-17 COMPLETE** — The owner's name leaves the public repo
 - 2026-09-05 **T-13 COMPLETE** — Interpret the decisions — alternatives per build step, and Ask context for a st…
 - 2026-09-05 **T-15 COMPLETE** — Script-style JS yields no load-bearing ranges: IIFE bodies are invisible to ext…
