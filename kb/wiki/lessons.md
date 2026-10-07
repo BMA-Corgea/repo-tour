@@ -10,6 +10,50 @@ One entry per lesson, newest first, each citing the ticket or incident it came f
 
 ---
 
+## A stream that goes quiet can be closed under you (T-18 rework, 2026-10-07)
+
+The owner's test drive: one lookup, then **"Error in input stream"**, and no answer. The model
+had thought for 34 s after that lookup, so nothing crossed the wire. Then a Docker container
+restarted, the machine's network changed, and Firefox did what it does on a network change:
+it closed every connection that carried no traffic over the next five seconds
+(`network.http.network_changed.timeout`). Loopback is not exempt. The server never noticed,
+and went on to finish, and pay for, an answer nobody received.
+
+**The rule:** a long-lived response must never be silent for more than a couple of seconds.
+`/api/ask` sends a byte at once and an SSE comment every 2 s. A byte, not just the headers:
+Firefox resolves `fetch()` only at the first BODY byte, so a flushed header changes nothing
+for the page (review attempt 3). A simple idle test does
+NOT reproduce this: Firefox kept a 45 s silent stream open happily. It needed the network
+change, which a test can simulate from Firefox's chrome context
+(`network:link-status-changed` / `changed`, via a geckodriver started with
+`--allow-system-access`). With that, the old code failed 5 s after the change, exactly as the
+owner saw it.
+
+**Corollary:** when the reader hangs up, stop. `close` on the response before it finished
+means nobody is listening; the loop now aborts and kills the model call.
+
+## `--allowedTools ''` does not mean "no tools" (T-18 rework, 2026-10-07)
+
+It only adds to an allow list. Under the bypass permission mode this machine runs by default,
+every `claude -p` repo-tour started had 37 tools, Bash among them. It also ran the toured
+repo's hooks, obeyed its CLAUDE.md, wrote a session into that repo's history, and added a
+`session.started` line to an AutoDev repo's ledger on every call. A fixture CLAUDE.md telling
+it to end replies with one word got that word back.
+
+**The rule:** a model call that is meant to answer from what it is handed runs in an empty
+directory of its own, never in the repository (`emptyDir` in `src/llm.ts`), with
+`--safe-mode --setting-sources user --tools '' --strict-mcp-config --no-session-persistence`
+(`ISOLATED`). The empty directory is the part that matters. `--safe-mode` is a troubleshooting
+switch, not a sandbox: it keeps settings-based auth, so standing in a toured repo still let its
+`.claude/settings.json` run an `apiKeyHelper` command, or set `ANTHROPIC_BASE_URL` and receive
+the reader's login and the prompt (review attempt 3, reproduced against the real CLI).
+`--setting-sources user` is the second layer. Check what a CLI session really has from its
+`stream-json` init line (`tools`, `mcp_servers`, `apiKeySource`, `permissionMode`), never from
+a flag's name. One cost: `--safe-mode` also drops the machine's own effort level, so the model
+runs at its default effort, not the owner's global one.
+
+---
+
 ## A control that silently declines is a broken control (T-3, 2026-08-26)
 
 The owner: **"the button for note taking doesn't do anything."** He was right, and the cause was

@@ -17,7 +17,7 @@
  * with zeros and a `metered: false`, which is honest; inventing a number would not be.
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -40,6 +40,18 @@ export interface Availability {
 /** A piece of the answer as it is written. */
 export type LlmDelta = (text: string) => void;
 
+/** What every call is given. `signal` ends it early: whoever it was for has gone. */
+export interface RunOpts {
+  model: string;
+  /**
+   * Where the caller is working. The bundled CLI providers deliberately do NOT run there: see
+   * `emptyDir`. It stays in the contract for a provider that genuinely needs a place to stand.
+   */
+  cwd: string;
+  timeoutMs: number;
+  signal?: AbortSignal;
+}
+
 export interface Provider {
   readonly id: string;
   readonly label: string;
@@ -55,7 +67,7 @@ export interface Provider {
   readonly strongest: string;
   /** whether it can run here, right now */
   available(): Promise<Availability>;
-  run(prompt: string, opts: { model: string; cwd: string; timeoutMs: number }): Promise<LlmReply>;
+  run(prompt: string, opts: RunOpts): Promise<LlmReply>;
   /**
    * The same call, delivering the answer as it arrives.
    *
@@ -65,7 +77,7 @@ export interface Provider {
    */
   runStream?(
     prompt: string,
-    opts: { model: string; cwd: string; timeoutMs: number },
+    opts: RunOpts,
     onDelta: LlmDelta,
   ): Promise<LlmReply>;
 }
@@ -140,10 +152,32 @@ export function killLlmChildren(): void {
   liveChildren.clear();
 }
 
+/**
+ * Kill `child` when `signal` fires: a model call nobody is waiting for any more.
+ *
+ * Returns the cleanup a normal exit runs, so a finished call never leaves a listener behind.
+ */
+function cancelOn(
+  signal: AbortSignal | undefined, child: ChildProcess, timer: NodeJS.Timeout,
+  reject: (e: Error) => void,
+): () => void {
+  if (!signal) return () => {};
+  const cancel = (): void => {
+    clearTimeout(timer);
+    liveChildren.delete(child);
+    child.kill('SIGKILL');
+    reject(new Error('cancelled: nobody is waiting for this answer'));
+  };
+  signal.addEventListener('abort', cancel, { once: true });
+  return () => signal.removeEventListener('abort', cancel);
+}
+
 function runProcess(
   bin: string, args: string[], input: string, cwd: string, timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<RunResult> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(new Error('cancelled: nobody is waiting for this answer')); return; }
     const child = spawn(bin, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
     liveChildren.add(child);
     let stdout = '';
@@ -153,12 +187,14 @@ function runProcess(
       child.kill('SIGKILL');
       reject(new Error(`timed out after ${Math.round(timeoutMs / 1000)}s`));
     }, timeoutMs);
+    const uncancel = cancelOn(signal, child, timer, reject);
 
     child.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
     child.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
-    child.on('error', (e) => { clearTimeout(timer); liveChildren.delete(child); reject(e); });
+    child.on('error', (e) => { clearTimeout(timer); uncancel(); liveChildren.delete(child); reject(e); });
     child.on('close', (code) => {
       clearTimeout(timer);
+      uncancel();
       liveChildren.delete(child);
       resolve({ code, stdout, stderr });
     });
@@ -180,9 +216,10 @@ function runProcess(
  */
 function streamProcess(
   bin: string, args: string[], input: string, cwd: string, timeoutMs: number,
-  onLine: (line: string) => void,
+  onLine: (line: string) => void, signal?: AbortSignal,
 ): Promise<RunResult> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(new Error('cancelled: nobody is waiting for this answer')); return; }
     const child = spawn(bin, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
     liveChildren.add(child);
     let stdout = '';
@@ -193,6 +230,7 @@ function streamProcess(
       child.kill('SIGKILL');
       reject(new Error(`timed out after ${Math.round(timeoutMs / 1000)}s`));
     }, timeoutMs);
+    const uncancel = cancelOn(signal, child, timer, reject);
 
     child.stdout.on('data', (d: Buffer) => {
       const chunk = d.toString();
@@ -207,11 +245,12 @@ function streamProcess(
       }
     });
     child.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
-    child.on('error', (e) => { clearTimeout(timer); liveChildren.delete(child); reject(e); });
+    child.on('error', (e) => { clearTimeout(timer); uncancel(); liveChildren.delete(child); reject(e); });
     child.on('close', (code) => {
       clearTimeout(timer);
+      uncancel();
       liveChildren.delete(child);
-      if (pending.trim()) onLine(pending);
+      if (pending.trim() && !signal?.aborted) onLine(pending);
       resolve({ code, stdout, stderr });
     });
 
@@ -232,10 +271,64 @@ async function version(bin: string): Promise<string> {
 /**
  * Claude Code's CLI. The default, and the only one that reports what it spent.
  *
- * `--allowedTools ''` matters: it answers about the excerpt it was handed rather than
- * wandering off to read the repository, which is a much larger trust question than
- * "summarise these forty lines".
+ * It must answer about the excerpt it was handed, not wander off to read the repository,
+ * which is a much larger trust question than "summarise these forty lines". See `ISOLATED`.
  */
+
+/**
+ * The flags that make a claude call a plain model call: no tools, and no configuration from
+ * the repository it is answering about. The other half of that is `emptyDir`.
+ *
+ * This used to be `--allowedTools ''`, and that never meant "no tools": it only adds to an
+ * allow list. Under the bypass permission mode this machine runs by default, the CLI it
+ * started had 37 tools, Bash among them. It also ran the toured repo's hooks, obeyed its
+ * CLAUDE.md, and wrote a session into that repo's history. A project file telling it to end
+ * every reply with one word got that word back (measured 2026-10-07, claude 2.1.293). For a
+ * tool whose whole job is reading other people's code, that hands the toured repo's author
+ * the reader's machine.
+ *
+ *   --safe-mode               no CLAUDE.md, skills, plugins, hooks or MCP
+ *   --setting-sources user    no project or local settings. `--safe-mode` is a troubleshooting
+ *                             switch, not a sandbox: it keeps settings-based auth, so without
+ *                             this a repo's `.claude/settings.json` could still run an
+ *                             `apiKeyHelper` command, or set `ANTHROPIC_BASE_URL` and receive the
+ *                             reader's login and the prompt (review attempt 3, reproduced)
+ *   --tools ''                no built-in tools: the model answers from what it is given
+ *   --strict-mcp-config       no MCP servers, the account's connectors included
+ *   --no-session-persistence  nothing written into any repo's session history
+ *
+ * Measured on the same prompt: 37 tools to 0, hooks to none, a project `apiKeyHelper` that ran
+ * to one that does not, the CLAUDE.md answer to the plain one, and a fifth of the cost. What
+ * still comes from this machine, by design: admin-managed settings, and the permission mode
+ * (inert with no tools). What no longer does: the owner's effort level, so the model runs at
+ * its default effort.
+ */
+const ISOLATED = [
+  '--safe-mode', '--setting-sources', 'user', '--tools', '', '--strict-mcp-config', '--no-session-persistence',
+];
+
+/**
+ * Where every model call runs: an empty directory of its own, never the repository.
+ *
+ * A CLI started inside a repo picks up that repo's configuration (CLAUDE.md, `.claude/`,
+ * `.mcp.json`, codex's AGENTS.md), and each CLI version decides afresh which flags keep
+ * which part of it out. With no tools the working directory serves no purpose, so standing
+ * somewhere empty costs nothing and closes the whole class at once, whatever the version.
+ */
+let emptyDirPath: string | null = null;
+function emptyDir(): string {
+  if (emptyDirPath && fs.existsSync(emptyDirPath)) return emptyDirPath;
+  emptyDirPath = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-llm-'));
+  return emptyDirPath;
+}
+
+const UNKNOWN_OPTION = /unknown option|unrecognized option|unknown argument|unexpected argument/i;
+
+/** The CLI's own words, plus what to do when they mean it is too old for these flags. */
+function cliError(r: RunResult): Error {
+  const hint = UNKNOWN_OPTION.test(r.stderr) ? ' (repo-tour needs a newer Claude Code: run `claude update`)' : '';
+  return new Error(`claude exited ${r.code}: ${r.stderr.trim().slice(0, 200)}${hint}`);
+}
 /**
  * Whether this machine's claude CLI understands `--include-partial-messages`.
  *
@@ -275,15 +368,15 @@ const claude: Provider = {
     return { ok: true, detail: v || bin };
   },
 
-  async run(prompt, { model, cwd, timeoutMs }) {
+  async run(prompt, { model, timeoutMs, signal }) {
     const bin = resolveBin('claude', 'REPO_TOUR_CLAUDE_BIN');
     if (!bin) throw new Error('the claude CLI is not installed');
 
     const r = await runProcess(
-      bin, ['-p', '--model', model, '--output-format', 'json', '--allowedTools', ''],
-      prompt, cwd, timeoutMs,
+      bin, ['-p', '--model', model, '--output-format', 'json', ...ISOLATED],
+      prompt, emptyDir(), timeoutMs, signal,
     );
-    if (r.code !== 0) throw new Error(`claude exited ${r.code}: ${r.stderr.trim().slice(0, 200)}`);
+    if (r.code !== 0) throw cliError(r);
 
     const envelope = JSON.parse(r.stdout) as {
       result?: string;
@@ -311,14 +404,14 @@ const claude: Provider = {
    * The final `result` line carries `total_cost_usd` and `usage`, so AC6's promise — that the
    * figures stay real once this stops being one blob — costs nothing.
    */
-  async runStream(prompt, { model, cwd, timeoutMs }, onDelta) {
+  async runStream(prompt, { model, timeoutMs, signal }, onDelta) {
     const bin = resolveBin('claude', 'REPO_TOUR_CLAUDE_BIN');
     if (!bin) throw new Error('the claude CLI is not installed');
 
     const attempt = async (partial: boolean): Promise<{ r: RunResult; reply: LlmReply; streamed: string }> => {
       const args = ['-p', '--model', model, '--output-format', 'stream-json', '--verbose'];
       if (partial) args.push('--include-partial-messages');
-      args.push('--allowedTools', '');
+      args.push(...ISOLATED);
 
       let streamed = '';
       let final = '';
@@ -326,7 +419,7 @@ const claude: Provider = {
       let outputTokens = 0;
       let usd = 0;
 
-      const r = await streamProcess(bin, args, prompt, cwd, timeoutMs, (line) => {
+      const r = await streamProcess(bin, args, prompt, emptyDir(), timeoutMs, (line) => {
         let d: StreamLine;
         try { d = JSON.parse(line) as StreamLine; }
         catch { return; }  // hook chatter and blank frames are not our business
@@ -354,7 +447,7 @@ const claude: Provider = {
           outputTokens = d.usage?.output_tokens ?? 0;
           usd = d.total_cost_usd ?? 0;
         }
-      });
+      }, signal);
 
       const text = (final || streamed).trim();
       return { r, reply: { text, inputTokens, outputTokens, usd, metered: true }, streamed };
@@ -369,14 +462,18 @@ const claude: Provider = {
       // Deliberately NOT matching the flag's own name: a CLI that echoes its argv in an error
       // banner would turn any transient failure into a permanent, process-lifetime downgrade
       // to whole-message streaming, with no way back short of a restart.
-      if (!/unknown option|unrecognized option|unknown argument|unexpected argument/i.test(out.r.stderr)) {
-        throw new Error(`claude exited ${out.r.code}: ${out.r.stderr.trim().slice(0, 200)}`);
-      }
+      if (!UNKNOWN_OPTION.test(out.r.stderr)) throw cliError(out.r);
       partialMessagesSupported = false;
     }
 
     const out = await attempt(false);
-    if (out.r.code !== 0) throw new Error(`claude exited ${out.r.code}: ${out.r.stderr.trim().slice(0, 200)}`);
+    if (out.r.code !== 0) {
+      // Refused without --include-partial-messages too, so that flag was never the problem (an
+      // older CLI that lacks `--safe-mode`, say). Forget the verdict rather than keep a wrong
+      // one for the life of the process.
+      if (UNKNOWN_OPTION.test(out.r.stderr)) partialMessagesSupported = null;
+      throw cliError(out.r);
+    }
     // The non-partial path never called onDelta, so the caller has seen nothing yet.
     if (!out.streamed && out.reply.text) onDelta(out.reply.text);
     return out.reply;
@@ -404,17 +501,20 @@ const codex: Provider = {
     return { ok: true, detail: v || bin };
   },
 
-  async run(prompt, { cwd, timeoutMs }) {
+  async run(prompt, { timeoutMs, signal }) {
     const bin = resolveBin('codex', 'REPO_TOUR_CODEX_BIN');
     if (!bin) throw new Error('the codex CLI is not installed');
 
     const out = path.join(os.tmpdir(), `repo-tour-codex-${process.pid}-${Date.now()}.txt`);
+    // In an empty directory, like claude: out of reach of the toured repo's AGENTS.md. Its
+    // read-only sandbox is still a shell, which is not "no tools" (a follow-up in the ledger).
+    const where = emptyDir();
     try {
       const r = await runProcess(
         bin,
         ['exec', '--ephemeral', '--skip-git-repo-check', '--sandbox', 'read-only',
-          '-C', cwd, '--output-last-message', out, '-'],
-        prompt, cwd, timeoutMs,
+          '-C', where, '--output-last-message', out, '-'],
+        prompt, where, timeoutMs, signal,
       );
       const text = fs.existsSync(out) ? fs.readFileSync(out, 'utf8').trim() : '';
       if (r.code !== 0 && !text) {
@@ -455,12 +555,15 @@ const ollama: Provider = {
     }
   },
 
-  async run(prompt, { model, timeoutMs }) {
+  async run(prompt, { model, timeoutMs, signal }) {
     const res = await fetch(`${OLLAMA_URL()}/api/generate`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ model, prompt, stream: false }),
-      signal: AbortSignal.timeout(timeoutMs),
+      // AbortSignal.any arrived in Node 20.3; without it, the timeout alone still bounds the call.
+      signal: signal && typeof AbortSignal.any === 'function'
+        ? AbortSignal.any([AbortSignal.timeout(timeoutMs), signal])
+        : AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) throw new Error(`ollama responded ${res.status}`);
     const body = await res.json() as { response?: string; prompt_eval_count?: number; eval_count?: number };
@@ -520,13 +623,14 @@ export async function runLlm(
  */
 export async function runLlmStream(
   prompt: string, choice: LlmChoice, cwd: string, onDelta: LlmDelta, timeoutMs = 300_000,
+  signal?: AbortSignal,
 ): Promise<LlmReply> {
   const provider = providerById(choice.provider);
   if (!provider) throw new Error(`no such provider: ${choice.provider}`);
   if (provider.runStream) {
-    return provider.runStream(prompt, { model: choice.model, cwd, timeoutMs }, onDelta);
+    return provider.runStream(prompt, { model: choice.model, cwd, timeoutMs, signal }, onDelta);
   }
-  const reply = await provider.run(prompt, { model: choice.model, cwd, timeoutMs });
+  const reply = await provider.run(prompt, { model: choice.model, cwd, timeoutMs, signal });
   if (reply.text) onDelta(reply.text);
   return reply;
 }

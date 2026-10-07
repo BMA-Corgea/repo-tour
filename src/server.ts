@@ -343,7 +343,17 @@ export interface ServerOptions {
   model?: string;
   interpret?: boolean;
   statePath?: string;
+  /** How often a silent Ask stream sends a heartbeat. Tests shorten it; nothing else should. */
+  heartbeatMs?: number;
 }
+
+/**
+ * The Ask stream's heartbeat interval.
+ *
+ * Under half of Firefox's five-second window (see `askStream`), so a beat always lands
+ * inside it, whatever moment the network changes.
+ */
+const HEARTBEAT_MS = 2_000;
 
 export class RepoTourServer {
   /**
@@ -700,6 +710,10 @@ export class RepoTourServer {
       // Nothing between this and the browser should be holding the answer back.
       'x-accel-buffering': 'no',
     });
+    // A byte now, not at the first event. Headers alone are not enough: Firefox resolves
+    // `fetch()` only at the first BODY byte, so until then the panel cannot tell a slow answer
+    // from a dead server (review attempt 3, measured in Firefox 157).
+    res.write(': open\n\n');
     const send = (kind: string, data: unknown): void => {
       if (res.writableEnded) return;
       res.write(`event: ${kind}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -761,6 +775,34 @@ export class RepoTourServer {
     let outputTokens = 0;
     let usd = 0;
 
+    /**
+     * A heartbeat, because a silent stream is a dead one.
+     *
+     * Between a lookup and the next words the model can think for half a minute, and nothing
+     * crosses the wire. When the machine's network changes (a Docker container restarting, a
+     * VPN rebinding), Firefox closes every connection that carries no traffic over the next
+     * five seconds (`network.http.network_changed.timeout`). This stream died exactly that way
+     * on 2026-10-07: the reader got "Error in input stream" while this loop went on to finish,
+     * and pay for, an answer nobody received. A comment line every two seconds is traffic, and
+     * the panel skips any block without an `event:` line.
+     */
+    const heartbeat = setInterval(() => {
+      if (!res.writableEnded && !res.destroyed) res.write(': working\n\n');
+    }, this.opts.heartbeatMs ?? HEARTBEAT_MS);
+    heartbeat.unref();
+
+    /**
+     * The reader left, so stop working for them.
+     *
+     * A closed tab or a dropped connection used to change nothing here: the loop ran its
+     * remaining lookups and wrote the answer into a dead socket, at full price. `close` also
+     * fires after we end the response ourselves; only a close BEFORE that means nobody is there.
+     */
+    const reader = new AbortController();
+    res.on('close', () => { if (!res.writableFinished) reader.abort(); });
+    // Gone before there was anyone listening for it: `close` will not fire again.
+    if (res.destroyed) reader.abort();
+
     try {
       // Bounded twice over, and the second bound is not decoration: the first version of this
       // loop only ended when a reply was NOT a request, so a model that asked for a file every
@@ -768,12 +810,13 @@ export class RepoTourServer {
       // there are lookups, so there is always a turn left in which to actually answer.
       const CEILING = MAX_FETCH_HOPS + 1;
       for (let hop = 0; hop <= CEILING; hop++) {
+        if (reader.signal.aborted) break;
         const gate = createReplyGate();
         const prompt = buildAskPrompt(messages, { ...ctx, fetched });
         const reply = await runLlmStream(prompt, tutor, root ?? process.cwd(), (t) => {
           const safe = gate.push(t);
           if (safe) send('delta', { text: safe });
-        });
+        }, undefined, reader.signal);
 
         const request = parseFetchRequest(reply.text);
         inputTokens += reply.inputTokens;
@@ -863,12 +906,15 @@ export class RepoTourServer {
       }
     } catch (e) {
       // The provider's own words. "Could not launch the claude CLI" tells the reader what to
-      // fix; "request failed" tells them nothing.
-      fail(e instanceof Error ? (e.message.split('\n')[0] ?? e.message) : String(e));
+      // fix; "request failed" tells them nothing. A call killed because the reader left has
+      // nobody to tell.
+      if (!reader.signal.aborted) fail(e instanceof Error ? (e.message.split('\n')[0] ?? e.message) : String(e));
+    } finally {
+      clearInterval(heartbeat);
     }
     // The backstop. Nothing above should reach here without having finished, but a stream
     // that closes silently is invisible to the reader and expensive to have already paid for.
-    fail('the tutor stopped without answering');
+    if (!reader.signal.aborted) fail('the tutor stopped without answering');
     if (!res.writableEnded) res.end();
   }
 
