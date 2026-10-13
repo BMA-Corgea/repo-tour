@@ -73,6 +73,22 @@ function runNode(script: string, opts: { cwd: string; env?: NodeJS.ProcessEnv })
   }
 }
 
+/**
+ * Every file under this checkout's `dist/`, by relative path: inode, size and mtime. Deleting or
+ * rebuilding `dist/` in place changes it. No test may do either: GONS runs the main checkout's
+ * `dist/cli.js` and reads its `dist/interpret.js`, so a suite run there would take its tours down.
+ */
+function distFingerprint(): Record<string, string> {
+  const dist = path.join(REPO_ROOT, 'dist');
+  const out: Record<string, string> = {};
+  if (!fs.existsSync(dist)) return out;
+  for (const rel of fs.readdirSync(dist, { recursive: true })) {
+    const st = fs.statSync(path.join(dist, rel));
+    if (st.isFile()) out[rel] = `${st.ino}:${st.size}:${st.mtimeMs}`;
+  }
+  return out;
+}
+
 /** What `fn` threw, as a plain object; or, when it threw nothing, what it returned instead. */
 function thrown(fn: () => string): { code?: string; message: string } {
   try {
@@ -86,6 +102,7 @@ function thrown(fn: () => string): { code?: string; message: string } {
 
 let consumerDir: string;    // "a directory outside the repo" — node_modules/repo-tour symlinked in
 let fixtureRoot: string;    // a tiny real git repo for the digest() smoke test (AC4)
+let packWork: string;       // holds the temp copy of the package that `npm pack` runs in (AC3)
 let packDest: string;       // where `npm pack` puts its tarball (AC3)
 let tarballConsumer: string; // a second, separate fresh dir the tarball gets installed into (AC3)
 
@@ -101,12 +118,13 @@ beforeAll(() => {
   write(path.join(fixtureRoot, 'src/app.tsx'), 'export function Hello(): null { return null; }\n');
   commitAll(fixtureRoot, 'initial');
 
+  packWork = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-pack-work-'));
   packDest = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-pack-'));
   tarballConsumer = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-tarball-consumer-'));
 }, 30_000);
 
 afterAll(() => {
-  for (const dir of [consumerDir, fixtureRoot, packDest, tarballConsumer]) {
+  for (const dir of [consumerDir, fixtureRoot, packWork, packDest, tarballConsumer]) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -367,12 +385,30 @@ console.log('CONSUMER_SMOKE_OK files=' + result.manifest.counts.files + ' parsed
 });
 
 describe('AC3 — a file:/git-style dependency gets dist/ with no manual build', () => {
-  it('npm pack builds dist/ via prepare, and npm install from the tarball yields it too', () => {
+  it('npm pack of a copy with no dist/ builds it via prepare, and the installed tarball imports its skins', () => {
     // Real npm, real filesystem — this is what a git dependency install and `npm publish`
-    // both exercise; a file: link is the ONE case this does not cover (prepare does not run
-    // for file: links), which is why dist/ is still committed-built for that path (README).
+    // both exercise, and what the VS Code tutorial's `npm run package` does to carry the core.
+    // A file: link is the ONE case this does not cover: prepare does not run for a link, so
+    // the linked checkout must already be built (README).
+    //
+    // It packs a temp copy, never this checkout. Packing here would run prepare, which
+    // rebuilds this checkout's own dist/ in place. And the copy has no dist/ at all, so a
+    // dist/ in the tarball can only be one prepare built this run: a stale dist/ left on disk
+    // cannot stand in for it, which is how the T-11 version stayed green with prepare gone.
+    const before = distFingerprint();
+
+    // The working tree, not HEAD: an uncommitted package.json edit must reach the copy.
+    // It carries the manifest, the build's inputs, and every shipped entry except dist/.
+    const pkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8')) as { files: string[] };
+    const copy = path.join(packWork, 'repo-tour');
+    for (const entry of ['package.json', 'tsconfig.json', 'src', ...pkg.files.filter((f) => f !== 'dist')]) {
+      fs.cpSync(path.join(REPO_ROOT, entry), path.join(copy, entry), { recursive: true });
+    }
+    expect(fs.existsSync(path.join(copy, 'dist')), 'the copy must start with no dist/').toBe(false);
+    fs.symlinkSync(path.join(REPO_ROOT, 'node_modules'), path.join(copy, 'node_modules'), 'dir');
+
     const pack = spawnSync('npm', ['pack', '--pack-destination', packDest, '--json'], {
-      cwd: REPO_ROOT,
+      cwd: copy,
       encoding: 'utf8',
     });
 
@@ -384,8 +420,8 @@ describe('AC3 — a file:/git-style dependency gets dist/ with no manual build',
 
     // The tarball itself must contain a built dist/, not just source.
     const packedPaths = packed[0]!.files.map((f) => f.path);
-    expect(packedPaths.some((p) => p === 'dist/digest.js')).toBe(true);
-    expect(packedPaths.some((p) => p === 'dist/skins.js')).toBe(true);
+    expect(packedPaths, 'no dist/ in the tarball: did package.json lose its prepare script?').toContain('dist/digest.js');
+    expect(packedPaths).toContain('dist/skins.js');
     expect(packedPaths.some((p) => p.startsWith('src/'))).toBe(false);
 
     write(path.join(tarballConsumer, 'package.json'), JSON.stringify({ name: 'tarball-consumer', private: true, type: 'module' }));
@@ -399,6 +435,16 @@ describe('AC3 — a file:/git-style dependency gets dist/ with no manual build',
     expect(fs.existsSync(installedDist)).toBe(true);
     expect(fs.existsSync(path.join(installedDist, 'skins.js'))).toBe(true);
     expect(fs.readdirSync(installedDist).length).toBeGreaterThan(0);
+
+    // The import a consumer makes, from the installed copy, with its packaged asset root:
+    // dist/ and assets/ arrived together and find each other.
+    const smoke = runNode(`
+const { baseCss, alternateCss } = await import('repo-tour/skins');
+console.log('TARBALL_SKINS base=' + baseCss().length + ' alt=' + alternateCss().length);
+`, { cwd: tarballConsumer, env: { REPO_TOUR_ASSETS: '' } });
+    expect(smoke.stdout, smoke.stderr).toMatch(/TARBALL_SKINS base=[1-9]\d* alt=[1-9]\d*/);
+
+    expect(distFingerprint(), 'the checkout\'s own dist/ changed: pack a temp copy, never REPO_ROOT').toEqual(before);
   }, 120_000);
 });
 
