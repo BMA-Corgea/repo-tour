@@ -179,8 +179,10 @@ describe('T-16 AC1 — a module-pattern wrapper\'s body declarations become symb
     ].join('\n');
     const ex = await extractOf(source, 'typescript', 'ts');
     expect(names(ex), 'an exported module-pattern wrapper was not entered').toEqual(['app', 'init']);
-    expect(ex.symbols[0]).toMatchObject({ name: 'app', kind: 'variable', exported: true });
-    expect(ex.symbols[1]).toMatchObject({ name: 'init', kind: 'function', exported: false });
+    expect(ex.symbols[0]!.exported, 'the exported wrapper lost its export').toBe(true);
+    expect(ex.symbols[1]!.exported, 'a declaration inside an exported wrapper became an export').toBe(false);
+    expect(ex.symbols[0]).toMatchObject({ name: 'app', kind: 'variable' });
+    expect(ex.symbols[1]).toMatchObject({ name: 'init', kind: 'function' });
   });
 
   it('a multi-declarator statement: each declarator\'s wrapper is entered on its own', async () => {
