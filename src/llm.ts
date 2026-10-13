@@ -342,7 +342,7 @@ const ISOLATED = [
  * `tour` or a `digest`, and `./llm` is a package entry point, so a listener here would change
  * every program that imports it. A program that stops on a signal calls `killLlmChildren`.
  */
-/** Every directory this process made and has not removed yet, and the files its call may leave. */
+// Every directory this process made and has not removed yet, with the files its call may leave.
 const madeHere = new Map<string, readonly string[]>();
 let exitHooked = false;
 
@@ -544,6 +544,9 @@ const claude: Provider = {
   },
 };
 
+/** The one file a codex call writes into its directory: its final message. */
+const CODEX_ANSWER = 'answer.txt';
+
 /**
  * OpenAI's Codex CLI.
  *
@@ -551,9 +554,6 @@ const claude: Provider = {
  * path to hand it — and it reports no usage, which is recorded as unmetered rather than
  * guessed at.
  */
-/** The one file a codex call writes into its directory: its final message. */
-const CODEX_ANSWER = 'answer.txt';
-
 const codex: Provider = {
   id: 'codex',
   label: 'Codex',
