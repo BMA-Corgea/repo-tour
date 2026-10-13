@@ -67,9 +67,16 @@ export function baseCss(): string {
  *
  * A row with no file is skipped rather than throwing: `system` and `dark` are handled by the
  * base, and a half-added skin should cost you a missing option, not a page that will not build.
+ *
+ * A missing skins FOLDER is different: it means the asset root is wrong (a mistyped
+ * `REPO_TOUR_ASSETS`, say), and skipping every row would return "" and an unstyled page with
+ * no error. Listing the folder first throws instead, naming it, as `baseCss()` does. (Listing
+ * needs read permission on the folder, where `baseCss()` needs only search permission; every
+ * ordinary install grants both.)
  */
 export function alternateCss(): string {
   const dir = skinsDir();
+  fs.readdirSync(dir);
   const parts: string[] = [];
   for (const skin of SKINS) {
     const file = path.join(dir, `${skin.name}.css`);
