@@ -371,6 +371,7 @@ async function emptyDir<T>(call: (dir: string) => Promise<T>, leaves: readonly s
 function leave(dir: string): void {
   if (!madeHere.has(dir)) return;
   for (const name of madeHere.get(dir) ?? []) {
+    if (name !== path.basename(name)) continue;   // a file in the directory, never a path out of it
     try { fs.rmSync(path.join(dir, name), { force: true }); } catch { /* the rmdir below tells */ }
   }
   try {
@@ -594,6 +595,9 @@ const codex: Provider = {
       if (r.code !== 0 && !text) {
         throw new Error(`codex exited ${r.code}: ${r.stderr.trim().slice(0, 200)}`);
       }
+      // Killed while it closed: it had exited 0, but `close` waited on its pipes, and
+      // killLlmChildren took the directory, answer and all, in between. Killed means failed.
+      if (!madeHere.has(where)) throw new Error('cancelled: the process is stopping');
       return { text, inputTokens: 0, outputTokens: 0, usd: 0, metered: false };
     }, [CODEX_ANSWER]);
   },
