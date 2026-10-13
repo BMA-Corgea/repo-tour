@@ -439,8 +439,12 @@ describe('AC3 — a file:/git-style dependency gets dist/ with no manual build',
     // The import a consumer makes, from the installed copy, with its packaged asset root:
     // dist/ and assets/ arrived together and find each other.
     const smoke = runNode(`
-const { baseCss, alternateCss } = await import('repo-tour/skins');
-console.log('TARBALL_SKINS base=' + baseCss().length + ' alt=' + alternateCss().length);
+try {
+  const { baseCss, alternateCss } = await import('repo-tour/skins');
+  console.log('TARBALL_SKINS base=' + baseCss().length + ' alt=' + alternateCss().length);
+} catch (err) {
+  console.log('TARBALL_SKINS_FAILED ' + err.message);
+}
 `, { cwd: tarballConsumer, env: { REPO_TOUR_ASSETS: '' } });
     expect(smoke.stdout, smoke.stderr).toMatch(/TARBALL_SKINS base=[1-9]\d* alt=[1-9]\d*/);
 
