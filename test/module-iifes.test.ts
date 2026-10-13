@@ -595,13 +595,13 @@ describe('T-16 AC3 — the functions inside become build steps and tour stops', 
   });
 
   it('guard: a generated script of 60,000 variables still plans in under a second', async () => {
-    // T-16 review N2: comparing every variable with every candidate took 8 to 19 s to plan
-    // this file, where main and the one-sort check take tens of milliseconds. Half the
-    // variables are statements of their own. The other half are names in ONE statement, which
-    // all share its range, so a check that scanned only the candidates starting inside each
-    // variable would still compare every pair.
-    const own = Array.from({ length: 30_000 }, (_, i) => `var v${i} = {\n  a: ${i},\n};`);
-    const shared = Array.from({ length: 30_000 }, (_, i) => `  w${i} = ${i}`);
+    // T-16 review N2: comparing every variable with every candidate took seconds to plan a
+    // file like this, where main and the one-sort check take tens of milliseconds. 10,000
+    // variables are statements of their own. The other 50,000 are names in ONE statement,
+    // which all share its range, so a check that scanned only the candidates starting inside
+    // each variable would still compare almost every pair.
+    const own = Array.from({ length: 10_000 }, (_, i) => `var v${i} = {\n  a: ${i},\n};`);
+    const shared = Array.from({ length: 50_000 }, (_, i) => `  w${i} = ${i}`);
     const source = `${own.join('\n')}\nvar\n${shared.join(',\n')};\n`;
     const root = tmp('repo-tour-modules-scale-');
     try {
