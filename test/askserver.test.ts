@@ -110,6 +110,8 @@ let input = '';
 process.stdin.on('data', (d) => { input += d; });
 process.stdin.on('end', () => setTimeout(reply, slow));
 function reply() {
+  // T-20 review: a CLI that leaves something in the directory it stood in, when the fixture says.
+  if (fs.existsSync(dir + '/litter')) fs.writeFileSync(process.cwd() + '/litter.txt', 'left behind');
   if (text === '__EXIT1__') { process.stderr.write('boom\\n'); process.exit(1); }
   // The one-shot shape \`run\` asks for: a single JSON envelope.
   if (process.argv[process.argv.indexOf('--output-format') + 1] === 'json') {
@@ -150,7 +152,7 @@ beforeEach(() => {
   fs.rmSync(state, { force: true });
   fs.rmSync(path.join(path.dirname(state), 'llm.json'), { force: true });
   fs.rmSync(path.join(base, 'slow'), { force: true });
-  for (const f of ['reject-flag', 'attempts.jsonl', 'where.json', 'cwd.json']) {
+  for (const f of ['reject-flag', 'attempts.jsonl', 'where.json', 'cwd.json', 'litter']) {
     fs.rmSync(path.join(base, f), { force: true });
   }
 });
@@ -1115,6 +1117,11 @@ describe('T-20: no directory outlives the process (AC4)', () => {
     child.stderr!.on('data', (d: Buffer) => { out += d.toString(); });
     const exited = new Promise<Exit>((resolve) => { child.on('exit', (code, signal) => resolve({ code, signal })); });
     let pid: number | null = null;
+    // Another process's directories, the owner's live server among them: the stop's
+    // killLlmChildren must take only what this server made (review suggestion 1).
+    const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-llm-'));
+    const full = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-llm-'));
+    fs.writeFileSync(path.join(full, 'theirs.txt'), 'another process stands here');
     try {
       const listening = /running at http:\/\/127\.0\.0\.1:(\d+)/;
       expect(await until(() => listening.test(out), 30_000), `serve never came up: ${out}`).toBe(true);
@@ -1133,10 +1140,17 @@ describe('T-20: no directory outlives the process (AC4)', () => {
       const exit = await within(exited, 10_000);
       expect(exit, `serve did not stop cleanly on one Ctrl-C: ${out}`).toEqual({ code: 0, signal: null });
       expect(fs.existsSync(seen.cwd), `Ctrl-C on serve left the in-flight call's directory behind: ${seen.cwd}`).toBe(false);
+      expect(fs.existsSync(empty), `serve's stop removed another process's empty directory: ${empty}`).toBe(true);
+      expect(fs.existsSync(path.join(full, 'theirs.txt')), `serve's stop emptied another process's directory: ${full}`)
+        .toBe(true);
     } finally {
       if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
       killFake(pid);
       fs.rmSync(path.join(base, 'slow'), { force: true });
+      fs.rmSync(path.join(full, 'theirs.txt'), { force: true });
+      for (const d of [empty, full]) {
+        try { fs.rmdirSync(d); } catch { /* already gone, which the assertions above report */ }
+      }
     }
   }, 60_000);
 });
@@ -1199,6 +1213,111 @@ describe('T-20: codex writes its answer inside its own directory (AC6)', () => {
       expect(fs.existsSync(seen.cwd), `codex's directory outlived the call: ${seen.cwd}`).toBe(false);
     } finally {
       delete process.env['REPO_TOUR_CODEX_BIN'];
+    }
+  }, 30_000);
+});
+
+// ---------------------------------------------------------------- T-20 review round 1
+
+describe('T-20 review: the cleanup is exact on every path', () => {
+  it('rmdir only: a directory the CLI left something in stays, and so does what it left (nit 2)', async () => {
+    // Defence in depth. A recursive remove here, with any bug that handed it the wrong path,
+    // would delete whatever that path held: the toured repo, say.
+    const { runLlm } = await import('../src/llm.js');
+    scriptReplies(['answered']);
+    fs.writeFileSync(path.join(base, 'litter'), '');
+    const tried: Seen[] = [];
+    try {
+      expect((await runLlm('q', { provider: 'claude', model: 'm' }, repo, 10_000)).text, 'the call did not answer')
+        .toBe('answered');
+      tried.push(...attempts());
+      expect(tried, 'expected exactly one spawn').toHaveLength(1);
+      const { cwd } = tried[0]!;
+      expect(fs.existsSync(cwd), `a directory that was not empty was removed: ${cwd}`).toBe(true);
+      expect(fs.existsSync(path.join(cwd, 'litter.txt')), `what the CLI left was removed with it: ${cwd}`).toBe(true);
+    } finally {
+      for (const t of tried) {
+        fs.rmSync(path.join(t.cwd, 'litter.txt'), { force: true });
+        try { fs.rmdirSync(t.cwd); } catch { /* already gone, which the assertions above report */ }
+      }
+    }
+  }, 30_000);
+
+  it('a killed codex call takes its answer file and its directory with it at once, and fails (nit 5)', async () => {
+    // A codex that has written its answer but not exited. On pr's signal path the process dies
+    // straight after killLlmChildren, so whatever that leaves stays: here, the model's answer.
+    const record = path.join(base, 'codex-sleeper.json');
+    fs.rmSync(record, { force: true });
+    const script = path.join(base, 'fake-codex-sleeper');
+    fs.writeFileSync(script, `#!/usr/bin/env node
+const fs = require('fs');
+const args = process.argv.slice(2);
+if (args.includes('--version')) { process.stdout.write('fake codex 1.0\\n'); process.exit(0); }
+const out = args[args.indexOf('--output-last-message') + 1];
+let input = '';
+process.stdin.on('data', (d) => { input += d; });
+process.stdin.on('end', () => {
+  fs.writeFileSync(out, 'an answer nobody is waiting for');
+  fs.writeFileSync(${JSON.stringify(record)}, JSON.stringify({ pid: process.pid, out }));
+  setTimeout(() => process.exit(0), 30000);   // answered, and not leaving
+});
+`);
+    fs.chmodSync(script, 0o755);
+    process.env['REPO_TOUR_CODEX_BIN'] = script;
+    const { runLlm, killLlmChildren } = await import('../src/llm.js');
+    const settled = runLlm('q', { provider: 'codex', model: 'default' }, repo, 30_000)
+      .then((r) => ({ answered: r.text }), (e: unknown) => ({ failed: (e as Error).message }));
+    let seen: { pid: number; out: string } | null = null;
+    try {
+      expect(await until(() => {
+        try { seen = JSON.parse(fs.readFileSync(record, 'utf8')) as { pid: number; out: string }; return true; }
+        catch { return false; }
+      }, 10_000), 'the fake codex never wrote its answer').toBe(true);
+      const { out } = seen!;
+      expect(fs.existsSync(out), 'the answer file is not there to begin with').toBe(true);
+
+      killLlmChildren();
+      expect.soft(fs.existsSync(out), `killLlmChildren left the model's answer behind: ${out}`).toBe(false);
+      expect.soft(fs.existsSync(path.dirname(out)), `killLlmChildren left the call's directory behind: ${path.dirname(out)}`)
+        .toBe(false);
+      expect(await settled, 'a killed call returned its answer, though nobody is waiting for it')
+        .toEqual({ failed: expect.stringMatching(/codex exited/) });
+    } finally {
+      delete process.env['REPO_TOUR_CODEX_BIN'];
+      const pid = (seen as { pid: number } | null)?.pid;
+      if (pid && pid > 1 && alive(pid)) {
+        try { if (fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes(script)) process.kill(pid, 'SIGKILL'); }
+        catch { /* gone */ }
+      }
+      await settled;
+    }
+  }, 30_000);
+
+  it('a stale leave never touches a path this process no longer owns (nit 6)', async () => {
+    // killLlmChildren removes the directory and forgets it. The call's own cleanup runs a few
+    // ms later, when the killed child closes. If the same name has been drawn again in between,
+    // that directory belongs to someone else now.
+    const { runLlm, killLlmChildren } = await import('../src/llm.js');
+    scriptReplies(['nobody will read this']);
+    fs.writeFileSync(path.join(base, 'slow'), '10000');
+    fs.rmSync(path.join(base, 'pid'), { force: true });
+    const settled = runLlm('q', { provider: 'claude', model: 'm' }, repo, 30_000).then(() => 'answered', () => 'failed');
+    let impostor: string | null = null;
+    let pid: number | null = null;
+    try {
+      expect(await until(() => whereNow() !== null, 10_000), 'the fake claude never started').toBe(true);
+      pid = await fakePid();
+      const { cwd } = whereNow()!;
+      killLlmChildren();
+      expect(fs.existsSync(cwd), `killLlmChildren did not remove the call's directory: ${cwd}`).toBe(false);
+      fs.mkdirSync(cwd);           // the impostor: the same name, drawn again by someone else
+      impostor = cwd;
+      await settled;
+      expect(fs.existsSync(impostor), `the call's late cleanup removed a directory it no longer owns: ${impostor}`).toBe(true);
+    } finally {
+      killFake(pid);
+      if (impostor) { try { fs.rmdirSync(impostor); } catch { /* already gone, which the assertion above reports */ } }
+      await settled;
     }
   }, 30_000);
 });

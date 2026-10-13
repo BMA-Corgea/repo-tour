@@ -129,7 +129,16 @@ const [root, sha, mode] = process.argv.slice(2);
 if (mode === 'server') {
   process.on('SIGINT', () => { console.log('graceful'); setTimeout(() => process.exit(0), 100); });
 }
+const counts = () => process.listenerCount('SIGINT') + ',' + process.listenerCount('SIGTERM');
+console.log('COUNTS before ' + counts());
 const side = await sideAt(root, sha, ['a.ts']);
+console.log('COUNTS after ' + counts());
+if (mode === 'dispose') {
+  // A side whose tour has finished: it must stop listening, or every tour leaks two listeners.
+  side.dispose();
+  console.log('COUNTS disposed ' + counts());
+  process.exit(0);
+}
 console.log('SIDE ' + side.dir);
 // A model call in flight: something is keeping the process busy.
 setInterval(() => {}, 1000);
@@ -161,6 +170,24 @@ setInterval(() => {}, 1000);
         .not.toBeNull();
       expect(exit, 'it ended, but not the way a Ctrl-C ends a process').toEqual({ code: null, signal: 'SIGINT' });
       expect(fs.existsSync(held.dir), `the side's tree outlived the Ctrl-C: ${held.dir}`).toBe(false);
+    } finally {
+      stop(child);
+    }
+  }, 60_000);
+
+  it('a disposed side stops listening: one listener each while it lives, none after (review nit 4)', async () => {
+    const child = start(['--import', 'tsx', script, root, sha, 'dispose'], {
+      cwd: REPO_ROOT, env: { TMPDIR: fresh('ac9-tmp') },
+    });
+    try {
+      const exit = await within(child.exited, 30_000);
+      expect(exit, `the child did not finish: ${child.out()}`).toEqual({ code: 0, signal: null });
+      const count = (when: string): string | undefined => new RegExp(`^COUNTS ${when} (\\d+,\\d+)$`, 'm').exec(child.out())?.[1];
+      const [before, after, disposed] = [count('before'), count('after'), count('disposed')];
+      expect(before, `the child printed no counts: ${child.out()}`).toBeDefined();
+      const plusOne = before!.split(',').map((n) => String(Number(n) + 1)).join(',');
+      expect(after, 'a live side should add one SIGINT and one SIGTERM listener').toBe(plusOne);
+      expect(disposed, 'a disposed side still listens for SIGINT/SIGTERM, so every tour leaks listeners').toBe(before);
     } finally {
       stop(child);
     }
@@ -326,6 +353,12 @@ describe('T-20 AC10: `repo-tour pr` as GONS runs it, and stopped by a signal mid
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     it(`one ${signal} mid-call ends it by ${signal}, stops its model call, and leaves nothing`, async () => {
       const { child, tmp } = startPr(20_000);
+      // Another process's directories in the same temp dir (the owner's live server stands in
+      // an empty one): killLlmChildren on this path must take only what this process made.
+      const empty = fs.mkdtempSync(path.join(tmp, 'repo-tour-llm-'));
+      const full = fs.mkdtempSync(path.join(tmp, 'repo-tour-llm-'));
+      fs.writeFileSync(path.join(full, 'theirs.txt'), 'another process stands here');
+      const ours = (): string[] => leftovers(tmp).filter((n) => n !== path.basename(empty) && n !== path.basename(full));
       let pid: number | null = null;
       try {
         // A model call in flight, while both PR sides are alive.
@@ -333,7 +366,7 @@ describe('T-20 AC10: `repo-tour pr` as GONS runs it, and stopped by a signal mid
         expect(asked, `no model call started: ${child.out()}`).toBe(true);
         pid = fakePid();
         expect(pid, 'the fake claude recorded no pid').not.toBeNull();
-        expect(leftovers(tmp).filter((n) => !n.startsWith('repo-tour-llm-')), 'both PR sides should be alive during the call')
+        expect(ours().filter((n) => !n.startsWith('repo-tour-llm-')), 'both PR sides should be alive during the call')
           .toHaveLength(2);
 
         child.proc.kill(signal);
@@ -343,7 +376,10 @@ describe('T-20 AC10: `repo-tour pr` as GONS runs it, and stopped by a signal mid
         if (exit) expect.soft(exit, `it ended, but not by ${signal} as it would with no handler`).toEqual({ code: null, signal });
         const stopped = await until(() => !running(pid!), 2000);
         expect.soft(stopped, `its model call (pid ${pid}) is still running after one ${signal}, and still paying`).toBe(true);
-        expect.soft(leftovers(tmp), `${signal} left temp entries behind`).toEqual([]);
+        expect.soft(ours(), `${signal} left temp entries behind`).toEqual([]);
+        expect.soft(fs.existsSync(empty), `${signal} removed another process's empty directory: ${empty}`).toBe(true);
+        expect.soft(fs.existsSync(path.join(full, 'theirs.txt')), `${signal} emptied another process's directory: ${full}`)
+          .toBe(true);
       } finally {
         stop(child);
         killFakes();
@@ -399,6 +435,35 @@ process.on('exit', () => { fs.writeFileSync(process.env.SIGNAL_PROBE_OUT, JSON.s
     expect(seen, 'the probe wrote no record, so this run proves nothing').not.toBeNull();
     expect(seen, 'digest gave up Node\'s own Ctrl-C: it listens for a signal, and its extraction never yields to the loop that would run the listener')
       .toEqual([]);
+  }, 90_000);
+
+  it('tour keeps it too: its extraction is digest\'s, offline here (review nit 1)', async () => {
+    const { fix } = await gonsFixture();
+    const view = path.join(fresh('view'), 'tour.html');
+    // --no-interpret asks no model (cached meanings only); --no-write keeps it out of the library.
+    const { exit, seen, out } = await probed(['tour', fix, '--no-interpret', '--no-write', '--view', view]);
+    expect(exit, `tour did not finish cleanly: ${out}`).toEqual({ code: 0, signal: null });
+    expect(seen, 'the probe wrote no record, so this run proves nothing').not.toBeNull();
+    expect(seen, 'tour gave up Node\'s own Ctrl-C: it listens for a signal').toEqual([]);
+  }, 90_000);
+
+  it('plan keeps it too: offline and deterministic without --interpret (review nit 1)', async () => {
+    const { fix } = await gonsFixture();
+    // --no-write keeps the fixture's checkpoint as it is; plan.json still lands in the fixture.
+    const { exit, seen, out } = await probed(['plan', fix, '--no-write']);
+    expect(exit, `plan did not finish cleanly: ${out}`).toEqual({ code: 0, signal: null });
+    expect(seen, 'the probe wrote no record, so this run proves nothing').not.toBeNull();
+    expect(seen, 'plan gave up Node\'s own Ctrl-C: it listens for a signal').toEqual([]);
+  }, 90_000);
+
+  it('a pr with nothing changed, where no side ever exists, has the CLI\'s own handler and nothing else (review nit 3)', async () => {
+    const { fix, sha1 } = await gonsFixture();
+    const { exit, seen, out } = await probed(['pr', fix, '--base', sha1, '--head', sha1]);
+    expect(exit, `the empty PR tour did not finish cleanly: ${out}`).toEqual({ code: 0, signal: null });
+    expect(out, 'this PR was meant to change nothing').toContain('nothing changed');
+    // `once` shows twice: Node's `once` registers through `on`.
+    expect(seen, 'pr lost its own handler: with no side alive, nothing stops its model calls on a signal')
+      .toEqual(['once:SIGINT', 'on:SIGINT', 'once:SIGTERM', 'on:SIGTERM']);
   }, 90_000);
 
   it('pr listens for both, which shows the probe sees a registration when there is one', async () => {
