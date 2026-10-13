@@ -188,18 +188,24 @@ setInterval(() => {}, 1000);
 
 // ---------------------------------------------------------------- AC10, the GONS path
 
-describe('T-20 AC10: `repo-tour pr` as GONS runs it, and stopped by a signal mid-call', () => {
-  let fix: string;
-  let sha1: string;
-  let sha2: string;
-  let fakeDir: string;
-  let fake: string;
+interface GonsFixture { fix: string; sha1: string; sha2: string; fakeDir: string; fake: string }
 
-  beforeAll(async () => {
-    // A stand-in for the claude CLI: as slow as the fixture says, and saying where it stood.
-    fakeDir = fresh('ac10-fake');
-    fake = path.join(fakeDir, 'claude');
-    fs.writeFileSync(fake, `#!/usr/bin/env node
+let gons: Promise<GonsFixture> | null = null;
+
+/**
+ * A repository with a checkpoint and one change on top of it, and a fake claude for its model
+ * calls. Made once, and shared by AC10 and the signal-listener probe below.
+ */
+function gonsFixture(): Promise<GonsFixture> {
+  gons ??= makeGonsFixture();
+  return gons;
+}
+
+async function makeGonsFixture(): Promise<GonsFixture> {
+  // A stand-in for the claude CLI: as slow as the fixture says, and saying where it stood.
+  const fakeDir = fresh('ac10-fake');
+  const fake = path.join(fakeDir, 'claude');
+  fs.writeFileSync(fake, `#!/usr/bin/env node
 const fs = require('fs');
 const dir = ${JSON.stringify(fakeDir)};
 if (process.argv.includes('--version')) { process.stdout.write('fake 1.0\\n'); process.exit(0); }
@@ -219,32 +225,44 @@ process.stdin.on('end', () => setTimeout(() => {
   process.exit(0);
 }, slow));
 `);
-    fs.chmodSync(fake, 0o755);
+  fs.chmodSync(fake, 0o755);
 
-    // The interpretation cache is keyed on content and lives in this checkout, so a nonce keeps
-    // any earlier answer for an identical file from standing in for the model call.
-    const nonce = randomBytes(8).toString('hex');
-    const source = (body: string): string =>
-      `// ${nonce}\nexport function add(a: number, b: number): number {\n  return ${body};\n}\n`;
-    fix = newRepo('ac10-repo');
-    fs.writeFileSync(path.join(fix, 'a.ts'), source('a + b'));
-    git(fix, 'add', 'a.ts');
-    git(fix, 'commit', '-q', '-m', 'one');
-    sha1 = git(fix, 'rev-parse', 'HEAD');
+  // The interpretation cache is keyed on content and lives in this checkout, so a nonce keeps
+  // any earlier answer for an identical file from standing in for the model call.
+  const nonce = randomBytes(8).toString('hex');
+  const source = (body: string): string =>
+    `// ${nonce}\nexport function add(a: number, b: number): number {\n  return ${body};\n}\n`;
+  const fix = newRepo('ac10-repo');
+  fs.writeFileSync(path.join(fix, 'a.ts'), source('a + b'));
+  git(fix, 'add', 'a.ts');
+  git(fix, 'commit', '-q', '-m', 'one');
+  const sha1 = git(fix, 'rev-parse', 'HEAD');
 
-    // The checkpoint PR mode compares against is the digest on disk (`loadCheckpoint`).
-    const digest = start(['--import', TSX, CLI, 'digest', fix, '--no-interpret'], {
-      cwd: fresh('ac10-cwd'), env: { TMPDIR: fresh('ac10-tmp'), REPO_TOUR_CLAUDE_BIN: fake },
-    });
-    const done = await within(digest.exited, 60_000);
-    if (!done) stop(digest);
-    expect(done, `digest did not finish cleanly: ${digest.out()}`).toEqual({ code: 0, signal: null });
-    expect(fs.existsSync(path.join(fix, '.repo-tour', 'digest.json')), 'digest wrote no checkpoint').toBe(true);
+  // The checkpoint PR mode compares against is the digest on disk (`loadCheckpoint`).
+  const digest = start(['--import', TSX, CLI, 'digest', fix, '--no-interpret'], {
+    cwd: fresh('ac10-cwd'), env: { TMPDIR: fresh('ac10-tmp'), REPO_TOUR_CLAUDE_BIN: fake },
+  });
+  const done = await within(digest.exited, 60_000);
+  if (!done) stop(digest);
+  expect(done, `digest did not finish cleanly: ${digest.out()}`).toEqual({ code: 0, signal: null });
+  expect(fs.existsSync(path.join(fix, '.repo-tour', 'digest.json')), 'digest wrote no checkpoint').toBe(true);
 
-    fs.writeFileSync(path.join(fix, 'a.ts'), source('a + b + 0'));
-    git(fix, 'add', 'a.ts');
-    git(fix, 'commit', '-q', '-m', 'two');
-    sha2 = git(fix, 'rev-parse', 'HEAD');
+  fs.writeFileSync(path.join(fix, 'a.ts'), source('a + b + 0'));
+  git(fix, 'add', 'a.ts');
+  git(fix, 'commit', '-q', '-m', 'two');
+  const sha2 = git(fix, 'rev-parse', 'HEAD');
+  return { fix, sha1, sha2, fakeDir, fake };
+}
+
+describe('T-20 AC10: `repo-tour pr` as GONS runs it, and stopped by a signal mid-call', () => {
+  let fix: string;
+  let sha1: string;
+  let sha2: string;
+  let fakeDir: string;
+  let fake: string;
+
+  beforeAll(async () => {
+    ({ fix, sha1, sha2, fakeDir, fake } = await gonsFixture());
   }, 90_000);
 
   /** `repo-tour pr` the way GONS starts it: from a temp directory of its own, here with a private TMPDIR. */
@@ -332,4 +350,64 @@ process.stdin.on('end', () => setTimeout(() => {
       }
     }, 90_000);
   }
+});
+
+// ---------------------------------------------------------------- which commands listen for signals
+
+describe('T-20: only `pr` gives up Node\'s own Ctrl-C', () => {
+  // Any SIGINT or SIGTERM listener moves Ctrl-C off Node's instant default and onto the event
+  // loop, and `digest`'s extraction runs for seconds without yielding to it. The seat measured
+  // one Ctrl-C at 3 s into a 10 s digest: on main it died 10 ms later; with a listener, the whole
+  // digest ran on and exited 0. Timing is too slow and too loose to pin that, so a probe watches
+  // for the listener itself.
+  let probe: string;
+
+  beforeAll(() => {
+    // Loaded with a second --import, after tsx's, so it sees every registration the program
+    // makes and none of the loader's own.
+    probe = path.join(base, 'signal-probe.mjs');
+    fs.writeFileSync(probe, `import fs from 'node:fs';
+const seen = [];
+for (const name of ['on', 'once', 'addListener', 'prependListener', 'prependOnceListener']) {
+  const original = process[name];
+  process[name] = function (event, ...rest) {
+    if (event === 'SIGINT' || event === 'SIGTERM') seen.push(name + ':' + event);
+    return original.call(this, event, ...rest);
+  };
+}
+process.on('exit', () => { fs.writeFileSync(process.env.SIGNAL_PROBE_OUT, JSON.stringify(seen)); });
+`);
+  });
+
+  /** Run the CLI under the probe: how it ended, and every SIGINT/SIGTERM registration it made. */
+  async function probed(args: string[], env: Record<string, string> = {}): Promise<{ exit: Exit | null; seen: string[] | null; out: string }> {
+    const record = path.join(fresh('probe'), 'signals.json');
+    const child = start(['--import', TSX, '--import', pathToFileURL(probe).href, CLI, ...args], {
+      cwd: fresh('cwd'), env: { TMPDIR: fresh('tmp'), SIGNAL_PROBE_OUT: record, ...env },
+    });
+    const exit = await within(child.exited, 60_000);
+    if (!exit) stop(child);
+    const seen = fs.existsSync(record) ? JSON.parse(fs.readFileSync(record, 'utf8')) as string[] : null;
+    return { exit, seen, out: child.out() };
+  }
+
+  it('digest keeps it: nothing listens for SIGINT or SIGTERM, so one Ctrl-C ends it at once', async () => {
+    const { fix } = await gonsFixture();
+    const view = path.join(fresh('view'), 'view.html');
+    const { exit, seen, out } = await probed(['digest', fix, '--no-interpret', '--no-write', '--view', view]);
+    expect(exit, `digest did not finish cleanly: ${out}`).toEqual({ code: 0, signal: null });
+    expect(seen, 'the probe wrote no record, so this run proves nothing').not.toBeNull();
+    expect(seen, 'digest gave up Node\'s own Ctrl-C: it listens for a signal, and its extraction never yields to the loop that would run the listener')
+      .toEqual([]);
+  }, 90_000);
+
+  it('pr listens for both, which shows the probe sees a registration when there is one', async () => {
+    const { fix, sha1, sha2, fakeDir, fake } = await gonsFixture();
+    fs.writeFileSync(path.join(fakeDir, 'slow'), '0');
+    const { exit, seen, out } = await probed(['pr', fix, '--base', sha1, '--head', sha2], { REPO_TOUR_CLAUDE_BIN: fake });
+    expect(exit, `the PR tour did not finish cleanly: ${out}`).toEqual({ code: 0, signal: null });
+    expect(seen, 'the probe wrote no record, so this run proves nothing').not.toBeNull();
+    expect(seen!.some((s) => s.endsWith(':SIGINT')), `the probe saw no SIGINT listener on pr: ${JSON.stringify(seen)}`).toBe(true);
+    expect(seen!.some((s) => s.endsWith(':SIGTERM')), `the probe saw no SIGTERM listener on pr: ${JSON.stringify(seen)}`).toBe(true);
+  }, 90_000);
 });
