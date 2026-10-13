@@ -83,7 +83,7 @@ function distFingerprint(): Record<string, string> {
   const dist = path.join(REPO_ROOT, 'dist');
   const out: Record<string, string> = {};
   if (!fs.existsSync(dist)) return out;
-  for (const rel of fs.readdirSync(dist, { recursive: true })) {
+  for (const rel of fs.readdirSync(dist, { recursive: true, encoding: 'utf8' })) {
     const st = fs.statSync(path.join(dist, rel));
     if (st.isFile()) out[rel] = `${st.ino}:${st.size}:${st.mtimeMs}`;
   }
@@ -413,7 +413,9 @@ describe('AC3 — a file:/git-style dependency gets dist/ with no manual build',
     // A git dependency runs only prepare when npm packs the clone; `npm pack` and `npm publish`
     // also run prepack and postpack. Without those two, this pack runs what a git dependency
     // runs, so a build moved to prepack (which would still publish) goes red here. The manifest
-    // is rewritten only when one of them exists, so today's tarball is the checkout's own.
+    // is rewritten only when one of them exists, so today's tarball is the checkout's own. The
+    // cost: a broken prepack is not this test's to catch; publishing, and the VS Code tutorial's
+    // packaging, run it and fail loudly.
     if (pkg.scripts && ('prepack' in pkg.scripts || 'postpack' in pkg.scripts)) {
       const scripts = { ...pkg.scripts };
       delete scripts['prepack'];
@@ -424,8 +426,12 @@ describe('AC3 — a file:/git-style dependency gets dist/ with no manual build',
     fs.symlinkSync(path.join(REPO_ROOT, 'node_modules'), path.join(copy, 'node_modules'), 'dir');
 
     // Running the lifecycle is this command's whole purpose, so a user's `ignore-scripts=true`
-    // (npm 11 honours it for prepare) must not switch it off and blame package.json.
-    const pack = spawnSync('npm', ['pack', '--pack-destination', packDest, '--json', '--ignore-scripts=false'], {
+    // (npm 11 honours it for prepare) must not switch it off and blame package.json. And a
+    // script's own output must not land in stdout ahead of the JSON this parses (npm runs pack's
+    // scripts in the foreground by default); a failed build still reports its error.
+    const pack = spawnSync('npm', [
+      'pack', '--pack-destination', packDest, '--json', '--ignore-scripts=false', '--foreground-scripts=false',
+    ], {
       cwd: copy,
       encoding: 'utf8',
     });
