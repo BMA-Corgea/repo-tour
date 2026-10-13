@@ -259,18 +259,51 @@ function isEligibleCandidate(s: SymbolRecord): boolean {
  * T-12 or T-15 shipped moves. Candidates only: a wrapper whose body holds nothing eligible
  * (sql-gauntlet's `argSection`, around one one-line `const`) keeps its step. And only a
  * `variable` yields: a class keeps T-12's slot over its own methods.
+ *
+ * One sort, never a scan of every pair (T-16 review): comparing each variable with each
+ * candidate took seconds to plan one generated script of 60,000 variables. In start-line
+ * order, the candidates that start after a variable's first line form a suffix, and one of
+ * them lies inside the variable exactly when the earliest end in that suffix is no later
+ * than the variable's last line. A candidate that starts ON its first line lies inside only
+ * by ending sooner.
  */
-function yieldsToMembers(s: SymbolRecord, candidates: SymbolRecord[]): boolean {
-  if (s.kind !== 'variable') return false;
-  return candidates.some(
-    (c) => c !== s && c.line >= s.line && c.endLine <= s.endLine && (c.line > s.line || c.endLine < s.endLine),
-  );
+function variablesThatYield(candidates: SymbolRecord[]): Set<SymbolRecord> {
+  const byStart = candidates.slice().sort((a, b) => a.line - b.line);
+  const earliestEndFrom = new Array<number>(byStart.length + 1).fill(Infinity);
+  for (let i = byStart.length - 1; i >= 0; i--) {
+    earliestEndFrom[i] = Math.min(byStart[i]!.endLine, earliestEndFrom[i + 1]!);
+  }
+  const earliestEndOn = new Map<number, number>();
+  for (const c of byStart) earliestEndOn.set(c.line, Math.min(c.endLine, earliestEndOn.get(c.line) ?? Infinity));
+
+  const yielding = new Set<SymbolRecord>();
+  for (const s of candidates) {
+    if (s.kind !== 'variable') continue;
+    const startsLater = firstStartingAfter(byStart, s.line);
+    if (earliestEndFrom[startsLater]! <= s.endLine || (earliestEndOn.get(s.line) ?? Infinity) < s.endLine) {
+      yielding.add(s);
+    }
+  }
+  return yielding;
+}
+
+/** The index of the first candidate, in start-line order, that starts after `line`. */
+function firstStartingAfter(byStart: SymbolRecord[], line: number): number {
+  let lo = 0;
+  let hi = byStart.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (byStart[mid]!.line <= line) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
 }
 
 /** A file that exports nothing: every recorded symbol, through both screens above. */
 function fallbackCandidates(symbols: SymbolRecord[]): SymbolRecord[] {
   const eligible = symbols.filter(isEligibleCandidate);
-  return eligible.filter((s) => !yieldsToMembers(s, eligible));
+  const yielding = variablesThatYield(eligible);
+  return eligible.filter((s) => !yielding.has(s));
 }
 
 /**
@@ -285,7 +318,7 @@ function fallbackCandidates(symbols: SymbolRecord[]): SymbolRecord[] {
  * UNLESS the file exports nothing at all (T-15: a plain script or a CommonJS module has no
  * ESM `export`, but its top-level functions are still exactly what a learner needs
  * stubbed), in which case every recorded symbol is a candidate instead, screened by
- * `isEligibleCandidate` and then `yieldsToMembers` (T-16). Both screens belong to that
+ * `isEligibleCandidate` and then `variablesThatYield` (T-16). Both screens belong to that
  * fallback alone: the first stops the one-line requires and aliases the fallback itself made
  * eligible, the second stops a module-pattern wrapper swallowing the code inside it, so a
  * file that DOES export something is untouched by either ticket, in every language.
