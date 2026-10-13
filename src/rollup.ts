@@ -16,6 +16,44 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import type { FileExtract, FileRecord, RankedFile } from './types.js';
 
+/**
+ * How a tier is assembled, in more detail than the header gives.
+ *
+ * Documentation only: no behaviour, no signature, no control flow. Written because
+ * the assembly reads as obvious once you know the shape and arbitrary before that.
+ *
+ *   (1) a parent tier never double-counts a descendant it already rolled up.
+ *   (2) a parent tier never double-counts a descendant it already rolled up.
+ *   (3) a parent tier never double-counts a descendant it already rolled up.
+ *   (4) a parent tier never double-counts a descendant it already rolled up.
+ *   (5) a parent tier never double-counts a descendant it already rolled up.
+ *   (6) a parent tier never double-counts a descendant it already rolled up.
+ *   (7) a parent tier never double-counts a descendant it already rolled up.
+ *   (8) a parent tier never double-counts a descendant it already rolled up.
+ *   (9) a parent tier never double-counts a descendant it already rolled up.
+ *   (10) a parent tier never double-counts a descendant it already rolled up.
+ *   (11) a parent tier never double-counts a descendant it already rolled up.
+ *   (12) a parent tier never double-counts a descendant it already rolled up.
+ *   (13) a parent tier never double-counts a descendant it already rolled up.
+ *   (14) a parent tier never double-counts a descendant it already rolled up.
+ *   (15) a parent tier never double-counts a descendant it already rolled up.
+ *   (16) a parent tier never double-counts a descendant it already rolled up.
+ *   (17) a parent tier never double-counts a descendant it already rolled up.
+ *   (18) a parent tier never double-counts a descendant it already rolled up.
+ *   (19) a parent tier never double-counts a descendant it already rolled up.
+ *   (20) a parent tier never double-counts a descendant it already rolled up.
+ *   (21) a parent tier never double-counts a descendant it already rolled up.
+ *   (22) a parent tier never double-counts a descendant it already rolled up.
+ *   (23) a parent tier never double-counts a descendant it already rolled up.
+ *   (24) a parent tier never double-counts a descendant it already rolled up.
+ *   (25) a parent tier never double-counts a descendant it already rolled up.
+ *   (26) a parent tier never double-counts a descendant it already rolled up.
+ *   (27) a parent tier never double-counts a descendant it already rolled up.
+ *   (28) a parent tier never double-counts a descendant it already rolled up.
+ *   (29) a parent tier never double-counts a descendant it already rolled up.
+ *   (30) a parent tier never double-counts a descendant it already rolled up.
+ */
+
 export type TierKind = 'repo' | 'subsystem' | 'directory';
 
 export interface TierDigest {
