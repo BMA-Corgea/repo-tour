@@ -206,6 +206,25 @@ describe('T-16 AC1 — a module-pattern wrapper\'s body declarations become symb
     );
   });
 
+  it('a destructuring declarator: its wrapper is entered too, and the pattern is still not recorded, as today', async () => {
+    // The body runs at load whatever the binding looks like, so its declarations are the
+    // module's code either way. `recordDecl` has never recorded a destructuring pattern's
+    // names, and still does not.
+    const source = [
+      'const { init } = (function () {',
+      '  function init() {',
+      '    return 1;',
+      '  }',
+      '  return { init: init };',
+      '})();',
+      '',
+    ].join('\n');
+    const ex = await extractOf(source, 'javascript', 'js');
+    expect(ex.symbols.map((s) => `${s.name}:${s.kind}:${s.line}-${s.endLine}`), 'a destructuring declarator\'s wrapper was not entered').toEqual(
+      ['init:function:2-4'],
+    );
+  });
+
   it('a JSDoc comment between the name and the value (a TypeScript ES5 class emit) does not hide the value', async () => {
     const source = [
       'var Foo = /** @class */ (function () {',
