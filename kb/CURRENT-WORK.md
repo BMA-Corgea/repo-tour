@@ -10,9 +10,11 @@ here and found via the reference table below.
 <!-- What is in motion right now: one line per active ticket/effort —
      what, why, where it stands, what is next. Never pruned while live. -->
 
-- Nothing in flight here; four tickets wait at intake (below). **All six pieces the owner described
-  on day one are shipped**: the sixth, GONS integration, was built on the GUTS side (below), so
-  **T-7 is not needed**.
+- **Foreman run 2026-10-13 (GA-13, the owner's decision form):** T-14, T-20 and T-16 build in three
+  seats, each in its own worktree, and land on main one at a time. Each stops at uat for the owner's
+  accept. **T-19 is parked by the owner** ("not now"). **T-29** (cached tour pages never rebuild after
+  most code changes) waits on the owner's go. **All six pieces the owner described on day one are
+  shipped**: the sixth, GONS integration, was built on the GUTS side (below), so **T-7 is not needed**.
 - **GONS integration: built on the GUTS side, so this repo has nothing to do.** 2026-08-27, on the owner's instruction, GUTS
   ticket **T-55** was filed ("Bring repo-tour's PR tours into the GONS Office PR section")
   with a first-hand brief at `GUTS/.autodev/handoffs/T-55.md`, and the live `guts-bridge`
@@ -25,23 +27,28 @@ here and found via the reference table below.
   (`gons/backend/app/foreman_tour.py`). So keep `dist/` built and that CLI shape stable.
   Known gap, logged LOW on GUTS's side: the Ask panel in a GONS-served tour needs this repo's
   own server running.
-- **T-14** (techdebt) — Harden T-11's consumer tests: prove prepare rebuilds dist, and make alternateCs… — intake
-- **T-16** (feature) — Module-pattern and .call(this) IIFEs: record their body declarations too — intake
 - **T-19** (bug) — The codex provider still gets a shell: its read-only sandbox is not 'no tools' — intake
-- **T-20** (techdebt) — Isolation tidy-ups from T-18 review attempt 4: latch test, empty-dir cleanup, c… — intake
+- **T-14** (techdebt) — Harden T-11's consumer tests: prove prepare rebuilds dist, and make alternateCs… — verify
+- **T-20** (techdebt) — Isolation tidy-ups from T-18 review attempt 4: latch test, empty-dir cleanup, c… — build
+- **T-29** (bug) — Cached tour pages outlive the code that made them: the page version hashes 5 of… — intake
+- **T-16** (feature) — Module-pattern and .call(this) IIFEs: record their body declarations too — auto-review
 
 ## Waiting on
 
 <!-- Holds: "waiting at <gate> on <keyholder> since <date>, ping sent to
      <channel>" — no session should discover a hold by archaeology (ruling 24). -->
 
-- Nothing is held. T-18's accept gate was spent on the owner's own words (GA-12).
+- **T-29** — waiting at spec_ready on the owner since 2026-10-13, asked in chat by the foreman.
+- T-14, T-20 and T-16 each stop at uat for the owner's accept; the foreman brings all three in one form.
 
 ## Recent past (~15 items / ~30 days)
 
 <!-- One line per completed item, WITH the why. Newest first. Prune from the
      bottom; the permanent record lives in tickets, events.jsonl, and wiki. -->
 
+- 2026-10-13 **T-14 landed** (`0a6c5b0`, at verify) — the pack test builds from a temp copy, so it proves
+  `prepare` builds `dist/` without rewriting this checkout's: it had rewritten all 123 files on every run,
+  and GONS runs that `dist/`. A wrong asset root now fails loudly instead of giving unstyled pages.
 - 2026-10-07 **T-18 COMPLETE** — the tutor, accepted by the owner (GA-12: "it looks good. I approve")
   after a rework from his first test drive: a silent stream Firefox closed on a network change,
   and every model call running as a full agent inside the toured repo. Why two review rounds:
