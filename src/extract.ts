@@ -221,7 +221,19 @@ const JS_DECL_KIND: Record<string, SymbolKind> = {
   enum_declaration: 'enum',
 };
 
+/** Literals whose body runs when they are called. A generator is not one: calling it only returns an iterator. */
 const IIFE_FN_TYPES = new Set(['function_expression', 'arrow_function']);
+
+/**
+ * T-16 — the methods that run a function on the spot: `fn.call(...)` and `fn.apply(...)`.
+ * `bind` is deliberately not here: `fn.bind(this)` only makes a bound copy, whose body runs
+ * when that copy is itself called — `fn.bind(this)()` — and `invokedLiteral` checks for that
+ * call separately. `(function(){}).bind(this);` parses exactly like `.call(this);` apart from
+ * this property name (write-ahead dump, `.autodev/specs/T-16-module-iifes.md`), so the name is
+ * what decides.
+ */
+const INVOKING_METHODS = new Set(['call', 'apply']);
+const BINDING_METHODS = new Set(['bind']);
 
 /** Peel away any number of redundant `( ... )` wrappers around a single inner expression. */
 function unwrapParens(node: SyntaxNode): SyntaxNode {
@@ -230,39 +242,98 @@ function unwrapParens(node: SyntaxNode): SyntaxNode {
   return n;
 }
 
+/** The function/arrow literal `node` is, behind any parens, or null. */
+function functionLiteral(node: SyntaxNode | null): SyntaxNode | null {
+  if (!node) return null;
+  const n = unwrapParens(node);
+  return IIFE_FN_TYPES.has(n.type) ? n : null;
+}
+
+/** For `<literal>.<method>` with `method` in `methods`: the literal. Anything else: null. */
+function literalBefore(node: SyntaxNode, methods: Set<string>): SyntaxNode | null {
+  if (node.type !== 'member_expression') return null;
+  const property = node.childForFieldName('property');
+  if (!property || !methods.has(property.text)) return null;
+  return functionLiteral(node.childForFieldName('object'));
+}
+
 /**
- * T-15 — a top-level IIFE is the one place script-style JS hides real declarations from
- * the top-level walk below. `stmt` must be a top-level `expression_statement` whose
- * expression is a call — the call itself, the function being called, or both, may sit
- * inside `( ... )` — to a function/arrow expression, optionally behind a single leading
- * unary operator (`!function(){}()` is the documented example; the locate doc's own rule
- * is "unary-prefixed", not "`!`-prefixed", so this does not special-case the operator).
- * Confirmed identical between the javascript and typescript grammars — write-ahead
- * handoff, `.autodev/handoffs/T-15.md`. Anything else (a call to a named function, a
- * call whose callee is itself a call, ...) is not an IIFE and returns null.
+ * T-15, widened by T-16 — the function/arrow literal that `expr` runs on the spot, or null.
+ * `expr` must be a call — the call itself, the function being called, or both, may sit
+ * inside `( ... )` — optionally behind a single leading unary operator (`!function(){}()` is
+ * the documented example; the T-15 locate doc's own rule is "unary-prefixed", not
+ * "`!`-prefixed", so this does not special-case the operator). What it calls is one of:
  *
- * Returns the invoked function's `statement_block` body — the ONE level `jsSymbols`
- * recurses into, exactly as top-level, never further (a helper nested inside an ordinary,
- * non-IIFE function is not reachable from here at all: its own enclosing node is a plain
- * `function_declaration`, which this is never even called on).
+ *   (function () {...})()             the literal itself (T-15)
+ *   (function () {...}).call(this)    its .call / .apply, any receiver and arguments (T-16)
+ *   (function () {...}).bind(this)()  a bound copy of it, called at once (T-16)
+ *
+ * Confirmed identical between the javascript, typescript and tsx grammars — write-ahead
+ * dumps for T-15 (`.autodev/handoffs/T-15.md`) and T-16. Anything else (a call to a named
+ * function, a call whose callee is itself a plain call, `.bind(this)` never called,
+ * `.toString()`, a generator) is not an IIFE and returns null.
+ */
+function invokedLiteral(expr: SyntaxNode): SyntaxNode | null {
+  let e = unwrapParens(expr);
+  if (e.type === 'unary_expression') {
+    const arg = e.childForFieldName('argument');
+    if (!arg) return null;
+    e = unwrapParens(arg);
+  }
+  if (e.type !== 'call_expression') return null;
+  const fn = e.childForFieldName('function');
+  if (!fn) return null;
+  const callee = unwrapParens(fn);
+  if (IIFE_FN_TYPES.has(callee.type)) return callee;
+  const viaMethod = literalBefore(callee, INVOKING_METHODS);
+  if (viaMethod) return viaMethod;
+  if (callee.type === 'call_expression') {
+    const bound = callee.childForFieldName('function');
+    if (bound) return literalBefore(unwrapParens(bound), BINDING_METHODS);
+  }
+  return null;
+}
+
+/** A literal's `statement_block` body, or null — an arrow with an expression body declares nothing. */
+function blockBody(fn: SyntaxNode | null): SyntaxNode | null {
+  const body = fn?.childForFieldName('body');
+  return body && body.type === 'statement_block' ? body : null;
+}
+
+/**
+ * T-15 — a top-level IIFE statement is the one place script-style JS hides real declarations
+ * from the top-level walk below: `stmt` must be a top-level `expression_statement` whose
+ * expression runs a literal on the spot (`invokedLiteral`). Returns that literal's body — the
+ * ONE level `jsSymbols` recurses into, exactly as top-level, never further (a helper nested
+ * inside an ordinary, non-IIFE function is not reachable from here at all: its own enclosing
+ * node is a plain `function_declaration`, which this is never even called on).
  */
 function iifeBody(stmt: SyntaxNode): SyntaxNode | null {
   if (stmt.type !== 'expression_statement') return null;
-  let expr = stmt.namedChild(0);
-  if (!expr) return null;
-  expr = unwrapParens(expr);
-  if (expr.type === 'unary_expression') {
-    const arg = expr.childForFieldName('argument');
-    if (!arg) return null;
-    expr = unwrapParens(arg);
+  const expr = stmt.namedChild(0);
+  return expr ? blockBody(invokedLiteral(expr)) : null;
+}
+
+/**
+ * T-16 — the module pattern, `var app = (function () {...})()`: the IIFE is a declarator's
+ * VALUE, so it sits inside a `lexical_declaration`/`variable_declaration` that `iifeBody`
+ * never looks into. Returns the body each declarator's value runs, for every declarator whose
+ * value is an IIFE (a multi-declarator statement can hold several). The declared name itself
+ * is recorded by `recordDecl` exactly as before — a `variable` spanning the whole wrapper —
+ * and `src/build/plan.ts` lets that wrapper yield its build step to the code recorded inside
+ * it. Called from the top-level loop only, like `iifeBody`, so a wrapper nested inside a
+ * recorded body is recorded but never entered: one level, as T-15.
+ */
+function declaratorIifeBodies(decl: SyntaxNode): SyntaxNode[] {
+  if (decl.type !== 'lexical_declaration' && decl.type !== 'variable_declaration') return [];
+  const out: SyntaxNode[] = [];
+  for (const declarator of decl.children) {
+    if (!declarator || declarator.type !== 'variable_declarator') continue;
+    const value = declarator.childForFieldName('value');
+    const body = value ? blockBody(invokedLiteral(value)) : null;
+    if (body) out.push(body);
   }
-  if (expr.type !== 'call_expression') return null;
-  const fn = expr.childForFieldName('function');
-  if (!fn) return null;
-  const target = unwrapParens(fn);
-  if (!IIFE_FN_TYPES.has(target.type)) return null;
-  const body = target.childForFieldName('body');
-  return body && body.type === 'statement_block' ? body : null;
+  return out;
 }
 
 function jsSymbols(root: SyntaxNode): SymbolRecord[] {
@@ -323,23 +394,31 @@ function jsSymbols(root: SyntaxNode): SymbolRecord[] {
     }
   };
 
+  // Exactly the top-level treatment, one level down: an IIFE's own direct declarations are
+  // never exported (there is no `export` inside a function body), and we stop there — a
+  // nested IIFE, or a plain function, inside the body is not recursed into again (T-15 AC1,
+  // T-16 AC4: recurse one level only).
+  const recordBody = (body: SyntaxNode): void => {
+    for (const inner of body.children) if (inner) recordDecl(inner, false);
+  };
+
   for (const node of root.children) {
     if (!node) continue;
     if (node.type === 'export_statement') {
       const decl = node.childForFieldName('declaration');
-      if (decl) recordDecl(decl, true);
+      if (decl) {
+        recordDecl(decl, true);
+        for (const body of declaratorIifeBodies(decl)) recordBody(body);
+      }
       continue;
     }
     const body = iifeBody(node);
     if (body) {
-      // Exactly the top-level treatment, one level down: an IIFE's own direct
-      // declarations are never exported (there is no `export` inside a function body),
-      // and we stop here — a nested IIFE, or a plain function, inside this body is not
-      // recursed into again (T-15 AC1: recurse one level only).
-      for (const inner of body.children) if (inner) recordDecl(inner, false);
+      recordBody(body);
       continue;
     }
     recordDecl(node, false);
+    for (const inner of declaratorIifeBodies(node)) recordBody(inner);
   }
   return out;
 }
