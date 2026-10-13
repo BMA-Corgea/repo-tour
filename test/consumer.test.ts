@@ -77,6 +77,7 @@ function runNode(script: string, opts: { cwd: string; env?: NodeJS.ProcessEnv })
  * Every file under this checkout's `dist/`, by relative path: inode, size and mtime. Deleting or
  * rebuilding `dist/` in place changes it. No test may do either: GONS runs the main checkout's
  * `dist/cli.js` and reads its `dist/interpret.js`, so a suite run there would take its tours down.
+ * It compares two moments, so a `dist/` moved away and put back between them goes unseen.
  */
 function distFingerprint(): Record<string, string> {
   const dist = path.join(REPO_ROOT, 'dist');
@@ -223,7 +224,8 @@ describe('AC2 — asset roots are injectable', () => {
       expect(thrown(() => baseCss())).toMatchObject({ code: 'ENOENT' });
       const err = thrown(() => alternateCss());
       expect(err).toMatchObject({ code: 'ENOENT' });
-      expect(err.message, 'the error should name the folder it looked in').toContain(path.join(wrongRoot, 'skins'));
+      // Node quotes the path, so an error naming a file inside the folder does not match.
+      expect(err.message, 'the error should name the folder it looked in').toContain(`'${path.join(wrongRoot, 'skins')}'`);
     } finally {
       fs.rmSync(wrongRoot, { recursive: true, force: true });
     }
@@ -378,7 +380,8 @@ if (!alt.includes('gunmetal')) throw new Error('alternateCss() does not include 
 
 console.log('CONSUMER_SMOKE_OK files=' + result.manifest.counts.files + ' parsed=' + result.manifest.counts.parsed);
 `;
-    const res = runNode(script, { cwd: consumerDir });
+    // The packaged asset roots, whatever the parent environment says.
+    const res = runNode(script, { cwd: consumerDir, env: { REPO_TOUR_ASSETS: '', REPO_TOUR_GRAMMARS: '' } });
     expect(res.stdout + res.stderr, res.stdout + res.stderr).toContain('CONSUMER_SMOKE_OK');
     expect(res.status, res.stdout + res.stderr).toBe(0);
   }, 30_000);
@@ -386,10 +389,10 @@ console.log('CONSUMER_SMOKE_OK files=' + result.manifest.counts.files + ' parsed
 
 describe('AC3 — a file:/git-style dependency gets dist/ with no manual build', () => {
   it('npm pack of a copy with no dist/ builds it via prepare, and the installed tarball imports its skins', () => {
-    // Real npm, real filesystem — this is what a git dependency install and `npm publish`
-    // both exercise, and what the VS Code tutorial's `npm run package` does to carry the core.
-    // A file: link is the ONE case this does not cover: prepare does not run for a link, so
-    // the linked checkout must already be built (README).
+    // Real npm, real filesystem. The pack runs the lifecycle a git dependency runs (below), and
+    // the install and import are the steps the VS Code tutorial's `npm run package` takes to
+    // carry the core. A file: link is the ONE case this does not cover: prepare does not run
+    // for a link, so the linked checkout must already be built (README).
     //
     // It packs a temp copy, never this checkout. Packing here would run prepare, which
     // rebuilds this checkout's own dist/ in place. And the copy has no dist/ at all, so a
@@ -399,15 +402,30 @@ describe('AC3 — a file:/git-style dependency gets dist/ with no manual build',
 
     // The working tree, not HEAD: an uncommitted package.json edit must reach the copy.
     // It carries the manifest, the build's inputs, and every shipped entry except dist/.
-    const pkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8')) as { files: string[] };
+    const pkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8')) as {
+      files: string[];
+      scripts?: Record<string, string>;
+    };
     const copy = path.join(packWork, 'repo-tour');
     for (const entry of ['package.json', 'tsconfig.json', 'src', ...pkg.files.filter((f) => f !== 'dist')]) {
       fs.cpSync(path.join(REPO_ROOT, entry), path.join(copy, entry), { recursive: true });
     }
+    // A git dependency runs only prepare when npm packs the clone; `npm pack` and `npm publish`
+    // also run prepack and postpack. Without those two, this pack runs what a git dependency
+    // runs, so a build moved to prepack (which would still publish) goes red here. The manifest
+    // is rewritten only when one of them exists, so today's tarball is the checkout's own.
+    if (pkg.scripts && ('prepack' in pkg.scripts || 'postpack' in pkg.scripts)) {
+      const scripts = { ...pkg.scripts };
+      delete scripts['prepack'];
+      delete scripts['postpack'];
+      fs.writeFileSync(path.join(copy, 'package.json'), `${JSON.stringify({ ...pkg, scripts }, null, 2)}\n`);
+    }
     expect(fs.existsSync(path.join(copy, 'dist')), 'the copy must start with no dist/').toBe(false);
     fs.symlinkSync(path.join(REPO_ROOT, 'node_modules'), path.join(copy, 'node_modules'), 'dir');
 
-    const pack = spawnSync('npm', ['pack', '--pack-destination', packDest, '--json'], {
+    // Running the lifecycle is this command's whole purpose, so a user's `ignore-scripts=true`
+    // (npm 11 honours it for prepare) must not switch it off and blame package.json.
+    const pack = spawnSync('npm', ['pack', '--pack-destination', packDest, '--json', '--ignore-scripts=false'], {
       cwd: copy,
       encoding: 'utf8',
     });
@@ -448,7 +466,10 @@ try {
 `, { cwd: tarballConsumer, env: { REPO_TOUR_ASSETS: '' } });
     expect(smoke.stdout, smoke.stderr).toMatch(/TARBALL_SKINS base=[1-9]\d* alt=[1-9]\d*/);
 
-    expect(distFingerprint(), 'the checkout\'s own dist/ changed: pack a temp copy, never REPO_ROOT').toEqual(before);
+    expect(
+      distFingerprint(),
+      'the checkout\'s own dist/ changed while this test ran: something packed or built in REPO_ROOT (this test must pack a temp copy)',
+    ).toEqual(before);
   }, 120_000);
 });
 

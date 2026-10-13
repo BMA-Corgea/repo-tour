@@ -70,7 +70,9 @@ export function baseCss(): string {
  *
  * A missing skins FOLDER is different: it means the asset root is wrong (a mistyped
  * `REPO_TOUR_ASSETS`, say), and skipping every row would return "" and an unstyled page with
- * no error. Listing the folder first throws instead, naming it, as `baseCss()` does.
+ * no error. Listing the folder first throws instead, naming it, as `baseCss()` does. (Listing
+ * needs read permission on the folder, where `baseCss()` needs only search permission; every
+ * ordinary install grants both.)
  */
 export function alternateCss(): string {
   const dir = skinsDir();
