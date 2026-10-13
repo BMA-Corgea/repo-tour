@@ -203,8 +203,10 @@ describe('T-20 AC10: `repo-tour pr` as GONS runs it, and stopped by a signal mid
 const fs = require('fs');
 const dir = ${JSON.stringify(fakeDir)};
 if (process.argv.includes('--version')) { process.stdout.write('fake 1.0\\n'); process.exit(0); }
-// The pid first: whoever sees where.json can count on the pid being there already.
+// The pid first: whoever sees where.json can count on the pid being there already. Every pid
+// is kept as well, so a run that carries on to another call cannot leave one running.
 fs.writeFileSync(dir + '/pid', String(process.pid));
+fs.appendFileSync(dir + '/pids', process.pid + '\\n');
 const here = process.cwd();
 fs.writeFileSync(dir + '/where.json', JSON.stringify({ cwd: here, listing: fs.readdirSync(here), mode: fs.statSync(here).mode & 0o777 }));
 const slow = fs.existsSync(dir + '/slow') ? Number(fs.readFileSync(dir + '/slow', 'utf8')) : 0;
@@ -247,7 +249,7 @@ process.stdin.on('end', () => setTimeout(() => {
 
   /** `repo-tour pr` the way GONS starts it: from a temp directory of its own, here with a private TMPDIR. */
   function startPr(slowMs: number): { child: Child; tmp: string } {
-    for (const f of ['where.json', 'pid']) fs.rmSync(path.join(fakeDir, f), { force: true });
+    for (const f of ['where.json', 'pid', 'pids']) fs.rmSync(path.join(fakeDir, f), { force: true });
     fs.writeFileSync(path.join(fakeDir, 'slow'), String(slowMs));
     const tmp = fresh('tmp');
     const child = start(['--import', TSX, CLI, 'pr', fix, '--base', sha1, '--head', sha2], {
@@ -272,11 +274,18 @@ process.stdin.on('end', () => setTimeout(() => {
     } catch { return null; }
   };
 
-  /** SIGKILL the fake this file started, if it is still running and is still that fake. */
-  const killFake = (pid: number | null): void => {
-    if (!pid || !running(pid)) return;
-    try { if (!fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes(fake)) return; } catch { return; }
-    process.kill(pid, 'SIGKILL');
+  /**
+   * SIGKILL every fake this run started that is still running and is still that fake. A run
+   * that swallows the signal carries on to its next model call, so there can be more than one.
+   */
+  const killFakes = (): void => {
+    let pids: number[] = [];
+    try { pids = fs.readFileSync(path.join(fakeDir, 'pids'), 'utf8').split('\n').map(Number); } catch { return; }
+    for (const pid of pids) {
+      if (!Number.isInteger(pid) || pid <= 1 || !running(pid)) continue;
+      try { if (!fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes(fake)) continue; } catch { continue; }
+      process.kill(pid, 'SIGKILL');
+    }
   };
 
   it('a normal run exits 0 and leaves nothing in its temp dir', async () => {
@@ -292,6 +301,7 @@ process.stdin.on('end', () => setTimeout(() => {
       expect(leftovers(tmp), 'a normal run left temp entries behind').toEqual([]);
     } finally {
       stop(child);
+      killFakes();
     }
   }, 90_000);
 
@@ -318,7 +328,7 @@ process.stdin.on('end', () => setTimeout(() => {
         expect.soft(leftovers(tmp), `${signal} left temp entries behind`).toEqual([]);
       } finally {
         stop(child);
-        killFake(pid);
+        killFakes();
       }
     }, 90_000);
   }

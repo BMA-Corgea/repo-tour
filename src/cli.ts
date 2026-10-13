@@ -20,7 +20,7 @@ import { renderRepoView } from './repoview.js';
 import { interpretStops, applyMeanings, interpretArchitecture, DEFAULT_MODEL } from './interpret.js';
 import { saveTour, listTours, findTour, newestFor, renderLibrary } from './library.js';
 import { RepoTourServer } from './server.js';
-import { surveyProviders } from './llm.js';
+import { surveyProviders, killLlmChildren } from './llm.js';
 import { execFileSync } from 'node:child_process';
 import type { RankedFile } from './types.js';
 import { PrResolutionError } from './pr.js';
@@ -211,6 +211,20 @@ async function runPrMode(args: Args): Promise<void> {
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+
+  // A one-off command stopped by a signal (a Ctrl-C, or GONS giving up on a `pr` run) stops
+  // its model calls first, so none of them keeps running, and paying, after it has gone. Then
+  // it dies by the signal, as it would have with no handler. Whichever listener runs last
+  // re-raises: with PR sides alive, that is theirs, once their trees are gone. The app is left
+  // out because it has a stop of its own.
+  if (args.command !== 'serve' && args.command !== 'app') {
+    const interrupted = (signal: NodeJS.Signals): void => {
+      killLlmChildren();
+      if (process.listenerCount(signal) === 0) process.kill(process.pid, signal);
+    };
+    process.once('SIGINT', interrupted);
+    process.once('SIGTERM', interrupted);
+  }
 
   if (args.command === 'pr') {
     await runPrMode(args);
