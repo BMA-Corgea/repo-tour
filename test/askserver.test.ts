@@ -1293,6 +1293,65 @@ process.stdin.on('end', () => {
     }
   }, 30_000);
 
+  it('a codex that has exited, but whose pipes are still open, fails when killed rather than answering empty (review 2, nit A)', async () => {
+    // The process has gone, and its answer is written, but `close` waits for the pipes, which a
+    // child of its own still holds. killLlmChildren removes the answer with the directory in that
+    // window, and the call then resolves with code 0 and no answer: an empty "success" for a call
+    // nobody is waiting for. Killed means failed, as for every other killed call.
+    const record = path.join(base, 'codex-exited.json');
+    fs.rmSync(record, { force: true });
+    const script = path.join(base, 'fake-codex-exited');
+    const holder = '/* t20 nit A: holds the pipes */ setTimeout(() => {}, 30000)';
+    fs.writeFileSync(script, `#!/usr/bin/env node
+const fs = require('fs');
+const { spawn } = require('child_process');
+const args = process.argv.slice(2);
+if (args.includes('--version')) { process.stdout.write('fake codex 1.0\\n'); process.exit(0); }
+const out = args[args.indexOf('--output-last-message') + 1];
+let input = '';
+process.stdin.on('data', (d) => { input += d; });
+process.stdin.on('end', () => {
+  fs.writeFileSync(out, 'an answer nobody is waiting for');
+  // A child of its own that inherits stdout and stderr keeps them open after this one exits.
+  const held = spawn(process.execPath, ['-e', ${JSON.stringify(holder)}], { stdio: ['ignore', 'inherit', 'inherit'] });
+  fs.writeFileSync(${JSON.stringify(record)}, JSON.stringify({ pid: process.pid, holder: held.pid, out }));
+  process.exit(0);
+});
+`);
+    fs.chmodSync(script, 0o755);
+    process.env['REPO_TOUR_CODEX_BIN'] = script;
+    const { runLlm, killLlmChildren } = await import('../src/llm.js');
+    const settled = runLlm('q', { provider: 'codex', model: 'default' }, repo, 30_000)
+      .then((r) => ({ answered: r.text }), (e: unknown) => ({ failed: (e as Error).message }));
+    let seen: { pid: number; holder: number; out: string } | null = null;
+    const killHolder = (): void => {
+      const pid = (seen as { holder: number } | null)?.holder;
+      if (!pid || pid <= 1 || !alive(pid)) return;
+      try { if (fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes('t20 nit A')) process.kill(pid, 'SIGKILL'); }
+      catch { /* gone */ }
+    };
+    try {
+      expect(await until(() => {
+        try { seen = JSON.parse(fs.readFileSync(record, 'utf8')) as { pid: number; holder: number; out: string }; return true; }
+        catch { return false; }
+      }, 10_000), 'the fake codex never wrote its answer').toBe(true);
+      const { pid, out } = seen!;
+      expect(await until(() => !alive(pid), 10_000), 'the fake codex did not exit').toBe(true);
+      expect(fs.existsSync(out), 'the answer file is not there to begin with').toBe(true);
+
+      killLlmChildren();
+      expect.soft(fs.existsSync(path.dirname(out)), `killLlmChildren left the call's directory behind: ${path.dirname(out)}`)
+        .toBe(false);
+      killHolder();                // the pipes close, and the call settles
+      expect(await settled, 'a killed call answered with nothing as if it had succeeded')
+        .toEqual({ failed: expect.stringMatching(/cancelled/) });
+    } finally {
+      delete process.env['REPO_TOUR_CODEX_BIN'];
+      killHolder();
+      await settled;
+    }
+  }, 30_000);
+
   it('a stale leave never touches a path this process no longer owns (nit 6)', async () => {
     // killLlmChildren removes the directory and forgets it. The call's own cleanup runs a few
     // ms later, when the killed child closes. If the same name has been drawn again in between,
