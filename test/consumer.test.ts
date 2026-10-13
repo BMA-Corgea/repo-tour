@@ -253,9 +253,9 @@ for (const [name, fn] of [['baseCss', baseCss], ['alternateCss', alternateCss]])
 
   it('a skins folder missing one skin file still serves the others: a half-added skin costs an option, not a page', () => {
     const copy = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-half-added-skin-'));
-    fs.cpSync(path.join(REPO_ROOT, 'assets'), copy, { recursive: true });
-    fs.rmSync(path.join(copy, 'skins', 'jrpg.css'));
     try {
+      fs.cpSync(path.join(REPO_ROOT, 'assets'), copy, { recursive: true });
+      fs.rmSync(path.join(copy, 'skins', 'jrpg.css'));
       configureAssets({ assetsDir: copy });
       const css = alternateCss();
       expect(css).toContain(':root[data-theme="gunmetal"]');
