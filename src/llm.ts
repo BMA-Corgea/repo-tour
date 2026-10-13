@@ -145,7 +145,8 @@ interface RunResult { code: number | null; stdout: string; stderr: string }
 const liveChildren = new Set<import('node:child_process').ChildProcess>();
 
 /**
- * Stop every in-flight model call, and remove the directories they stood in.
+ * Stop every in-flight model call, and remove the directories they stood in, with any file a
+ * call named as its own (codex's answer).
  *
  * The directories go now, not when the calls settle: a program stopping on a signal dies by
  * it straight after this, and a death by signal runs no exit hook. Removing an empty directory
@@ -157,7 +158,7 @@ export function killLlmChildren(): void {
     try { child.kill('SIGKILL'); } catch { /* already gone */ }
   }
   liveChildren.clear();
-  for (const dir of madeHere) leave(dir);
+  for (const dir of madeHere.keys()) leave(dir);
 }
 
 /**
@@ -332,23 +333,25 @@ const ISOLATED = [
  * It goes by `rmdir` of the exact path this process made: never a recursive remove, and never
  * a pattern over /tmp. Other repo-tour processes, the owner's live server among them, stand in
  * empty `repo-tour-llm-*` directories of their own, and `rmdir` can only ever take an empty
- * one. A directory that will not go (something was left in it) stays on the list for the exit
- * hook to try again; it never fails the call.
+ * one. A call that writes a file of its own there names it (`leaves`), and that exact name is
+ * removed first. A directory that still will not go (something else was left in it) stays on
+ * the list for the exit hook to try again; it never fails the call.
  *
  * A call still running when the process exits is caught by an `exit` hook, not by a signal
  * listener. Listening for a signal cancels Node's own exit, so a Ctrl-C would stop ending a
  * `tour` or a `digest`, and `./llm` is a package entry point, so a listener here would change
  * every program that imports it. A program that stops on a signal calls `killLlmChildren`.
  */
-const madeHere = new Set<string>();
+/** Every directory this process made and has not removed yet, and the files its call may leave. */
+const madeHere = new Map<string, readonly string[]>();
 let exitHooked = false;
 
-async function emptyDir<T>(call: (dir: string) => Promise<T>): Promise<T> {
+async function emptyDir<T>(call: (dir: string) => Promise<T>, leaves: readonly string[] = []): Promise<T> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-llm-'));
-  madeHere.add(dir);
+  madeHere.set(dir, leaves);
   if (!exitHooked) {
     exitHooked = true;
-    process.on('exit', () => { for (const d of madeHere) leave(d); });
+    process.on('exit', () => { for (const d of madeHere.keys()) leave(d); });
   }
   try {
     return await call(dir);
@@ -357,8 +360,19 @@ async function emptyDir<T>(call: (dir: string) => Promise<T>): Promise<T> {
   }
 }
 
-/** Remove a directory this process made, if it is empty. Never throws. */
+/**
+ * Remove a directory this process made: the files its call named, each by its exact name, then
+ * the directory, if that left it empty. Never throws.
+ *
+ * Only while the directory is still on the list. `killLlmChildren` removes a directory and
+ * forgets it, and the call's own cleanup runs a few ms later, when the killed child closes. By
+ * then that name may have been drawn again, by someone else.
+ */
 function leave(dir: string): void {
+  if (!madeHere.has(dir)) return;
+  for (const name of madeHere.get(dir) ?? []) {
+    try { fs.rmSync(path.join(dir, name), { force: true }); } catch { /* the rmdir below tells */ }
+  }
   try {
     fs.rmdirSync(dir);
     madeHere.delete(dir);
@@ -537,6 +551,9 @@ const claude: Provider = {
  * path to hand it — and it reports no usage, which is recorded as unmetered rather than
  * guessed at.
  */
+/** The one file a codex call writes into its directory: its final message. */
+const CODEX_ANSWER = 'answer.txt';
+
 const codex: Provider = {
   id: 'codex',
   label: 'Codex',
@@ -560,25 +577,25 @@ const codex: Provider = {
     //
     // The answer file lives in that same directory, private (0700) and this call's alone. It
     // used to have a guessable name in shared /tmp, where someone else could create it first.
+    // It is named to `emptyDir` as the one file this call may leave, so every cleanup removes
+    // it by that exact name, never recursively. A codex call that had written its answer but
+    // not exited when `killLlmChildren` ran used to keep its 0700 directory, holding the
+    // model's answer. Killed, it now fails rather than returning that answer, which is right:
+    // nobody is waiting for it.
     return emptyDir(async (where) => {
-      const out = path.join(where, 'answer.txt');
-      try {
-        const r = await runProcess(
-          bin,
-          ['exec', '--ephemeral', '--skip-git-repo-check', '--sandbox', 'read-only',
-            '-C', where, '--output-last-message', out, '-'],
-          prompt, where, timeoutMs, signal,
-        );
-        const text = fs.existsSync(out) ? fs.readFileSync(out, 'utf8').trim() : '';
-        if (r.code !== 0 && !text) {
-          throw new Error(`codex exited ${r.code}: ${r.stderr.trim().slice(0, 200)}`);
-        }
-        return { text, inputTokens: 0, outputTokens: 0, usd: 0, metered: false };
-      } finally {
-        // By its exact path, so the directory is empty again and goes with the call.
-        try { fs.rmSync(out, { force: true }); } catch { /* then the directory stays; not a failure */ }
+      const out = path.join(where, CODEX_ANSWER);
+      const r = await runProcess(
+        bin,
+        ['exec', '--ephemeral', '--skip-git-repo-check', '--sandbox', 'read-only',
+          '-C', where, '--output-last-message', out, '-'],
+        prompt, where, timeoutMs, signal,
+      );
+      const text = fs.existsSync(out) ? fs.readFileSync(out, 'utf8').trim() : '';
+      if (r.code !== 0 && !text) {
+        throw new Error(`codex exited ${r.code}: ${r.stderr.trim().slice(0, 200)}`);
       }
-    });
+      return { text, inputTokens: 0, outputTokens: 0, usd: 0, metered: false };
+    }, [CODEX_ANSWER]);
   },
 };
 
