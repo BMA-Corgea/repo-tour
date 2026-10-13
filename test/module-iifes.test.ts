@@ -456,6 +456,77 @@ describe('T-16 AC3 — the functions inside become build steps and tour stops', 
     expect(steps.map((s) => `${s.name}@${s.startLine}-${s.endLine}`)).toEqual(['Foo@2-4']);
   });
 
+  // ---- the yield rule's reach, and both of its boundaries (T-16 review, N1) ----
+
+  it('a wrapper yields to a class inside it, not only to functions', async () => {
+    const source = [
+      'const Lib = (() => {',
+      '  class Store {',
+      '    get(key) {',
+      '      return key;',
+      '    }',
+      '  }',
+      '  return Store;',
+      '})();',
+      '',
+    ].join('\n');
+    const { steps } = await planAndTour({ 'src/lib.js': source, 'src/other.js': OTHER_JS }, 'src/lib.js');
+    expect(steps.map((s) => `${s.name}@${s.startLine}-${s.endLine}`), 'the wrapper kept the slot the class inside it should have').toEqual(
+      ['Store@2-6'],
+    );
+  });
+
+  it('a wrapper yields to multi-line data inside it, not only to functions', async () => {
+    const source = [
+      'var data = (function () {',
+      '  var colors = {',
+      "    red: '#f00',",
+      "    blue: '#00f',",
+      '  };',
+      '  var sizes = [',
+      '    1,',
+      '    2,',
+      '  ];',
+      '  return { colors: colors, sizes: sizes };',
+      '})();',
+      '',
+    ].join('\n');
+    const { steps } = await planAndTour({ 'src/data.js': source, 'src/other.js': OTHER_JS }, 'src/data.js');
+    expect(steps.map((s) => `${s.name}@${s.startLine}-${s.endLine}`), 'the wrapper kept the slot the data inside it should have').toEqual(
+      ['colors@2-5', 'sizes@6-9'],
+    );
+  });
+
+  it("boundary: a function that starts on the wrapper's own first line is still inside it", async () => {
+    const source = [
+      'var app = (function () { function init() {',
+      '  return 1;',
+      '}',
+      'return init; })();',
+      '',
+    ].join('\n');
+    const { steps } = await planAndTour({ 'src/app.js': source, 'src/other.js': OTHER_JS }, 'src/app.js');
+    // init (1-3) starts where app (1-4) starts, but ends sooner: strictly inside.
+    expect(steps.map((s) => `${s.name}@${s.startLine}-${s.endLine}`), "a function on the wrapper's first line did not count as inside it").toEqual(
+      ['init@1-3'],
+    );
+  });
+
+  it("boundary: a function that ends on the wrapper's own last line is still inside it", async () => {
+    const source = [
+      'var app = (function () {',
+      '  function done() {',
+      '    return 1;',
+      '  } return done; })();',
+      '',
+    ].join('\n');
+    const { steps } = await planAndTour({ 'src/app.js': source, 'src/other.js': OTHER_JS }, 'src/app.js');
+    // done (2-4) ends where app (1-4) ends, but starts later: strictly inside.
+    expect(steps.map((s) => `${s.name}@${s.startLine}-${s.endLine}`), "a function on the wrapper's last line did not count as inside it").toEqual(
+      ['done@2-4'],
+    );
+  });
+
   // ---- guards: what must plan exactly as it does on main ----
 
   it('guard: a wrapper with nothing eligible inside keeps its step (sql-gauntlet\'s argSection)', async () => {
@@ -522,6 +593,30 @@ describe('T-16 AC3 — the functions inside become build steps and tour stops', 
     // not "strictly inside", so nothing yields: CONFIG takes the slot, as it does on main.
     expect(steps.map((s) => s.name)).toEqual(['CONFIG']);
   });
+
+  it('guard: a generated script of 60,000 variables still plans in under two seconds', async () => {
+    // T-16 review N2: comparing every variable with every candidate took 21 s on a file like
+    // this, where main takes 27 ms. Half the variables are statements of their own. The other
+    // half are names in ONE statement, which all share its range, so a check that scanned only
+    // the candidates starting inside each variable would still compare every pair.
+    const own = Array.from({ length: 30_000 }, (_, i) => `var v${i} = {\n  a: ${i},\n};`);
+    const shared = Array.from({ length: 30_000 }, (_, i) => `  w${i} = ${i}`);
+    const source = `${own.join('\n')}\nvar\n${shared.join(',\n')};\n`;
+    const root = tmp('repo-tour-modules-scale-');
+    try {
+      write(path.join(root, 'src/table.js'), source);
+      write(path.join(root, 'src/other.js'), OTHER_JS);
+      const d = await digest(root, { write: false });
+      const recorded = d.extracts.find((e) => e.path === 'src/table.js')?.symbols.length;
+      expect(recorded, 'the generated file was not extracted, so there is nothing to time').toBe(60_000);
+      const started = performance.now();
+      await buildPlan(d, { root, witness: false });
+      const ms = Math.round(performance.now() - started);
+      expect(ms, `planning 60,000 variables took ${ms} ms: the yield check compares every pair again`).toBeLessThan(2_000);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }, 120_000);
 });
 
 // ================================================================================
