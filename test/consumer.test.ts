@@ -19,7 +19,9 @@
  *
  * T-11 acceptance criteria covered here: AC1 (exports map), AC2 (injectable asset roots),
  * AC3 (a file:/git dependency gets `dist/` with no manual build step), AC4 (this file,
- * green), AC6 (no new runtime dependency).
+ * green), AC6 (no new runtime dependency). T-14 hardened AC2 and AC3: a wrong asset root
+ * fails loudly in both stylesheets, explicit config beats the environment for both roots,
+ * and the pack test builds from a temp copy with no `dist/`, never in this checkout.
  */
 
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -68,6 +70,17 @@ function runNode(script: string, opts: { cwd: string; env?: NodeJS.ProcessEnv })
     return { status: res.status ?? 1, stdout: res.stdout ?? '', stderr: res.stderr ?? '' };
   } finally {
     fs.rmSync(scriptFile, { force: true });
+  }
+}
+
+/** What `fn` threw, as a plain object; or, when it threw nothing, what it returned instead. */
+function thrown(fn: () => string): { code?: string; message: string } {
+  try {
+    const value = fn();
+    return { message: `returned ${value.length} chars instead of throwing` };
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    return { code: e.code, message: e.message };
   }
 }
 
@@ -183,6 +196,57 @@ describe('AC2 — asset roots are injectable', () => {
     }
   });
 
+  it('an asset root with no skins/ folder fails loudly in alternateCss(), the way it does in baseCss()', () => {
+    // A root that exists but is one level off: the shape of a mistyped override. Skipping
+    // every skin here would hand back "" and an unstyled page with no error.
+    const wrongRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-wrong-root-'));
+    try {
+      configureAssets({ assetsDir: wrongRoot });
+      expect(thrown(() => baseCss())).toMatchObject({ code: 'ENOENT' });
+      const err = thrown(() => alternateCss());
+      expect(err).toMatchObject({ code: 'ENOENT' });
+      expect(err.message, 'the error should name the folder it looked in').toContain(path.join(wrongRoot, 'skins'));
+    } finally {
+      fs.rmSync(wrongRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('REPO_TOUR_ASSETS naming a missing directory fails loudly in both stylesheets, through the package name', () => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-missing-assets-'));
+    const missing = path.join(parent, 'not-here'); // never created
+    try {
+      const script = `
+const { baseCss, alternateCss } = await import('repo-tour/skins');
+for (const [name, fn] of [['baseCss', baseCss], ['alternateCss', alternateCss]]) {
+  try {
+    console.log(name + ' RETURNED ' + fn().length + ' chars');
+  } catch (err) {
+    console.log(name + ' THREW ' + err.code);
+  }
+}
+`;
+      const res = runNode(script, { cwd: consumerDir, env: { REPO_TOUR_ASSETS: missing } });
+      expect(res.stdout, res.stderr).toContain('baseCss THREW ENOENT');
+      expect(res.stdout, res.stderr).toContain('alternateCss THREW ENOENT');
+    } finally {
+      fs.rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  it('a skins folder missing one skin file still serves the others: a half-added skin costs an option, not a page', () => {
+    const copy = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-half-added-skin-'));
+    fs.cpSync(path.join(REPO_ROOT, 'assets'), copy, { recursive: true });
+    fs.rmSync(path.join(copy, 'skins', 'jrpg.css'));
+    try {
+      configureAssets({ assetsDir: copy });
+      const css = alternateCss();
+      expect(css).toContain(':root[data-theme="gunmetal"]');
+      expect(css).not.toContain(':root[data-theme="jrpg"]');
+    } finally {
+      fs.rmSync(copy, { recursive: true, force: true });
+    }
+  });
+
   it('grammarsDir override: only the grammar actually present in the override loads (subprocess — see file header)', () => {
     const overrideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-grammars-override-'));
     try {
@@ -254,6 +318,24 @@ console.log('assetsDir=' + a.assetsDir());
         env: { REPO_TOUR_ASSETS: '/should/not/win' },
       });
       expect(res.stdout).toContain(`assetsDir=${explicitDir}`);
+    } finally {
+      fs.rmSync(explicitDir, { recursive: true, force: true });
+    }
+  });
+
+  it('explicit configureAssets() wins over the environment for grammarsDir too', () => {
+    const explicitDir = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-explicit-grammars-'));
+    try {
+      const script = `
+const a = await import(${JSON.stringify(DIST('assets'))});
+a.configureAssets({ grammarsDir: ${JSON.stringify(explicitDir)} });
+console.log('grammarsDir=' + a.grammarsDir());
+`;
+      const res = runNode(script, {
+        cwd: consumerDir,
+        env: { REPO_TOUR_GRAMMARS: '/should/not/win' },
+      });
+      expect(res.stdout, res.stderr).toContain(`grammarsDir=${explicitDir}\n`);
     } finally {
       fs.rmSync(explicitDir, { recursive: true, force: true });
     }
