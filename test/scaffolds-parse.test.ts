@@ -140,6 +140,12 @@ const FILES: Record<string, string> = {
     '}',
     '',
   ].join('\n'),
+  'src/fetcher.js': [
+    "function fetcher(url, opts = { method: 'GET', retries: 3, timeoutMs: 5000, cache: 'no-store' }) {",
+    '  return fetch(url, opts);',
+    '}',
+    '',
+  ].join('\n'),
   'src/Badge.tsx': [
     'export const Badge = ({ label, tone }: { label: string; tone: string }) => {',
     '  const text = label.toUpperCase();',
@@ -386,6 +392,13 @@ describe('T-30 AC2 — the same defect in other shapes: each practice file parse
     expectHidden(p, 'width * height');
   });
 
+  it('a default parameter bigger than the body: the body is still the one hidden', () => {
+    const p = practiceFor('src/fetcher.js', [1, 3]);
+    expectParses(p);
+    expectKept(p, "function fetcher(url, opts = { method: 'GET', retries: 3, timeoutMs: 5000, cache: 'no-store' }) {");
+    expectHidden(p, 'fetch(url, opts)');
+  });
+
   it('a React arrow component with destructured props (tsx)', () => {
     const p = practiceFor('src/Badge.tsx', [1, 4]);
     expectParses(p);
@@ -527,6 +540,14 @@ describe('T-30 AC4 — the stub stays a stub: main\'s output where main already 
     expect(await parseErrorsOf(out, 'tsx', 'tsx')).toBe(0);
   });
 
+  it('guard: a comma or a semicolon in JSX text does not end an arrow\'s body', async () => {
+    for (const source of ['export const Hi = () => <p>Hello, world</p>;\n', 'export const Gap = () => <p>a&nbsp;b</p>;\n']) {
+      const out = stubFile(source, [{ startLine: 1, endLine: 1 }], 'tsx', Q);
+      expect(out.includes('<p>'), `the body was not hidden:\n${out}`).toBe(false);
+      expect(await parseErrorsOf(out, 'tsx', 'tsx'), `does not parse:\n${out}`).toBe(0);
+    }
+  });
+
   it('guard: braces inside a regex, a template, a string and a comment are not the body\'s', async () => {
     const cases: Array<[string, string, string]> = [
       ['split', 'export function split(s: string): string[] {\n  return s.split(/[{]/);\n}\n', 's.split'],
@@ -534,6 +555,7 @@ describe('T-30 AC4 — the stub stays a stub: main\'s output where main already 
       ['close', "export function close(): string {\n  return '}';\n}\n", "return '}'"],
       ['count', 'export function count(): number {\n  // } a stray brace\n  return 1;\n}\n', 'return 1'],
       ['quantify', "export function trim(s: string): string {\n  return s.replace(/^\\s{2,}/, '');\n}\n", 's.replace'],
+      ['nest', 'export function nest(): string {\n  return `a${`{`}b`;\n}\n', 'return `'],
     ];
     for (const [name, source, answer] of cases) {
       const range = await rangeOf(source, 'typescript', 'ts', name === 'quantify' ? 'trim' : name);
@@ -541,6 +563,12 @@ describe('T-30 AC4 — the stub stays a stub: main\'s output where main already 
       expect(out.includes(answer), `${name}: the body was not hidden:\n${out}`).toBe(false);
       expect(await parseErrorsOf(out, 'typescript', 'ts'), `${name}: does not parse:\n${out}`).toBe(0);
     }
+  });
+
+  it('guard: a function whose return type is a function type keeps its body as the body', async () => {
+    const source = 'export function make(): () => void {\n  const fire = () => {};\n  return fire;\n}\n';
+    const range = await rangeOf(source, 'typescript', 'ts', 'make');
+    expect(stubFile(source, [range], 'typescript', Q)).toBe(`export function make(): () => void {\n  ${TODO}\n}\n`);
   });
 
   it('the statement\'s own `;` after an arrow\'s body is kept, not dropped', async () => {
@@ -562,11 +590,26 @@ describe('T-30 AC4 — the stub stays a stub: main\'s output where main already 
 // ================================================================================
 
 describe('T-30 AC5 — a range the scan cannot read comes back byte for byte', () => {
-  it('a range that starts inside one function and ends inside the next', async () => {
+  it('a range that starts inside one function and ends inside, or after, the next', async () => {
     const source = 'function a() {\n  return 1;\n}\nfunction b() {\n  return 2;\n}\n';
-    const out = stubFile(source, [{ startLine: 2, endLine: 4 }], 'javascript', Q);
-    expect(out, `a range with a closer it never opened was cut:\n${out}`).toBe(source);
+    for (const range of [{ startLine: 2, endLine: 4 }, { startLine: 2, endLine: 6 }]) {
+      const out = stubFile(source, [range], 'javascript', Q);
+      expect(out, `lines ${range.startLine}-${range.endLine}: a range with a closer it never opened was cut:\n${out}`).toBe(source);
+      expect(await parseErrorsOf(out, 'javascript', 'js')).toBe(0);
+    }
+  });
+
+  it('a range that ends inside the next declaration, after a block it could have cut', async () => {
+    const source = 'const a = {\n  x: 1,\n};\nfunction b() {\n  return 2;\n}\n';
+    const out = stubFile(source, [{ startLine: 1, endLine: 4 }], 'javascript', Q);
+    expect(out, `a range with a bracket still open at its end was cut:\n${out}`).toBe(source);
     expect(await parseErrorsOf(out, 'javascript', 'js')).toBe(0);
+  });
+
+  it('a range whose brackets cross, which only a misread can produce, is not cut on the crossed pair', () => {
+    const source = 'const crossed = wrap((1 }, { 2 ));\n';
+    const out = stubFile(source, [{ startLine: 1, endLine: 1 }], 'javascript', Q);
+    expect(out, `a range whose brackets cross was cut:\n${out}`).toBe(source);
   });
 
   it('a range that ends inside a template literal', () => {

@@ -5,15 +5,17 @@
  * placeholder that references the step by number, so the learner's editor shows exactly
  * which decision belongs where. Everything outside `loadBearing` is copied byte-for-byte.
  *
- * This never tries to be clever about a shape it does not recognize. TS/JS looks for a
- * brace to open a block; failing that, an arrow to convert into one. Python finds the
- * colon that ends the header and then writes whichever body shape that header already has
- * — a same-line `raise` for an inline body, an indented one (measured, never assumed) for
- * a block. Anything neither pattern fits
- * — a bare exported constant with no body to hide, a signature this simple stubber cannot
- * parse — is left completely untouched. A stub that occasionally under-hides content is a
- * cosmetic gap; a stub that occasionally emits invalid syntax defeats AC5 outright, so
- * every fallback in this file resolves toward "leave it alone", never toward a guess.
+ * This never tries to be clever about a shape it does not recognize. TS/JS pairs every
+ * bracket in the range and hides the inside of ONE matched pair `{ … }`, keeping everything
+ * before its `{` and everything from its own `}` on; failing that, it turns the arrow on the
+ * range's first line into a block, keeping whatever follows the arrow's expression. Python
+ * finds the colon that ends the header and then writes whichever body shape that header
+ * already has — a same-line `raise` for an inline body, an indented one (measured, never
+ * assumed) for a block. Anything neither pattern fits — a bare exported constant with no
+ * body to hide, a range the bracket scan cannot read — is left completely untouched. A stub
+ * that occasionally under-hides content is a cosmetic gap; a stub that occasionally emits
+ * invalid syntax defeats AC5 outright, so every fallback in this file resolves toward "leave
+ * it alone", never toward a guess.
  */
 
 import type { Range } from './types.js';
@@ -32,35 +34,234 @@ function todoLine(marker: '//' | '#', questions: StubQuestion[], index: number):
   return `${marker} TODO(${label}): ${text}`;
 }
 
+/** A `{ … }` the scan matched: offsets into the range's text, and the brackets around it. */
+interface Block {
+  open: number;
+  close: number;
+  /** how many brackets enclose it */
+  depth: number;
+  /** every one of them is a `(`: none is a `[`, a `{` or a template's `${` */
+  inParens: boolean;
+}
+
+/** A `=>` on the range's first line, and where the expression after it ends. */
+interface Arrow {
+  at: number;
+  depth: number;
+  inParens: boolean;
+  /** its body is a block (`=> {`), which the scan already reports as a `Block` */
+  blockBody: boolean;
+  /**
+   * Where its expression ends: the closer of the bracket around it, else the range's own final
+   * `;`, else the range's end. Never a `,` or `;` beside it: JSX text holds both freely
+   * (`() => <p>Hello, world</p>`), and running on to the closer only drops what the stub drops
+   * anyway.
+   */
+  end: number | null;
+}
+
+/** After one of these, a `/` starts a regex; after anything else it divides. `<` is not one: `</` closes a JSX tag. */
+const REGEX_AFTER = new Set(['(', ',', '=', ':', '[', '!', '&', '|', '?', '{', '}', ';', '+', '-', '*', '%', '~', '^', '>']);
+const REGEX_AFTER_WORD = new Set(['return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void', 'throw', 'case', 'do', 'else', 'yield', 'await']);
+const CLOSER_OF: Record<string, string> = { '(': ')', '[': ']', '{': '}' };
+
+function isWordChar(ch: string): boolean {
+  return /[A-Za-z0-9_$]/.test(ch) || ch.charCodeAt(0) > 127;
+}
+
 /**
- * Replace one range of a TS/JS/TSX file. Three cases, in order of how much of the
- * original signature survives:
+ * Pair every bracket in a TS/JS range, the way the language reads it: past comments, quotes,
+ * template literals (their `${ … }` included) and regex literals (told from a division by the
+ * token before the `/`). Returns null — "unsure" — when a closer has no opener, a bracket or a
+ * template is still open at the end of the range, or a block comment never ends. That is what
+ * makes every cut below safe: removing the inside of a pair this scan matched cannot unbalance
+ * anything, and a range it cannot read is never cut at all.
  *
- *   1. A `{` appears somewhere in the range (function, method, class, arrow-with-block):
- *      keep everything up to and including it, drop the rest, close with one `}`.
- *   2. No `{` anywhere, but the FIRST line has `=>` (an arrow with an expression body):
- *      keep up to and including `=>`, add a block around the placeholder.
- *   3. Neither: leave the range exactly as it was.
+ * One deliberate leniency: a quote that reaches the end of its line ends there. JavaScript has
+ * no multi-line quotes, so the only way to get there is JSX text (`<p>Don't</p>`), whose
+ * apostrophe opens nothing.
+ */
+function scanJs(text: string): { blocks: Block[]; arrows: Arrow[] } | null {
+  const stack: Array<{ ch: string; at: number; depth: number; inParens: boolean }> = [];
+  const blocks: Block[] = [];
+  const arrows: Arrow[] = [];
+  const firstLineEnd = text.includes('\n') ? text.indexOf('\n') : text.length;
+  let inTemplate = false;
+  let prev = ''; // the last significant character; 'w' after a word or any other value
+  let word = '';
+
+  const allParens = (): boolean => stack.every((o) => o.ch === '(');
+  // A closer at an arrow's own depth closes the bracket around it, which ends its expression.
+  const endArrowsHere = (at: number): void => {
+    for (const a of arrows) if (a.end === null && !a.blockBody && a.depth === stack.length) a.end = at;
+  };
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+
+    if (inTemplate) {
+      if (ch === '\\') i++;
+      else if (ch === '`') { inTemplate = false; prev = 'w'; word = ''; }
+      else if (ch === '$' && text[i + 1] === '{') {
+        stack.push({ ch: '${', at: i + 1, depth: stack.length, inParens: false });
+        inTemplate = false;
+        prev = '{';
+        i++;
+      }
+      continue;
+    }
+
+    if (/\s/.test(ch)) continue;
+
+    if (ch === '/' && text[i + 1] === '/') {
+      const eol = text.indexOf('\n', i);
+      i = eol === -1 ? text.length : eol;
+      continue;
+    }
+    if (ch === '/' && text[i + 1] === '*') {
+      const close = text.indexOf('*/', i + 2);
+      if (close === -1) return null;
+      i = close + 1;
+      continue;
+    }
+
+    if (ch === '"' || ch === "'") {
+      let j = i + 1;
+      while (j < text.length && text[j] !== ch && text[j] !== '\n') j += text[j] === '\\' ? 2 : 1;
+      i = j;
+      prev = 'w';
+      word = '';
+      continue;
+    }
+
+    if (ch === '`') { inTemplate = true; continue; }
+
+    if (ch === '/') {
+      const regex = (prev === '' || REGEX_AFTER.has(prev) || (prev === 'w' && REGEX_AFTER_WORD.has(word))) && text[i + 1] !== '>';
+      if (regex) {
+        let j = i + 1;
+        let inClass = false;
+        for (; j < text.length && text[j] !== '\n'; j++) {
+          const c = text[j];
+          if (c === '\\') j++;
+          else if (inClass) { if (c === ']') inClass = false; }
+          else if (c === '[') inClass = true;
+          else if (c === '/') break;
+        }
+        if (text[j] === '/') while (j + 1 < text.length && /[A-Za-z]/.test(text[j + 1]!)) j++;
+        i = j;
+        prev = 'w';
+        word = '';
+        continue;
+      }
+      prev = '/';
+      word = '';
+      continue;
+    }
+
+    if (ch === '(' || ch === '[' || ch === '{') {
+      stack.push({ ch, at: i, depth: stack.length, inParens: allParens() });
+      prev = ch;
+      word = '';
+      continue;
+    }
+
+    if (ch === ')' || ch === ']' || ch === '}') {
+      endArrowsHere(i);
+      const open = stack.pop();
+      if (!open) return null;
+      if (open.ch === '${') {
+        if (ch !== '}') return null;
+        inTemplate = true;
+        continue;
+      }
+      if (CLOSER_OF[open.ch] !== ch) return null;
+      if (ch === '}') blocks.push({ open: open.at, close: i, depth: open.depth, inParens: open.inParens });
+      prev = ch;
+      word = '';
+      continue;
+    }
+
+    if (ch === '=' && text[i + 1] === '>') {
+      if (i < firstLineEnd) {
+        const rest = text.slice(i + 2).trimStart();
+        arrows.push({ at: i, depth: stack.length, inParens: allParens(), blockBody: rest.startsWith('{'), end: null });
+      }
+      i++;
+      prev = '>';
+      word = '';
+      continue;
+    }
+
+    if (isWordChar(ch)) {
+      let j = i;
+      while (j + 1 < text.length && isWordChar(text[j + 1]!)) j++;
+      word = text.slice(i, j + 1);
+      prev = 'w';
+      i = j;
+      continue;
+    }
+
+    prev = ch;
+    word = '';
+  }
+
+  if (inTemplate || stack.length > 0) return null;
+  const trimmed = text.trimEnd();
+  const rangeEnd = trimmed.endsWith(';') ? trimmed.length - 1 : text.length;
+  for (const a of arrows) if (a.end === null) a.end = rangeEnd;
+  return { blocks, arrows };
+}
+
+/** The leading whitespace of the line that holds offset `at`. */
+function indentAt(text: string, at: number): string {
+  const lineStart = text.lastIndexOf('\n', at) + 1;
+  return /^[ \t]*/.exec(text.slice(lineStart))![0];
+}
+
+/**
+ * Replace one range of a TS/JS/TSX file. The body to hide is chosen from the brackets the scan
+ * paired, outermost first, and only among those inside nothing but parentheses: a `[ … ]` is a
+ * list, and hiding one element of it would hide the wrong thing.
+ *
+ *   1. A block: the biggest `{ … }` at the shallowest depth any block reaches (the first, on a
+ *      tie). At depth 0 that is a declaration's own body, never a destructured or default
+ *      parameter (those sit inside the parameter list's parentheses), and the body rather than a
+ *      smaller `Readonly<{ … }>` or return-type literal. With nothing at depth 0 it is what the
+ *      declaration hands to a call: the module pattern's function, a callback, an `extend({ … })`
+ *      object. Keep everything through its `{`, add the TODO line, then keep everything from its
+ *      own `}` to the end of the range, so `})();`, `});` and `}>;` survive.
+ *   2. Else the arrow on the range's FIRST line, if it is as shallow as any block: its expression
+ *      body becomes a block, and what followed the expression (`);`, a final `;`) is kept. A block
+ *      at the same depth wins, because there the arrow is a type (`f(): () => void { … }`).
+ *   3. Neither, or a range the scan cannot read: leave the range exactly as it was.
+ *
+ * The TODO line sits two spaces inside the line it opens, and a closing line keeps its own
+ * indentation, so a function inside a wrapper still reads as one.
  */
 function stubJsLikeRange(lines: string[], start: number, end: number, questions: StubQuestion[], index: number): string[] {
-  for (let lineNo = start; lineNo <= end; lineNo++) {
-    const text = lines[lineNo - 1] ?? '';
-    const braceAt = text.indexOf('{');
-    if (braceAt !== -1) {
-      const head = text.slice(0, braceAt + 1);
-      const prefix = lines.slice(start - 1, lineNo - 1); // any signature lines before the brace line
-      return [...prefix, head, `  ${todoLine('//', questions, index)}`, '}'];
-    }
+  const untouched = lines.slice(start - 1, end);
+  const text = untouched.join('\n');
+  const scan = scanJs(text);
+  if (scan === null) return untouched;
+
+  const blocks = scan.blocks.filter((b) => b.inParens);
+  const arrows = scan.arrows.filter((a) => a.inParens && !a.blockBody);
+  const depth = Math.min(...blocks.map((b) => b.depth), ...arrows.map((a) => a.depth));
+  if (depth === Infinity) return untouched;
+  const todo = todoLine('//', questions, index);
+
+  const atDepth = blocks.filter((b) => b.depth === depth);
+  if (atDepth.length > 0) {
+    const body = atDepth.reduce((best, b) => (b.close - b.open > best.close - best.open ? b : best));
+    const closeLineStart = text.lastIndexOf('\n', body.close) + 1;
+    const tail = text.slice(closeLineStart, body.close).trim() === '' ? text.slice(closeLineStart) : text.slice(body.close);
+    return `${text.slice(0, body.open + 1)}\n${indentAt(text, body.open)}  ${todo}\n${tail}`.split('\n');
   }
 
-  const first = lines[start - 1] ?? '';
-  const arrowAt = first.indexOf('=>');
-  if (arrowAt !== -1) {
-    const head = `${first.slice(0, arrowAt + 2)} {`;
-    return [head, `  ${todoLine('//', questions, index)}`, '}'];
-  }
-
-  return lines.slice(start - 1, end);
+  const arrow = arrows.find((a) => a.depth === depth)!;
+  const indent = indentAt(text, arrow.at);
+  return `${text.slice(0, arrow.at + 2)} {\n${indent}  ${todo}\n${indent}}${text.slice(arrow.end!)}`.split('\n');
 }
 
 /** A line that opens a Python block this stubber understands: `def`, `async def`, `class`. */
