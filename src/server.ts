@@ -31,6 +31,7 @@ import { buildArchitecture, architectureBrief } from './architecture.js';
 import { interpretStops, applyMeanings, interpretArchitecture, DEFAULT_MODEL } from './interpret.js';
 import { renderRepoView } from './repoview.js';
 import { baseCss, alternateCss, skinPicker, skinScript } from './skins.js';
+import { assetsDir } from './assets.js';
 import {
   surveyProviders, resolveChoice, resolveTutorChoice, providerById, killLlmChildren,
   runLlm, runLlmStream, type LlmChoice,
@@ -202,27 +203,75 @@ interface Job {
 }
 
 /**
- * A hash of everything that decides how a page LOOKS, as opposed to what it says.
+ * A hash of everything that decides what a cached page holds and how it looks: the code that
+ * built it, and the skins.
  *
  * Rendered pages are cached to disk with their CSS and scripts inlined, because a tour has
- * to open from `file://` with no network. That means a page carries the presentation it was
- * built with, forever: adding two skins changed nothing about any tour already on disk —
+ * to open from `file://` with no network. That means a page carries the code and the skins it
+ * was built with, forever: adding two skins changed nothing about any tour already on disk —
  * neither their CSS nor their options were in those files, so the picker could not offer
  * what was not there.
  *
- * Hashing the renderer's own inputs makes that automatic. Change a skin, edit the view, and
- * every cached page stops matching without anyone having to remember to invalidate it.
+ * Stamping each page with this, and reusing a page only while its stamp still matches, makes
+ * that automatic. Change a skin or any module, and every cached page stops matching without
+ * anyone having to remember to invalidate it.
  *
  * Re-rendering is cheap: the digest is incremental and every explanation is already cached
- * by content hash, so a presentation change costs a render, not a re-read and not a token.
+ * by content hash, so a change here costs a render, not a re-read and not a token.
  */
+
 /**
- * Held briefly, never for the life of the process.
+ * The code half: every module of the build that is running, hashed once, as this module loads.
  *
- * Memoising it forever was the same mistake as baking the boot id into a cached page: a
- * running server could not notice its own skins changing, so editing one changed nothing
- * until a restart. A couple of seconds is long enough to keep the four-second poll from
+ * It used to hash five hand-listed modules, which missed most of what decides a page: which
+ * stops exist (`extract.ts`), the Ask panel inlined into every page (`askpanel.ts`), and
+ * thirty-odd more. So the owner's autoSQL tour, built before the tutor's rework, kept the old
+ * panel, because nothing on the list had changed (T-29). This takes no list: it walks the
+ * folder this module was loaded from (`src/` under tsx, `dist/` when compiled) and hashes the
+ * path and bytes of every file with this module's own extension.
+ *
+ * Once, never again. A process cannot change its code without restarting: `tsx watch`
+ * restarts on an edit, and a `dist/` server keeps running the old code while `npm run build`
+ * rewrites the files under it. Read later, the files would stamp the old code's pages with the
+ * new code's hash, and the restarted server would take those pages as current. Node reads the
+ * whole static import graph before it runs any of it, so by now the running code has been read.
+ */
+function codeVersion(dir: string, ext: string): string {
+  const h = createHash('sha256');
+  const walk = (at: string): void => {
+    let entries: fs.Dirent[] = [];
+    try { entries = fs.readdirSync(at, { withFileTypes: true }); } catch { return; }
+    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    for (const e of entries) {
+      const abs = path.join(at, e.name);
+      if (e.isDirectory()) { walk(abs); continue; }
+      if (!e.isFile() || !e.name.endsWith(ext)) continue;
+      // The path as well as the bytes, so a renamed module is a different build.
+      h.update(`${path.relative(dir, abs)}\0`);
+      try { h.update(fs.readFileSync(abs)); } catch { /* absent input is itself a state */ }
+      h.update('\0');
+    }
+  };
+  walk(dir);
+  return h.digest('hex');
+}
+
+const RUNNING_CODE = ((): string => {
+  const self = fileURLToPath(import.meta.url);
+  return codeVersion(path.dirname(self), path.extname(self));
+})();
+
+/**
+ * The skins half: held briefly, never for the life of the process.
+ *
+ * The renderer reads the skins on every render, so a saved stylesheet reaches the next page
+ * without a restart, and the stamp has to see it the same way. Memoising it forever was the
+ * same mistake as baking the boot id into a cached page: a running server could not notice
+ * its own skins changing. A couple of seconds is long enough to keep the four-second poll from
  * re-reading ten small files, and short enough that a saved stylesheet lands immediately.
+ *
+ * Read from `assetsDir()`, the root the renderer reads, which `configureAssets()` or
+ * `REPO_TOUR_ASSETS` can move away from this package's own `assets/`.
  */
 let presentationCache: { value: string; at: number } | null = null;
 const PRESENTATION_TTL_MS = 2000;
@@ -231,26 +280,22 @@ function presentationVersion(): string {
   if (presentationCache && Date.now() - presentationCache.at < PRESENTATION_TTL_MS) {
     return presentationCache.value;
   }
-  const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
   const h = createHash('sha256');
+  h.update(RUNNING_CODE);
 
   const feed = (file: string): void => {
     try { h.update(fs.readFileSync(file)); } catch { /* absent input is itself a state */ }
   };
 
   // the skins and the vendored tour assets
-  for (const dir of [path.join(root, 'assets', 'skins'), path.join(root, 'assets')]) {
+  const assets = assetsDir();
+  for (const dir of [path.join(assets, 'skins'), assets]) {
     let entries: string[] = [];
     try { entries = fs.readdirSync(dir).sort(); } catch { continue; }
     for (const f of entries) {
       if (!/\.(css|js)$/.test(f)) continue;
       feed(path.join(dir, f));
     }
-  }
-  // and the modules that build the page. Absent in a compiled install, which is fine: the
-  // assets alone still catch every skin change.
-  for (const f of ['repoview.ts', 'skins.ts', 'codetour.ts', 'architecture.ts', 'interpret.ts']) {
-    feed(path.join(root, 'src', f));
   }
 
   presentationCache = { value: h.digest('hex').slice(0, 12), at: Date.now() };
@@ -527,6 +572,11 @@ export class RepoTourServer {
 
   /** Build (or rebuild) a repository's tour. Returns the rendered page. */
   async build(repoPath: string, onLine: (s: string) => void): Promise<Rendered> {
+    // Taken before anything is read or rendered. A skin saved while the build runs then leaves
+    // the stamp older than the page, which costs one needless re-render. Taken after the
+    // render, it could name a stylesheet the page does not carry, and that page would be
+    // reused as current until the next change.
+    const presentation = presentationVersion();
     const fp = fingerprint(repoPath);
     const already = this.lookup(repoPath, fp);
     if (already) return already;
@@ -577,7 +627,7 @@ export class RepoTourServer {
 
     const rendered: Rendered = {
       fingerprint: fp,
-      presentation: presentationVersion(),
+      presentation,
       html,
       builtAt: new Date().toISOString(),
       stops: steps.length,
