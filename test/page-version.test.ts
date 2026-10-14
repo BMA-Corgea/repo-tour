@@ -512,6 +512,12 @@ describe('AC7: a rebuild waits until the page that started it has been sent', ()
     // before anything yields. Started inside the request, it held the page back for as long as
     // that took, on the first open after every update to the app.
     const under = scratch('answer-first');
+    // A response still being sent: it closes when this test says so.
+    const sending = Object.assign(new EventEmitter(), {
+      writeHead() { return this; },
+      end() { return this; },
+    }) as unknown as import('node:http').ServerResponse;
+    let fresh: RepoTourServer | null = null;
     try {
       const repo = fixtureRepo(under);
       const state = path.join(under, 'state.json');
@@ -522,12 +528,7 @@ describe('AC7: a rebuild waits until the page that started it has been sent', ()
       const metaPath = path.join(dir, fs.readdirSync(dir).find((f) => f.endsWith('.json'))!);
       fs.writeFileSync(metaPath, JSON.stringify({ ...JSON.parse(fs.readFileSync(metaPath, 'utf8')), presentation: 'from-before' }));
 
-      const fresh = new RepoTourServer({ statePath: state, interpret: false });
-      // A response still being sent: it closes when this test says so.
-      const sending = Object.assign(new EventEmitter(), {
-        writeHead() { return this; },
-        end() { return this; },
-      }) as unknown as import('node:http').ServerResponse;
+      fresh = new RepoTourServer({ statePath: state, interpret: false });
       await fresh.handler({ url: `/r?path=${encodeURIComponent(repo)}`, method: 'GET' } as import('node:http').IncomingMessage, sending);
 
       expect(fresh.listRepos()[0]!.running, 'the page is stale, so a rebuild is under way').toBe(true);
@@ -549,6 +550,10 @@ describe('AC7: a rebuild waits until the page that started it has been sent', ()
       await settle(fresh);
       expect(onDisk(repo).meta.presentation, 'once the page is sent, the rebuild runs').not.toBe('from-before');
     } finally {
+      // Let any build finish before the fixture goes, whatever failed above: a build still
+      // running writes its cache back into a deleted folder and leaves it in the temp dir.
+      (sending as unknown as EventEmitter).emit('close');
+      if (fresh) await settle(fresh);
       fs.rmSync(under, { recursive: true, force: true });
     }
   }, 60_000);
