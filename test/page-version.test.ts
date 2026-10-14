@@ -345,8 +345,10 @@ describe.concurrent('AC3: the stamp names the code that is running, not the file
       }
     }, 180_000);
   }
+});
 
-  it(`${TSX_RUNTIME.name}: a skin saved under a running server reaches the page it already holds (AC5)`, async ({ expect }) => {
+describe.concurrent('AC5: a page in memory obeys the same stamp rule as a page on disk', () => {
+  it(`${TSX_RUNTIME.name}: a skin saved under a running server reaches the page it already holds`, async ({ expect }) => {
     // The page is in memory, and its stamp is stale. The rebuild that opening it starts must
     // render, not hand that same page back.
     const under = scratch('skin');
@@ -369,9 +371,11 @@ describe.concurrent('AC3: the stamp names the code that is running, not the file
       fs.rmSync(under, { recursive: true, force: true });
     }
   }, 180_000);
+});
 
+describe.concurrent('AC4: a Rebuild cut off by a restart is resumed', () => {
   for (const rt of RUNTIMES) {
-    it(`${rt.name}: a Rebuild cut off by a restart resumes, although the page is current (AC4)`, async ({ expect }) => {
+    it(`${rt.name}: the fresh server resumes it, although the page is current`, async ({ expect }) => {
       const under = scratch('restart');
       try {
         const pkg = copyPackage(rt, under);

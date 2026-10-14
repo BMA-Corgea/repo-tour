@@ -110,10 +110,17 @@ function markerPath(repoPath: string): string {
   return path.join(repoPath, CACHE_DIR, 'building.json');
 }
 
-function markBuilding(repoPath: string, lines: string[]): void {
+/**
+ * `force` records that the reader asked for this build. A resumed build is dropped when the
+ * page for its tree is already current, which is right for a build that had in fact finished
+ * and wrong for a Rebuild the reader pressed: that was pressed on a current page.
+ */
+function markBuilding(repoPath: string, lines: string[], force = false): void {
   try {
     fs.mkdirSync(path.dirname(markerPath(repoPath)), { recursive: true });
-    fs.writeFileSync(markerPath(repoPath), JSON.stringify({ startedAt: new Date().toISOString(), lines }, null, 2));
+    fs.writeFileSync(markerPath(repoPath), JSON.stringify(
+      { startedAt: new Date().toISOString(), lines, ...(force ? { force: true } : {}) }, null, 2,
+    ));
   } catch { /* a build that cannot record itself still runs */ }
 }
 
@@ -124,11 +131,12 @@ function clearBuilding(repoPath: string): void {
 /** A marker older than this is from a run nobody is waiting for any more. */
 const RESUME_WINDOW_MS = 6 * 60 * 60 * 1000;
 
-function wasBuilding(repoPath: string): boolean {
+/** A build the last run did not finish, if it is recent enough to resume, and whether it was asked for. */
+function wasBuilding(repoPath: string): { force: boolean } | null {
   try {
-    const m = JSON.parse(fs.readFileSync(markerPath(repoPath), 'utf8')) as { startedAt: string };
-    return Date.now() - Date.parse(m.startedAt) < RESUME_WINDOW_MS;
-  } catch { return false; }
+    const m = JSON.parse(fs.readFileSync(markerPath(repoPath), 'utf8')) as { startedAt: string; force?: boolean };
+    return Date.now() - Date.parse(m.startedAt) < RESUME_WINDOW_MS ? { force: m.force === true } : null;
+  } catch { return null; }
 }
 
 /**
@@ -447,13 +455,14 @@ export class RepoTourServer {
    * Deliberately automatic: someone asked for this build, the process died under them, and
    * making them ask again — with no way to know they had to — is how minutes of work get
    * lost silently. A marker whose repo is already built at its current state is stale and is
-   * simply cleared.
+   * simply cleared, unless it records a Rebuild the reader pressed: that is resumed anyway.
    */
   private resumeInterrupted(): void {
     for (const r of this.repos) {
-      if (!wasBuilding(r.path)) { clearBuilding(r.path); continue; }
-      if (this.lookup(r.path, fingerprint(r.path))) { clearBuilding(r.path); continue; }
-      const job = this.startJob(r.path);
+      const was = wasBuilding(r.path);
+      if (!was) { clearBuilding(r.path); continue; }
+      if (!was.force && this.lookup(r.path, fingerprint(r.path))) { clearBuilding(r.path); continue; }
+      const job = this.startJob(r.path, was.force);
       job.lines.unshift('resuming a build the last run did not finish…');
     }
   }
@@ -570,16 +579,26 @@ export class RepoTourServer {
     });
   }
 
-  /** Build (or rebuild) a repository's tour. Returns the rendered page. */
-  async build(repoPath: string, onLine: (s: string) => void): Promise<Rendered> {
+  /**
+   * Build (or rebuild) a repository's tour. Returns the rendered page.
+   *
+   * The page already built for this tree comes back instead, unless `force` says the reader
+   * asked for a rebuild, or its stamp is not the current one.
+   */
+  async build(repoPath: string, onLine: (s: string) => void, opts: { force?: boolean } = {}): Promise<Rendered> {
     // Taken before anything is read or rendered. A skin saved while the build runs then leaves
     // the stamp older than the page, which costs one needless re-render. Taken after the
     // render, it could name a stylesheet the page does not carry, and that page would be
     // reused as current until the next change.
     const presentation = presentationVersion();
     const fp = fingerprint(repoPath);
-    const already = this.lookup(repoPath, fp);
-    if (already) return already;
+    if (!opts.force) {
+      const already = this.lookup(repoPath, fp);
+      // The stamp is checked here as well as in readRendered(), because the page in memory
+      // skips that check. Without it, the rebuild /r starts for a stale page in memory handed
+      // that same page back, rendered nothing, and was started again on every open.
+      if (already && already.presentation === presentation) return already;
+    }
 
     onLine('reading the tree…');
     const result = await digest(repoPath, { write: true });
@@ -698,19 +717,20 @@ export class RepoTourServer {
     return job;
   }
 
-  private startJob(repoPath: string): Job {
+  /** `force`: the reader asked for this build, so it renders even when the page is current. */
+  private startJob(repoPath: string, force = false): Job {
     const running = this.jobs.get(repoPath);
     if (running?.state === 'running') return running;
 
     const job: Job = { repo: repoPath, state: 'running', lines: [], startedAt: Date.now() };
     this.jobs.set(repoPath, job);
-    markBuilding(repoPath, job.lines);
+    markBuilding(repoPath, job.lines, force);
 
     void this.build(repoPath, (line) => {
       job.lines.push(line);
       // Kept current on disk so a resumed build can say where the last one got to.
-      markBuilding(repoPath, job.lines);
-    })
+      markBuilding(repoPath, job.lines, force);
+    }, { force })
       .then(() => { job.state = 'done'; job.lines.push('ready'); clearBuilding(repoPath); })
       .catch((e: unknown) => {
         job.state = 'failed';
@@ -1093,8 +1113,11 @@ export class RepoTourServer {
       if ((route === '/api/build' || route === '/api/rebuild') && req.method === 'POST') {
         const { path: p } = JSON.parse(await this.readBody(req)) as { path?: string };
         if (!p) return this.json(res, 400, { error: 'a path is required' });
-        this.cache.delete(p);
-        this.startJob(p);
+        // The reader asked, so it renders. Unforced, build() hands back the page already built
+        // whenever the tree and the stamp both match, and dropping the page from memory first
+        // only made it read the same page back from disk: Rebuild rendered nothing, and a reader
+        // had no way to put new code onto a page (found by the T-16 seat, 2026-10-13).
+        this.startJob(p, true);
         return this.json(res, 200, { ok: true });
       }
 
@@ -1166,14 +1189,17 @@ export class RepoTourServer {
           return this.html(res, 200, cached.html);
         }
 
-        // The tree has moved since the last build. Serve that build anyway — it is still the
-        // truth about the commit it describes, and making it unreachable turns every edit
-        // into a wait before anything can be read. The page carries a quiet marker instead.
+        // No page for this tree with today's stamp: the tree has moved since the last build, or
+        // the code that built it has. Serve the newest build anyway — it is still the truth
+        // about the commit it describes, and making it unreachable turns every edit into a wait
+        // before anything can be read. The page carries a quiet marker instead.
         const older = newestRendered(p);
         if (older) {
-          // The renderer itself has moved on (a new skin, a changed view). That is the app
-          // updating rather than the reader's code changing, and re-rendering costs no
-          // tokens — so start it behind them and let the chip offer the result.
+          // The app itself has moved on (a new skin, any changed module). That is the app
+          // updating rather than the reader's code changing, so start the rebuild behind them
+          // and let the chip offer the result. Every stop already explained is cached by
+          // content, so only what has no explanation yet costs tokens: nothing, unless the tree
+          // has moved too.
           if (older.presentation !== presentationVersion() && job?.state !== 'running') this.startJob(p);
           return this.html(res, 200, older.html);
         }
