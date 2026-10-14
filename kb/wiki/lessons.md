@@ -10,6 +10,42 @@ One entry per lesson, newest first, each citing the ticket or incident it came f
 
 ---
 
+## Re-parse what you change, and never let one file stop a digest (T-16, 2026-10-13)
+
+T-15 and T-16 changed which ranges become build steps without re-parsing the practice file each step
+yields. A wrapper that keeps its build step yields a file that does not parse: the owner's `argSection`
+in sql-gauntlet gets two parse errors (T-30, on main too). A generated file with about 5,000 chained
+terms overflows a recursive walk and takes down the whole repo's tour (T-31). And the new step check
+first compared every pair of symbols: 20 s to plan a 60,000-variable script, now 57 ms.
+
+**The rule:** a change to what becomes a step re-parses what it yields; one file the digest cannot
+walk is skipped, never fatal; a check over every symbol gets a size test with a time limit. T-30 and
+T-31 track the two not fixed yet.
+
+## A signal handler changes what Ctrl-C means (T-20, 2026-10-13)
+
+`repo-tour pr` ignored the first Ctrl-C or SIGTERM during its paid model calls. A listener in
+`sideAt` cleaned up its folders and let the run carry on, with the model process still spending.
+GONS stops a run that way on timeout. Measured on main: still running 4 s after the signal.
+
+**The rule:** a listener turns off Node's instant Ctrl-C, so a long synchronous stretch then ignores
+it. Only the commands that need one get one (every command but `serve`), and the handler cleans up and
+then dies by the same signal (exit 130 or 143). Cleanup that has to survive a signal runs inside the
+handler: a death by signal runs no exit hook. Separately, the claude CLI reports an unknown flag on two
+lines, and the tutor shows only the first, so a hint appended at the end never reached the reader.
+
+## A test that packs the package must pack a copy (T-14, 2026-10-13)
+
+`npm pack` runs `prepare`, which rebuilt this checkout's `dist/` in place: T-11's pack test rewrote
+all 123 files on every run, and GONS runs that `dist/`. A git dependency runs only `prepare`, while
+`npm pack` and `npm publish` also run `prepack` and `postpack`. npm 10.9.x runs `prepare` despite
+`--ignore-scripts` when packing a folder; npm 11 honours the flag.
+
+**The rule:** a test that needs a package builds it from a temp copy, and a guard fails if the
+checkout's `dist/` changes during the suite. A clean-room clone needs a GitHub `origin` (T-8's test
+reads it) and a short `TMPDIR` (tsx's IPC socket path hits the 108-byte limit). Compare litter's
+timestamps with your own runs before you blame another process for it.
+
 ## A stream that goes quiet can be closed under you (T-18 rework, 2026-10-07)
 
 The owner's test drive: one lookup, then **"Error in input stream"**, and no answer. The model
