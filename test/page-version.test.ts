@@ -14,6 +14,7 @@
 
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -499,6 +500,54 @@ describe('AC4: a rebuild the reader asks for re-renders', () => {
       const fresh = new RepoTourServer({ statePath: path.join(under, 'state.json'), interpret: false });
       expect(fresh.listRepos()[0]!.running, 'nobody asked for this one again: the page is current').toBe(false);
       expect(fs.existsSync(marker)).toBe(false);
+    } finally {
+      fs.rmSync(under, { recursive: true, force: true });
+    }
+  }, 60_000);
+});
+
+describe('AC7: a rebuild waits until the page that started it has been sent', () => {
+  it('opening a stale page answers before the rebuild does any work', async () => {
+    // The digest's first stretch is synchronous: the inventory walks and hashes the whole tree
+    // before anything yields. Started inside the request, it held the page back for as long as
+    // that took, on the first open after every update to the app.
+    const under = scratch('answer-first');
+    try {
+      const repo = fixtureRepo(under);
+      const state = path.join(under, 'state.json');
+      const first = new RepoTourServer({ statePath: state, interpret: false });
+      first.addRepo(repo);
+      await first.build(repo, () => {});
+      const dir = path.join(repo, '.repo-tour', 'rendered');
+      const metaPath = path.join(dir, fs.readdirSync(dir).find((f) => f.endsWith('.json'))!);
+      fs.writeFileSync(metaPath, JSON.stringify({ ...JSON.parse(fs.readFileSync(metaPath, 'utf8')), presentation: 'from-before' }));
+
+      const fresh = new RepoTourServer({ statePath: state, interpret: false });
+      // A response still being sent: it closes when this test says so.
+      const sending = Object.assign(new EventEmitter(), {
+        writeHead() { return this; },
+        end() { return this; },
+      }) as unknown as import('node:http').ServerResponse;
+      await fresh.handler({ url: `/r?path=${encodeURIComponent(repo)}`, method: 'GET' } as import('node:http').IncomingMessage, sending);
+
+      expect(fresh.listRepos()[0]!.running, 'the page is stale, so a rebuild is under way').toBe(true);
+      // Several turns of the event loop: a page of a few megabytes takes more than one to send,
+      // so starting on the next turn would still stall it.
+      await sleep(50);
+      let job = '';
+      const capture = {
+        writeHead() { return this; },
+        end(chunk?: string) { if (typeof chunk === 'string') job = chunk; return this; },
+      } as unknown as import('node:http').ServerResponse;
+      await fresh.handler({ url: `/api/job?path=${encodeURIComponent(repo)}`, method: 'GET' } as import('node:http').IncomingMessage, capture);
+      expect(
+        (JSON.parse(job) as { lines: string[] }).lines,
+        'but it must not start its work while the page is still being sent',
+      ).toEqual([]);
+
+      (sending as unknown as EventEmitter).emit('close');
+      await settle(fresh);
+      expect(onDisk(repo).meta.presentation, 'once the page is sent, the rebuild runs').not.toBe('from-before');
     } finally {
       fs.rmSync(under, { recursive: true, force: true });
     }

@@ -717,8 +717,19 @@ export class RepoTourServer {
     return job;
   }
 
-  /** `force`: the reader asked for this build, so it renders even when the page is current. */
-  private startJob(repoPath: string, force = false): Job {
+  /**
+   * `force`: the reader asked for this build, so it renders even when the page is current.
+   *
+   * `answering`: the response this job was started from. The build's first stretch is
+   * synchronous (the inventory walks and hashes the whole tree before anything yields), so
+   * started inside the request it held that response back for as long as the walk took:
+   * seconds on a tree of a few thousand files, on the first open after every update to the
+   * app. It starts once that response has closed instead. A response without events (a test's
+   * stand-in), or none, starts it on the next turn of the event loop. The job and its marker
+   * exist at once either way, so nothing starts it twice and a crash in between still resumes
+   * it. Call this before ending `answering`, or its `close` may already have gone by.
+   */
+  private startJob(repoPath: string, force = false, answering?: http.ServerResponse): Job {
     const running = this.jobs.get(repoPath);
     if (running?.state === 'running') return running;
 
@@ -726,17 +737,21 @@ export class RepoTourServer {
     this.jobs.set(repoPath, job);
     markBuilding(repoPath, job.lines, force);
 
-    void this.build(repoPath, (line) => {
-      job.lines.push(line);
-      // Kept current on disk so a resumed build can say where the last one got to.
-      markBuilding(repoPath, job.lines, force);
-    }, { force })
-      .then(() => { job.state = 'done'; job.lines.push('ready'); clearBuilding(repoPath); })
-      .catch((e: unknown) => {
-        job.state = 'failed';
-        job.lines.push(e instanceof Error ? e.message : String(e));
-        clearBuilding(repoPath);
-      });
+    const go = (): void => {
+      void this.build(repoPath, (line) => {
+        job.lines.push(line);
+        // Kept current on disk so a resumed build can say where the last one got to.
+        markBuilding(repoPath, job.lines, force);
+      }, { force })
+        .then(() => { job.state = 'done'; job.lines.push('ready'); clearBuilding(repoPath); })
+        .catch((e: unknown) => {
+          job.state = 'failed';
+          job.lines.push(e instanceof Error ? e.message : String(e));
+          clearBuilding(repoPath);
+        });
+    };
+    if (typeof answering?.once === 'function') answering.once('close', go);
+    else setImmediate(go);
 
     return job;
   }
@@ -1117,7 +1132,7 @@ export class RepoTourServer {
         // whenever the tree and the stamp both match, and dropping the page from memory first
         // only made it read the same page back from disk: Rebuild rendered nothing, and a reader
         // had no way to put new code onto a page (found by the T-16 seat, 2026-10-13).
-        this.startJob(p, true);
+        this.startJob(p, true, res);
         return this.json(res, 200, { ok: true });
       }
 
@@ -1184,7 +1199,7 @@ export class RepoTourServer {
           // It costs no tokens — interpretation is cached by content — and the freshness
           // chip already offers the result when it lands.
           if (cached.presentation !== presentationVersion() && job?.state !== 'running') {
-            this.startJob(p);
+            this.startJob(p, false, res);
           }
           return this.html(res, 200, cached.html);
         }
@@ -1200,7 +1215,7 @@ export class RepoTourServer {
           // and let the chip offer the result. Every stop already explained is cached by
           // content, so only what has no explanation yet costs tokens: nothing, unless the tree
           // has moved too.
-          if (older.presentation !== presentationVersion() && job?.state !== 'running') this.startJob(p);
+          if (older.presentation !== presentationVersion() && job?.state !== 'running') this.startJob(p, false, res);
           return this.html(res, 200, older.html);
         }
 
