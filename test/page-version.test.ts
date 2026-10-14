@@ -142,6 +142,7 @@ async function settle() {
 }
 
 const commands = {
+  async ping() { return {}; },
   async build() {
     const r = await server.build(repo, () => {});
     return { presentation: r.presentation, builtAt: r.builtAt };
@@ -339,6 +340,29 @@ describe.concurrent('AC3: the stamp names the code that is running, not the file
             second.presentation,
             'this process still runs the code it loaded, so its pages must carry the same stamp',
           ).toBe(first.presentation);
+        });
+      } finally {
+        fs.rmSync(under, { recursive: true, force: true });
+      }
+    }, 180_000);
+
+    it(`${rt.name}: a module rewritten after the server loaded, before its first page, is not what the stamp names`, async ({ expect }) => {
+      // What a stamp read lazily would get wrong: a dist/ server that has been up for a day when
+      // `npm run build` runs, and only then serves its first page.
+      const under = scratch('loaded');
+      try {
+        const pkg = copyPackage(rt, under);
+        const repo = fixtureRepo(under);
+        const original = await withDriver(rt, pkg, repo, under, async (d) => d.send({ do: 'build' }));
+        await withDriver(rt, pkg, repo, under, async (d) => {
+          await d.send({ do: 'ping' }); // loaded, and nothing has asked for a stamp yet
+          rewrite(pkg, rt, 'repoview', (s) => `${s}\n// T-29 ${randomBytes(6).toString('hex')}\n`);
+          await d.send({ do: 'touch', name: 'later.py' });
+          const page = await d.send({ do: 'build' });
+          expect(
+            page.presentation,
+            'this process runs the code it loaded, so its first page must carry the stamp of that code',
+          ).toBe(original.presentation);
         });
       } finally {
         fs.rmSync(under, { recursive: true, force: true });
