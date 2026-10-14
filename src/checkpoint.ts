@@ -231,20 +231,29 @@ export async function sideAt(
     if (disposed) return;
     disposed = true;
     process.off('exit', dispose);
-    process.off('SIGINT', dispose);
-    process.off('SIGTERM', dispose);
+    process.off('SIGINT', onSignal);
+    process.off('SIGTERM', onSignal);
     try {
       fs.rmSync(dir, { recursive: true, force: true });
     } catch {
       /* a temp directory we cannot remove is not worth failing a tour over */
     }
   };
+  // Listening for a signal cancels Node's own exit, so a Ctrl-C that only tidied up left
+  // `repo-tour pr` running, and paying, with its tree gone. So tidy up, then finish what the
+  // signal was for: end the process the way it would have ended with no listener. Unless
+  // something else in the process is handling that signal (the server's graceful stop), in
+  // which case that handler keeps the say.
+  const onSignal = (signal: NodeJS.Signals): void => {
+    dispose();
+    if (process.listenerCount(signal) === 0) process.kill(process.pid, signal);
+  };
   // A tour interrupted part-way through a model call used to leave its temp tree in
   // /tmp. try/finally covers a throw, not a Ctrl-C or a timeout kill, and a tool that
   // litters when you interrupt it is a tool you stop trusting with your disk.
   process.once('exit', dispose);
-  process.once('SIGINT', dispose);
-  process.once('SIGTERM', dispose);
+  process.once('SIGINT', onSignal);
+  process.once('SIGTERM', onSignal);
 
   try {
     for (const rel of paths) {

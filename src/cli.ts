@@ -20,7 +20,7 @@ import { renderRepoView } from './repoview.js';
 import { interpretStops, applyMeanings, interpretArchitecture, DEFAULT_MODEL } from './interpret.js';
 import { saveTour, listTours, findTour, newestFor, renderLibrary } from './library.js';
 import { RepoTourServer } from './server.js';
-import { surveyProviders } from './llm.js';
+import { surveyProviders, killLlmChildren } from './llm.js';
 import { execFileSync } from 'node:child_process';
 import type { RankedFile } from './types.js';
 import { PrResolutionError } from './pr.js';
@@ -211,6 +211,27 @@ async function runPrMode(args: Args): Promise<void> {
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+
+  // `pr` alone gets a signal handler. GONS runs it, and stops it with a signal when it takes too
+  // long. Its PR sides already listen for SIGINT and SIGTERM from the moment they exist to the
+  // end of the flow, which covers every model call, so `pr` never had Node's instant Ctrl-C
+  // there anyway. On a signal it stops its model calls first, so none of them keeps running,
+  // and paying, after it has gone, then dies by the signal as it would have with no handler.
+  // Whichever listener runs last re-raises: with PR sides alive, that is theirs.
+  //
+  // Not the other commands. Any listener moves Ctrl-C off Node's instant default and onto the
+  // event loop, and `digest`'s extraction runs for seconds without yielding to it. With a
+  // listener there, one Ctrl-C did nothing (measured: the digest ran on and exited 0).
+  // Narration asks the model one file at a time, so a Ctrl-C mid-`tour` leaves at most that
+  // one call's empty directory behind. Before T-20, every run left one.
+  if (args.command === 'pr') {
+    const interrupted = (signal: NodeJS.Signals): void => {
+      killLlmChildren();
+      if (process.listenerCount(signal) === 0) process.kill(process.pid, signal);
+    };
+    process.once('SIGINT', interrupted);
+    process.once('SIGTERM', interrupted);
+  }
 
   if (args.command === 'pr') {
     await runPrMode(args);

@@ -9,11 +9,13 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { request } from 'node:http';
 import type http from 'node:http';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 let base: string;
 let repo: string;
@@ -28,6 +30,28 @@ function scriptReplies(replies: string[]): void {
 
 function callCount(): number {
   return Number(fs.readFileSync(path.join(base, 'calls.json'), 'utf8'));
+}
+
+/** What the fake claude saw as it started: its argv, where it stood, what was there, the mode. */
+interface Seen { argv: string[]; cwd: string; listing: string[]; mode: number }
+
+/** Every spawn of the fake claude since the last `beforeEach`, in order (T-20). */
+function attempts(): Seen[] {
+  const file = path.join(base, 'attempts.jsonl');
+  if (!fs.existsSync(file)) return [];
+  return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l) as Seen);
+}
+
+/** `where.json` once it is whole, else null: a reader can catch it between creation and write. */
+function whereNow(): Omit<Seen, 'argv'> | null {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(base, 'where.json'), 'utf8')) as Omit<Seen, 'argv'>;
+  } catch { return null; }
+}
+
+/** True when `p` is the toured repo or anywhere inside it, however the path is spelled. */
+function insideRepo(p: string): boolean {
+  return [path.resolve(repo), fs.realpathSync(repo)].some((r) => p === r || p.startsWith(r + path.sep));
 }
 
 beforeAll(() => {
@@ -46,6 +70,17 @@ beforeAll(() => {
 const fs = require('fs');
 const dir = ${JSON.stringify(base)};
 if (process.argv.includes('--version')) { process.stdout.write('fake 1.0\\n'); process.exit(0); }
+// T-20: every invocation leaves one line saying how it was called, where it stood, what was in
+// that directory and who else could get into it, before anything below can exit.
+const here = process.cwd();
+const seen = { cwd: here, listing: fs.readdirSync(here), mode: fs.statSync(here).mode & 0o777 };
+fs.appendFileSync(dir + '/attempts.jsonl', JSON.stringify({ argv: process.argv.slice(2), ...seen }) + '\\n');
+// A CLI too old for one of the flags repo-tour sends, when the fixture names one (T-20). It
+// refuses ahead of everything else, the call counter included, as the real CLI does.
+if (fs.existsSync(dir + '/reject-flag')) {
+  const reject = JSON.parse(fs.readFileSync(dir + '/reject-flag', 'utf8'));
+  if (process.argv.includes(reject.flag)) { process.stderr.write(reject.stderr); process.exit(1); }
+}
 // A CLI too old for --include-partial-messages, when the fixture asks for one.
 if (fs.existsSync(dir + '/no-partial') && process.argv.includes('--include-partial-messages')) {
   process.stderr.write('error: unknown option \\'--include-partial-messages\\'\\n');
@@ -63,6 +98,9 @@ fs.writeFileSync(dir + '/calls.json', String(n + 1));
 // What the 2026-10-07 tests read: how it was called, and which process to watch die.
 fs.writeFileSync(dir + '/argv.json', JSON.stringify(process.argv.slice(2)));
 fs.writeFileSync(dir + '/cwd.json', JSON.stringify(process.cwd()));
+// T-20: the same, with what was in it and its mode, taken while the call runs. Its directory is
+// gone once the call settles, so afterwards is too late to look.
+fs.writeFileSync(dir + '/where.json', JSON.stringify(seen));
 fs.writeFileSync(dir + '/pid', String(process.pid));
 // A model that thinks before it speaks, for as many ms as the fixture says.
 const slow = fs.existsSync(dir + '/slow') ? Number(fs.readFileSync(dir + '/slow', 'utf8')) : 0;
@@ -72,6 +110,8 @@ let input = '';
 process.stdin.on('data', (d) => { input += d; });
 process.stdin.on('end', () => setTimeout(reply, slow));
 function reply() {
+  // T-20 review: a CLI that leaves something in the directory it stood in, when the fixture says.
+  if (fs.existsSync(dir + '/litter')) fs.writeFileSync(process.cwd() + '/litter.txt', 'left behind');
   if (text === '__EXIT1__') { process.stderr.write('boom\\n'); process.exit(1); }
   // The one-shot shape \`run\` asks for: a single JSON envelope.
   if (process.argv[process.argv.indexOf('--output-format') + 1] === 'json') {
@@ -112,6 +152,9 @@ beforeEach(() => {
   fs.rmSync(state, { force: true });
   fs.rmSync(path.join(path.dirname(state), 'llm.json'), { force: true });
   fs.rmSync(path.join(base, 'slow'), { force: true });
+  for (const f of ['reject-flag', 'attempts.jsonl', 'where.json', 'cwd.json', 'litter']) {
+    fs.rmSync(path.join(base, f), { force: true });
+  }
 });
 
 interface Frame { kind: string; data: Record<string, unknown> }
@@ -704,10 +747,15 @@ describe('a model call is a plain model call (2026-10-07)', () => {
   };
   const argv = (): string[] => JSON.parse(fs.readFileSync(path.join(base, 'argv.json'), 'utf8')) as string[];
   const standsSomewhereEmpty = (): void => {
-    const where = JSON.parse(fs.readFileSync(path.join(base, 'cwd.json'), 'utf8')) as string;
-    const inRepo = path.resolve(where) === path.resolve(repo) || where.startsWith(path.resolve(repo) + path.sep);
-    expect(inRepo, `ran inside the toured repo: ${where}`).toBe(false);
-    expect(fs.readdirSync(where)).toEqual([]);
+    const seen = whereNow();
+    expect(seen, 'the fake claude never recorded where it stood').not.toBeNull();
+    const { cwd: where, listing, mode } = seen!;
+    expect(insideRepo(where), `ran inside the toured repo: ${where}`).toBe(false);
+    // What was in it while the call ran, the moment it matters. The directory is gone once the
+    // call settles (T-20), so looking afterwards would prove nothing.
+    expect(listing, `stood somewhere that was not empty: ${where}`).toEqual([]);
+    expect(mode, `stood somewhere other users can open (mode ${mode.toString(8)}): ${where}`).toBe(0o700);
+    expect(fs.existsSync(where), `its directory outlived the call: ${where}`).toBe(false);
   };
 
   it('in one shot, the way a tour is written', async () => {
@@ -729,4 +777,606 @@ describe('a model call is a plain model call (2026-10-07)', () => {
     isolated(argv());
     standsSomewhereEmpty();
   });
+});
+
+// ---------------------------------------------------------------- T-20, isolation tidy-ups
+//
+// Three nits from T-18's last review, each pinned here, and the defect found next to one. The
+// partial-messages latch and the `claude update` hint had no test. Every process that ever asked
+// a model left an empty `repo-tour-llm-*` directory in /tmp for good (the review counted twelve).
+// And codex's answer file had a guessable name in shared /tmp.
+
+const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
+
+/** Make the fake claude a CLI too old for `flag`, refusing it in the CLI's own words. */
+function rejectFlag(flag: string, stderr: string): void {
+  fs.writeFileSync(path.join(base, 'reject-flag'), JSON.stringify({ flag, stderr }));
+}
+
+/** Where a call stood, as it ran: alone, private, in the temp dir, and never the toured repo. */
+function stoodAlone(seen: Omit<Seen, 'argv'>, what: string): void {
+  expect(insideRepo(seen.cwd), `${what}: ran inside the toured repo: ${seen.cwd}`).toBe(false);
+  expect(seen.listing, `${what}: stood somewhere that was not empty: ${seen.cwd}`).toEqual([]);
+  expect(seen.mode, `${what}: stood somewhere other users can open (mode ${seen.mode.toString(8)}): ${seen.cwd}`)
+    .toBe(0o700);
+  expect(path.dirname(seen.cwd), `${what}: not a directory of its own in the temp dir: ${seen.cwd}`)
+    .toBe(fs.realpathSync(os.tmpdir()));
+  expect(path.basename(seen.cwd), `${what}: not named as one of repo-tour's own: ${seen.cwd}`)
+    .toMatch(/^repo-tour-llm-/);
+}
+
+/** And once the call has settled, whichever way, its directory is gone. */
+function goneAfter(seen: Omit<Seen, 'argv'>, what: string): void {
+  expect(fs.existsSync(seen.cwd), `${what}: its directory outlived the call: ${seen.cwd}`).toBe(false);
+}
+
+/** A promise's value, or null if it takes longer than `ms`. */
+const within = <T>(p: Promise<T>, ms: number): Promise<T | null> =>
+  Promise.race([p, new Promise<null>((r) => { setTimeout(() => r(null), ms); })]);
+
+/**
+ * The fake's pid, once its file is whole. Never 0 or 1: `process.kill(0, …)` signals the whole
+ * process group, and that group is the test runner.
+ */
+async function fakePid(ms = 5000): Promise<number | null> {
+  let pid: number | null = null;
+  await until(() => {
+    try {
+      const n = Number(fs.readFileSync(path.join(base, 'pid'), 'utf8'));
+      if (Number.isInteger(n) && n > 1) pid = n;
+    } catch { /* not written yet */ }
+    return pid !== null;
+  }, ms);
+  return pid;
+}
+
+/** SIGKILL a fake claude this file started, if it is still running and is still that fake. */
+function killFake(pid: number | null): void {
+  if (!pid || !alive(pid)) return;
+  let cmd = '';
+  try { cmd = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8'); } catch { return; }
+  if (cmd.includes(scriptPath)) process.kill(pid, 'SIGKILL');
+}
+
+interface Exit { code: number | null; signal: NodeJS.Signals | null }
+
+/**
+ * A process that calls `process.exit` while one of its model calls is still running: the end of
+ * the server's own stop, and of any program that imports `./llm`. Returns where the call stood.
+ * `node --import tsx` adds no signal listener of its own, so nothing stands in between.
+ */
+async function exitMidCall(): Promise<{ seen: Omit<Seen, 'argv'> | null; exit: Exit | null; stderr: string }> {
+  // A record left by an earlier call would let this pass without the child reaching the model.
+  for (const f of ['where.json', 'pid']) fs.rmSync(path.join(base, f), { force: true });
+  scriptReplies(['nobody will read this']);
+  fs.writeFileSync(path.join(base, 'slow'), '10000');
+  const script = path.join(base, 'exit-mid-call.mjs');
+  fs.writeFileSync(script, `import fs from 'node:fs';
+import { runLlm } from ${JSON.stringify(pathToFileURL(path.join(REPO_ROOT, 'src', 'llm.ts')).href)};
+const started = ${JSON.stringify(path.join(base, 'where.json'))};
+// The moment the model is mid-answer, leave.
+setInterval(() => { if (fs.existsSync(started)) process.exit(0); }, 5);
+runLlm('q', { provider: 'claude', model: 'm' }, process.cwd(), 60000).then(
+  () => { console.error('the call finished before the process could exit mid-call'); process.exit(3); },
+  (e) => { console.error('the call failed: ' + e.message); process.exit(4); },
+);
+`);
+  const child = spawn(process.execPath, ['--import', 'tsx', script], {
+    cwd: REPO_ROOT,
+    env: { ...process.env, REPO_TOUR_CLAUDE_BIN: scriptPath },
+    stdio: ['ignore', 'ignore', 'pipe'],
+  });
+  let stderr = '';
+  child.stderr!.on('data', (d: Buffer) => { stderr += d.toString(); });
+  const exit = await within(new Promise<Exit>((resolve) => {
+    child.on('exit', (code, signal) => resolve({ code, signal }));
+  }), 20_000);
+  if (!exit) child.kill('SIGKILL');
+  // The fake it started is an orphan now. It writes its pid just after where.json.
+  killFake(await fakePid());
+  fs.rmSync(path.join(base, 'slow'), { force: true });
+  return { seen: whereNow(), exit, stderr };
+}
+
+/** What the T-20 fake codex recorded about how it was called. */
+interface CodexSeen {
+  argv: string[]; cwd: string; listing: string[];
+  out: string | null; outDirMode: number | null; outDirReal: string | null; toldReal: string | null;
+}
+
+/**
+ * A second fake codex, for T-20 only, so the T-18 one above stays exactly as it was. It records
+ * its argv, where it stands, and the directory it is told to write its answer into, while all
+ * of them still exist, and then answers into that file.
+ */
+function recordingCodex(): string {
+  const script = path.join(base, 'fake-codex-t20');
+  fs.writeFileSync(script, `#!/usr/bin/env node
+const fs = require('fs');
+const path = require('path');
+const args = process.argv.slice(2);
+if (args.includes('--version')) { process.stdout.write('fake codex 1.0\\n'); process.exit(0); }
+const at = args.indexOf('--output-last-message');
+const out = at === -1 ? null : args[at + 1];
+const c = args.indexOf('-C');
+const here = process.cwd();
+fs.writeFileSync(${JSON.stringify(path.join(base, 'codex.json'))}, JSON.stringify({
+  argv: args, cwd: here, listing: fs.readdirSync(here), out,
+  outDirMode: out ? fs.statSync(path.dirname(out)).mode & 0o777 : null,
+  outDirReal: out ? fs.realpathSync(path.dirname(out)) : null,
+  toldReal: c === -1 ? null : fs.realpathSync(args[c + 1]),
+}));
+let input = '';
+process.stdin.on('data', (d) => { input += d; });
+process.stdin.on('end', () => {
+  if (out) fs.writeFileSync(out, 'codex answered from a room of its own');
+  process.exit(0);
+});
+`);
+  fs.chmodSync(script, 0o755);
+  return script;
+}
+
+describe('T-20: a claude CLI too old for the flags (AC1, AC2)', () => {
+  const asked = (): unknown => ({ messages: [{ role: 'user', content: 'q' }], context: { repoPath: repo } });
+
+  it('AC1: falls back once, ends in one error, and streams token by token again after an upgrade', async () => {
+    const { resetProviderProbe } = await import('../src/llm.js');
+    resetProviderProbe();
+    try {
+      rejectFlag('--safe-mode', "error: unknown option '--safe-mode'\n");
+      scriptReplies(['unused']);
+      const frames = await ask(await newServer(), asked());
+      const terminal = frames.filter((f) => f.kind === 'done' || f.kind === 'error').map((f) => f.kind);
+      expect(terminal, 'a CLI too old for --safe-mode must end the question in exactly one error').toEqual(['error']);
+      const tried = attempts();
+      expect(tried.length, 'the fallback did not run: expected two spawns, with and without the partial flag').toBe(2);
+      expect(tried[0]!.argv, 'the first try must ask for token streaming').toContain('--include-partial-messages');
+      expect(tried[1]!.argv, 'the fallback must retry without --include-partial-messages')
+        .not.toContain('--include-partial-messages');
+
+      // The upgrade: same process, and now a CLI that knows every flag.
+      fs.rmSync(path.join(base, 'reject-flag'));
+      scriptReplies(['streams again after the upgrade']);
+      const before = attempts().length;
+      const again = await ask(await newServer(), asked());
+      const next = attempts().slice(before);
+      expect(next[0]?.argv ?? [], 'the latch kept the downgrade: the next question did not ask for --include-partial-messages')
+        .toContain('--include-partial-messages');
+      expect(again.filter((f) => f.kind === 'delta').length, 'token streaming did not come back after the upgrade')
+        .toBeGreaterThan(1);
+      expect(text(again), 'the answer after the upgrade did not arrive whole').toBe('streams again after the upgrade');
+    } finally {
+      fs.rmSync(path.join(base, 'reject-flag'), { force: true });
+      resetProviderProbe();
+    }
+  }, 30_000);
+
+  /** Ask the tutor once, against a CLI that refuses `flag` with `stderr`: the error the panel shows. */
+  const refusedWith = async (flag: string, stderr: string): Promise<string> => {
+    const { resetProviderProbe } = await import('../src/llm.js');
+    resetProviderProbe();
+    rejectFlag(flag, stderr);
+    try {
+      scriptReplies(['unused']);
+      const errors = (await ask(await newServer(), asked())).filter((f) => f.kind === 'error');
+      expect(errors, `a CLI that refuses ${flag} must end the question in one error`).toHaveLength(1);
+      return String(errors[0]!.data['message']);
+    } finally {
+      fs.rmSync(path.join(base, 'reject-flag'), { force: true });
+      resetProviderProbe();
+    }
+  };
+
+  it('AC2: the panel says "run `claude update`" for a one-line complaint', async () => {
+    const message = await refusedWith('--safe-mode', "error: unknown option '--safe-mode'\n");
+    expect(message, 'the reader was not told to run `claude update`').toContain('run `claude update`');
+  }, 30_000);
+
+  it('AC2: and for the real CLI\'s two-line complaint, which used to push the hint off the shown line', async () => {
+    const message = await refusedWith(
+      '--setting-sources', "error: unknown option '--setting-sources'\n(Did you mean --settings?)\n",
+    );
+    expect(message, 'the hint fell off the one line the panel shows').toContain('run `claude update`');
+  }, 30_000);
+
+  it('AC2: narration\'s one-shot call has the hint on the first line of its error', async () => {
+    const { runLlm } = await import('../src/llm.js');
+    rejectFlag('--setting-sources', "error: unknown option '--setting-sources'\n(Did you mean --settings?)\n");
+    scriptReplies(['unused']);
+    const failed = await runLlm('q', { provider: 'claude', model: 'm' }, repo, 10_000)
+      .then(() => null, (e: unknown) => e as Error);
+    expect(failed, 'a CLI too old for --setting-sources must fail the call').toBeInstanceOf(Error);
+    expect(failed!.message.split('\n')[0], 'the hint is not on the first line, the only one the PR judge shows')
+      .toContain('run `claude update`');
+  }, 30_000);
+
+  it('AC2: a CLI that fails for any other reason is not told to update', async () => {
+    scriptReplies(['__EXIT1__']);
+    const error = (await ask(await newServer(), asked())).find((f) => f.kind === 'error');
+    expect(error, 'a failing provider must end the question in an error').toBeDefined();
+    expect(String(error!.data['message']), 'a CLI that is not too old was told to update').not.toContain('claude update');
+
+    const { runLlm } = await import('../src/llm.js');
+    scriptReplies(['__EXIT1__']);
+    const failed = await runLlm('q', { provider: 'claude', model: 'm' }, repo, 10_000)
+      .then(() => null, (e: unknown) => e as Error);
+    expect(failed, 'a failing provider must fail the one-shot call').toBeInstanceOf(Error);
+    expect(failed!.message, 'a CLI that is not too old was told to update').not.toContain('claude update');
+  }, 30_000);
+});
+
+describe('T-20: no directory outlives its call (AC3)', () => {
+  const claude = { provider: 'claude', model: 'm' };
+
+  it('in one shot: alone and private while it runs, gone once it has answered', async () => {
+    const { runLlm } = await import('../src/llm.js');
+    scriptReplies(['written']);
+    expect((await runLlm('q', claude, repo, 10_000)).text, 'the one-shot call did not answer').toBe('written');
+    const tried = attempts();
+    expect(tried, 'expected exactly one spawn').toHaveLength(1);
+    stoodAlone(tried[0]!, 'runLlm');
+    goneAfter(tried[0]!, 'runLlm');
+  }, 30_000);
+
+  it('streamed: alone and private while it runs, gone once it has answered', async () => {
+    const { runLlmStream } = await import('../src/llm.js');
+    scriptReplies(['answered']);
+    let streamed = '';
+    const reply = await runLlmStream('q', claude, repo, (t) => { streamed += t; }, 10_000);
+    expect(reply.text, 'the streamed call did not answer').toBe('answered');
+    expect(streamed, 'the answer did not stream').toBe('answered');
+    const tried = attempts();
+    expect(tried, 'expected exactly one spawn').toHaveLength(1);
+    stoodAlone(tried[0]!, 'runLlmStream');
+    goneAfter(tried[0]!, 'runLlmStream');
+  }, 30_000);
+
+  it('the fallback: each of its two spawns has a directory of its own, and both are gone', async () => {
+    const { runLlmStream, resetProviderProbe } = await import('../src/llm.js');
+    resetProviderProbe();
+    fs.writeFileSync(path.join(base, 'no-partial'), '');
+    try {
+      scriptReplies(['answered the old way']);
+      const reply = await runLlmStream('q', claude, repo, () => {}, 10_000);
+      expect(reply.text, 'the fallback did not answer').toBe('answered the old way');
+      const tried = attempts();
+      expect(tried, 'the fallback did not run: expected two spawns').toHaveLength(2);
+      tried.forEach((t, i) => {
+        stoodAlone(t, `spawn ${i + 1} of the fallback`);
+        goneAfter(t, `spawn ${i + 1} of the fallback`);
+      });
+      expect(tried[0]!.cwd, 'both spawns of the fallback shared one directory').not.toBe(tried[1]!.cwd);
+    } finally {
+      fs.rmSync(path.join(base, 'no-partial'), { force: true });
+      resetProviderProbe();
+    }
+  }, 30_000);
+
+  it('a failed call: gone all the same, one-shot and streamed', async () => {
+    const { runLlm, runLlmStream } = await import('../src/llm.js');
+    scriptReplies(['__EXIT1__']);
+    await expect(runLlm('q', claude, repo, 10_000), 'the one-shot call should fail').rejects.toThrow(/claude exited 1/);
+    scriptReplies(['__EXIT1__']);
+    await expect(runLlmStream('q', claude, repo, () => {}, 10_000), 'the streamed call should fail')
+      .rejects.toThrow(/claude exited 1/);
+    const tried = attempts();
+    expect(tried, 'expected one spawn per failed call').toHaveLength(2);
+    tried.forEach((t, i) => {
+      stoodAlone(t, `failed call ${i + 1}`);
+      goneAfter(t, `failed call ${i + 1}`);
+    });
+  }, 30_000);
+
+  it('a cancelled call: gone as soon as the reader has, while the model is still thinking', async () => {
+    const { runLlmStream } = await import('../src/llm.js');
+    scriptReplies(['an answer nobody will read']);
+    fs.writeFileSync(path.join(base, 'slow'), '5000');
+    fs.rmSync(path.join(base, 'pid'), { force: true });
+    const reader = new AbortController();
+    const settled = runLlmStream('q', claude, repo, () => {}, 10_000, reader.signal)
+      .then(() => 'answered', (e: unknown) => (e as Error).message);
+    let pid: number | null = null;
+    try {
+      expect(await until(() => whereNow() !== null, 5000), 'the fake claude never started').toBe(true);
+      pid = await fakePid();
+      reader.abort();
+      expect(await settled, 'a call whose reader has gone should end as cancelled').toMatch(/cancelled/);
+      const seen = whereNow()!;
+      stoodAlone(seen, 'a cancelled call');
+      goneAfter(seen, 'a cancelled call');
+    } finally {
+      reader.abort();
+      killFake(pid);
+    }
+  }, 30_000);
+});
+
+describe('T-20: no directory outlives the process (AC4)', () => {
+  it('(b) a process that exits mid-call takes the call\'s directory with it', async () => {
+    const { seen, exit, stderr } = await exitMidCall();
+    expect(exit, `the child did not exit mid-call as planned: ${stderr}`).toEqual({ code: 0, signal: null });
+    expect(seen, 'the call never reached the model').not.toBeNull();
+    expect(fs.existsSync(seen!.cwd), `a call cut off by process.exit left its directory behind: ${seen!.cwd}`).toBe(false);
+  }, 30_000);
+
+  it('(a) Ctrl-C on the real serve command, mid-answer, leaves no directory (the owner\'s path)', async () => {
+    for (const f of ['where.json', 'pid']) fs.rmSync(path.join(base, f), { force: true });
+    scriptReplies(['an answer nobody will read']);
+    fs.writeFileSync(path.join(base, 'slow'), '5000');
+    const child = spawn(process.execPath, [
+      '--import', 'tsx', path.join(REPO_ROOT, 'src', 'cli.ts'),
+      'serve', '--port', '0', '--state', path.join(base, 'serve-state.json'),
+    ], {
+      cwd: REPO_ROOT,
+      env: { ...process.env, REPO_TOUR_CLAUDE_BIN: scriptPath },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let out = '';
+    child.stdout!.on('data', (d: Buffer) => { out += d.toString(); });
+    child.stderr!.on('data', (d: Buffer) => { out += d.toString(); });
+    const exited = new Promise<Exit>((resolve) => { child.on('exit', (code, signal) => resolve({ code, signal })); });
+    let pid: number | null = null;
+    // Another process's directories, the owner's live server among them: the stop's
+    // killLlmChildren must take only what this server made (review suggestion 1).
+    const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-llm-'));
+    const full = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-llm-'));
+    fs.writeFileSync(path.join(full, 'theirs.txt'), 'another process stands here');
+    try {
+      const listening = /running at http:\/\/127\.0\.0\.1:(\d+)/;
+      expect(await until(() => listening.test(out), 30_000), `serve never came up: ${out}`).toBe(true);
+      const port = Number(listening.exec(out)![1]);
+      const req = request({
+        host: '127.0.0.1', port, path: '/api/ask', method: 'POST',
+        headers: { 'content-type': 'application/json', 'sec-fetch-site': 'same-origin' },
+      }, (res) => { res.on('error', () => { /* the server goes away under it */ }); res.resume(); });
+      req.on('error', () => { /* the server goes away under it */ });
+      req.end(JSON.stringify({ messages: [{ role: 'user', content: 'q' }], context: {} }));
+
+      expect(await until(() => whereNow() !== null, 15_000), `the tutor never reached the model: ${out}`).toBe(true);
+      pid = await fakePid();
+      const seen = whereNow()!;
+      child.kill('SIGINT');
+      const exit = await within(exited, 10_000);
+      expect(exit, `serve did not stop cleanly on one Ctrl-C: ${out}`).toEqual({ code: 0, signal: null });
+      expect(fs.existsSync(seen.cwd), `Ctrl-C on serve left the in-flight call's directory behind: ${seen.cwd}`).toBe(false);
+      expect(fs.existsSync(empty), `serve's stop removed another process's empty directory: ${empty}`).toBe(true);
+      expect(fs.existsSync(path.join(full, 'theirs.txt')), `serve's stop emptied another process's directory: ${full}`)
+        .toBe(true);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      killFake(pid);
+      fs.rmSync(path.join(base, 'slow'), { force: true });
+      fs.rmSync(path.join(full, 'theirs.txt'), { force: true });
+      for (const d of [empty, full]) {
+        try { fs.rmdirSync(d); } catch { /* already gone, which the assertions above report */ }
+      }
+    }
+  }, 60_000);
+});
+
+describe('T-20: the cleanup takes only what this process made (AC5)', () => {
+  it('leaves another process\'s repo-tour-llm-* directories alone, empty or not', async () => {
+    // Decoys standing in for other repo-tour processes, the owner's live server among them.
+    const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-llm-'));
+    const full = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-llm-'));
+    fs.writeFileSync(path.join(full, 'theirs.txt'), 'another process stands here');
+    try {
+      const { runLlm, runLlmStream } = await import('../src/llm.js');
+      scriptReplies(['one shot']);
+      await runLlm('q', { provider: 'claude', model: 'm' }, repo, 10_000);
+      scriptReplies(['streamed']);
+      await runLlmStream('q', { provider: 'claude', model: 'm' }, repo, () => {}, 10_000);
+      process.env['REPO_TOUR_CODEX_BIN'] = recordingCodex();
+      await runLlm('q', { provider: 'codex', model: 'default' }, repo, 10_000);
+      const { exit, stderr } = await exitMidCall();
+      expect(exit, `the child did not exit mid-call as planned: ${stderr}`).toEqual({ code: 0, signal: null });
+
+      expect(fs.existsSync(empty), `another process's empty directory was removed: ${empty}`).toBe(true);
+      expect(fs.existsSync(path.join(full, 'theirs.txt')), `another process's directory was emptied: ${full}`).toBe(true);
+    } finally {
+      delete process.env['REPO_TOUR_CODEX_BIN'];
+      fs.rmSync(path.join(full, 'theirs.txt'), { force: true });
+      for (const d of [empty, full]) {
+        try { fs.rmdirSync(d); } catch { /* already gone, which the assertions above report */ }
+      }
+    }
+  }, 60_000);
+});
+
+describe('T-20: codex writes its answer inside its own directory (AC6)', () => {
+  it('names a file in the private directory it stands in, reads it back, and leaves nothing', async () => {
+    const record = path.join(base, 'codex.json');
+    fs.rmSync(record, { force: true });
+    process.env['REPO_TOUR_CODEX_BIN'] = recordingCodex();
+    try {
+      const { runLlm } = await import('../src/llm.js');
+      const reply = await runLlm('q', { provider: 'codex', model: 'default' }, repo, 10_000);
+      expect(reply.text, 'codex\'s answer did not come back').toBe('codex answered from a room of its own');
+
+      const seen = JSON.parse(fs.readFileSync(record, 'utf8')) as CodexSeen;
+      const told = seen.argv[seen.argv.indexOf('-C') + 1];
+      expect(seen.out, 'codex was not given --output-last-message').not.toBeNull();
+      expect(seen.outDirReal, `the answer file is not in the directory codex stands in: ${seen.out}`).toBe(seen.cwd);
+      expect(seen.toldReal, `-C (${told}) is not the directory codex stands in`).toBe(seen.cwd);
+      expect(path.dirname(seen.cwd), `codex's directory is not one of its own in the temp dir: ${seen.cwd}`)
+        .toBe(fs.realpathSync(os.tmpdir()));
+      expect(path.basename(seen.cwd), `codex's directory is not named as one of repo-tour's own: ${seen.cwd}`)
+        .toMatch(/^repo-tour-llm-/);
+      expect(seen.outDirMode, 'the answer file\'s directory is open to other users').toBe(0o700);
+      expect(seen.listing, 'codex did not start in an empty directory').toEqual([]);
+      expect(seen.outDirReal, 'the answer file sits directly in the shared temp dir, where its name can be taken first')
+        .not.toBe(fs.realpathSync(os.tmpdir()));
+      expect(insideRepo(seen.cwd), `codex ran inside the toured repo: ${seen.cwd}`).toBe(false);
+
+      expect(fs.existsSync(seen.out!), `the answer file outlived the call: ${seen.out}`).toBe(false);
+      expect(fs.existsSync(seen.cwd), `codex's directory outlived the call: ${seen.cwd}`).toBe(false);
+    } finally {
+      delete process.env['REPO_TOUR_CODEX_BIN'];
+    }
+  }, 30_000);
+});
+
+// ---------------------------------------------------------------- T-20 review round 1
+
+describe('T-20 review: the cleanup is exact on every path', () => {
+  it('rmdir only: a directory the CLI left something in stays, and so does what it left (nit 2)', async () => {
+    // Defence in depth. A recursive remove here, with any bug that handed it the wrong path,
+    // would delete whatever that path held: the toured repo, say.
+    const { runLlm } = await import('../src/llm.js');
+    scriptReplies(['answered']);
+    fs.writeFileSync(path.join(base, 'litter'), '');
+    const tried: Seen[] = [];
+    try {
+      expect((await runLlm('q', { provider: 'claude', model: 'm' }, repo, 10_000)).text, 'the call did not answer')
+        .toBe('answered');
+      tried.push(...attempts());
+      expect(tried, 'expected exactly one spawn').toHaveLength(1);
+      const { cwd } = tried[0]!;
+      expect(fs.existsSync(cwd), `a directory that was not empty was removed: ${cwd}`).toBe(true);
+      expect(fs.existsSync(path.join(cwd, 'litter.txt')), `what the CLI left was removed with it: ${cwd}`).toBe(true);
+    } finally {
+      for (const t of tried) {
+        fs.rmSync(path.join(t.cwd, 'litter.txt'), { force: true });
+        try { fs.rmdirSync(t.cwd); } catch { /* already gone, which the assertions above report */ }
+      }
+    }
+  }, 30_000);
+
+  it('a killed codex call takes its answer file and its directory with it at once, and fails (nit 5)', async () => {
+    // A codex that has written its answer but not exited. On pr's signal path the process dies
+    // straight after killLlmChildren, so whatever that leaves stays: here, the model's answer.
+    const record = path.join(base, 'codex-sleeper.json');
+    fs.rmSync(record, { force: true });
+    const script = path.join(base, 'fake-codex-sleeper');
+    fs.writeFileSync(script, `#!/usr/bin/env node
+const fs = require('fs');
+const args = process.argv.slice(2);
+if (args.includes('--version')) { process.stdout.write('fake codex 1.0\\n'); process.exit(0); }
+const out = args[args.indexOf('--output-last-message') + 1];
+let input = '';
+process.stdin.on('data', (d) => { input += d; });
+process.stdin.on('end', () => {
+  fs.writeFileSync(out, 'an answer nobody is waiting for');
+  fs.writeFileSync(${JSON.stringify(record)}, JSON.stringify({ pid: process.pid, out }));
+  setTimeout(() => process.exit(0), 30000);   // answered, and not leaving
+});
+`);
+    fs.chmodSync(script, 0o755);
+    process.env['REPO_TOUR_CODEX_BIN'] = script;
+    const { runLlm, killLlmChildren } = await import('../src/llm.js');
+    const settled = runLlm('q', { provider: 'codex', model: 'default' }, repo, 30_000)
+      .then((r) => ({ answered: r.text }), (e: unknown) => ({ failed: (e as Error).message }));
+    let seen: { pid: number; out: string } | null = null;
+    try {
+      expect(await until(() => {
+        try { seen = JSON.parse(fs.readFileSync(record, 'utf8')) as { pid: number; out: string }; return true; }
+        catch { return false; }
+      }, 10_000), 'the fake codex never wrote its answer').toBe(true);
+      const { out } = seen!;
+      expect(fs.existsSync(out), 'the answer file is not there to begin with').toBe(true);
+
+      killLlmChildren();
+      expect.soft(fs.existsSync(out), `killLlmChildren left the model's answer behind: ${out}`).toBe(false);
+      expect.soft(fs.existsSync(path.dirname(out)), `killLlmChildren left the call's directory behind: ${path.dirname(out)}`)
+        .toBe(false);
+      expect(await settled, 'a killed call returned its answer, though nobody is waiting for it')
+        .toEqual({ failed: expect.stringMatching(/codex exited/) });
+    } finally {
+      delete process.env['REPO_TOUR_CODEX_BIN'];
+      const pid = (seen as { pid: number } | null)?.pid;
+      if (pid && pid > 1 && alive(pid)) {
+        try { if (fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes(script)) process.kill(pid, 'SIGKILL'); }
+        catch { /* gone */ }
+      }
+      await settled;
+    }
+  }, 30_000);
+
+  it('a codex that has exited, but whose pipes are still open, fails when killed rather than answering empty (review 2, nit A)', async () => {
+    // The process has gone, and its answer is written, but `close` waits for the pipes, which a
+    // child of its own still holds. killLlmChildren removes the answer with the directory in that
+    // window, and the call then resolves with code 0 and no answer: an empty "success" for a call
+    // nobody is waiting for. Killed means failed, as for every other killed call.
+    const record = path.join(base, 'codex-exited.json');
+    fs.rmSync(record, { force: true });
+    const script = path.join(base, 'fake-codex-exited');
+    const holder = '/* t20 nit A: holds the pipes */ setTimeout(() => {}, 30000)';
+    fs.writeFileSync(script, `#!/usr/bin/env node
+const fs = require('fs');
+const { spawn } = require('child_process');
+const args = process.argv.slice(2);
+if (args.includes('--version')) { process.stdout.write('fake codex 1.0\\n'); process.exit(0); }
+const out = args[args.indexOf('--output-last-message') + 1];
+let input = '';
+process.stdin.on('data', (d) => { input += d; });
+process.stdin.on('end', () => {
+  fs.writeFileSync(out, 'an answer nobody is waiting for');
+  // A child of its own that inherits stdout and stderr keeps them open after this one exits.
+  const held = spawn(process.execPath, ['-e', ${JSON.stringify(holder)}], { stdio: ['ignore', 'inherit', 'inherit'] });
+  fs.writeFileSync(${JSON.stringify(record)}, JSON.stringify({ pid: process.pid, holder: held.pid, out }));
+  process.exit(0);
+});
+`);
+    fs.chmodSync(script, 0o755);
+    process.env['REPO_TOUR_CODEX_BIN'] = script;
+    const { runLlm, killLlmChildren } = await import('../src/llm.js');
+    const settled = runLlm('q', { provider: 'codex', model: 'default' }, repo, 30_000)
+      .then((r) => ({ answered: r.text }), (e: unknown) => ({ failed: (e as Error).message }));
+    let seen: { pid: number; holder: number; out: string } | null = null;
+    const killHolder = (): void => {
+      const pid = (seen as { holder: number } | null)?.holder;
+      if (!pid || pid <= 1 || !alive(pid)) return;
+      try { if (fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes('t20 nit A')) process.kill(pid, 'SIGKILL'); }
+      catch { /* gone */ }
+    };
+    try {
+      expect(await until(() => {
+        try { seen = JSON.parse(fs.readFileSync(record, 'utf8')) as { pid: number; holder: number; out: string }; return true; }
+        catch { return false; }
+      }, 10_000), 'the fake codex never wrote its answer').toBe(true);
+      const { pid, out } = seen!;
+      expect(await until(() => !alive(pid), 10_000), 'the fake codex did not exit').toBe(true);
+      expect(fs.existsSync(out), 'the answer file is not there to begin with').toBe(true);
+
+      killLlmChildren();
+      expect.soft(fs.existsSync(path.dirname(out)), `killLlmChildren left the call's directory behind: ${path.dirname(out)}`)
+        .toBe(false);
+      killHolder();                // the pipes close, and the call settles
+      expect(await settled, 'a killed call answered with nothing as if it had succeeded')
+        .toEqual({ failed: expect.stringMatching(/cancelled/) });
+    } finally {
+      delete process.env['REPO_TOUR_CODEX_BIN'];
+      killHolder();
+      await settled;
+    }
+  }, 30_000);
+
+  it('a stale leave never touches a path this process no longer owns (nit 6)', async () => {
+    // killLlmChildren removes the directory and forgets it. The call's own cleanup runs a few
+    // ms later, when the killed child closes. If the same name has been drawn again in between,
+    // that directory belongs to someone else now.
+    const { runLlm, killLlmChildren } = await import('../src/llm.js');
+    scriptReplies(['nobody will read this']);
+    fs.writeFileSync(path.join(base, 'slow'), '10000');
+    fs.rmSync(path.join(base, 'pid'), { force: true });
+    const settled = runLlm('q', { provider: 'claude', model: 'm' }, repo, 30_000).then(() => 'answered', () => 'failed');
+    let impostor: string | null = null;
+    let pid: number | null = null;
+    try {
+      expect(await until(() => whereNow() !== null, 10_000), 'the fake claude never started').toBe(true);
+      pid = await fakePid();
+      const { cwd } = whereNow()!;
+      killLlmChildren();
+      expect(fs.existsSync(cwd), `killLlmChildren did not remove the call's directory: ${cwd}`).toBe(false);
+      fs.mkdirSync(cwd);           // the impostor: the same name, drawn again by someone else
+      impostor = cwd;
+      await settled;
+      expect(fs.existsSync(impostor), `the call's late cleanup removed a directory it no longer owns: ${impostor}`).toBe(true);
+    } finally {
+      killFake(pid);
+      if (impostor) { try { fs.rmdirSync(impostor); } catch { /* already gone, which the assertion above reports */ } }
+      await settled;
+    }
+  }, 30_000);
 });

@@ -144,12 +144,21 @@ interface RunResult { code: number | null; stdout: string; stderr: string }
  */
 const liveChildren = new Set<import('node:child_process').ChildProcess>();
 
-/** Stop every in-flight model call. A killed build resumes from its marker on the next boot. */
+/**
+ * Stop every in-flight model call, and remove the directories they stood in, with any file a
+ * call named as its own (codex's answer).
+ *
+ * The directories go now, not when the calls settle: a program stopping on a signal dies by
+ * it straight after this, and a death by signal runs no exit hook. Removing an empty directory
+ * that a dying child still stands in works on Linux. A killed build resumes from its marker on
+ * the next boot.
+ */
 export function killLlmChildren(): void {
   for (const child of liveChildren) {
     try { child.kill('SIGKILL'); } catch { /* already gone */ }
   }
   liveChildren.clear();
+  for (const dir of madeHere.keys()) leave(dir);
 }
 
 /**
@@ -314,12 +323,64 @@ const ISOLATED = [
  * `.mcp.json`, codex's AGENTS.md), and each CLI version decides afresh which flags keep
  * which part of it out. With no tools the working directory serves no purpose, so standing
  * somewhere empty costs nothing and closes the whole class at once, whatever the version.
+ *
+ * One per call, and gone as soon as the call settles, whether it answered, failed or was
+ * cancelled. It used to be one per process, made on first use and never removed, so every
+ * process that ever asked a model left an empty directory in /tmp for good: review attempt 4
+ * of T-18 counted twelve. One per call also keeps two calls apart, which is what lets codex's
+ * answer file live inside its own.
+ *
+ * It goes by `rmdir` of the exact path this process made: never a recursive remove, and never
+ * a pattern over /tmp. Other repo-tour processes, the owner's live server among them, stand in
+ * empty `repo-tour-llm-*` directories of their own, and `rmdir` can only ever take an empty
+ * one. A call that writes a file of its own there names it (`leaves`), and that exact name is
+ * removed first. A directory that still will not go (something else was left in it) stays on
+ * the list for the exit hook to try again; it never fails the call.
+ *
+ * A call still running when the process exits is caught by an `exit` hook, not by a signal
+ * listener. Listening for a signal cancels Node's own exit, so a Ctrl-C would stop ending a
+ * `tour` or a `digest`, and `./llm` is a package entry point, so a listener here would change
+ * every program that imports it. A program that stops on a signal calls `killLlmChildren`.
  */
-let emptyDirPath: string | null = null;
-function emptyDir(): string {
-  if (emptyDirPath && fs.existsSync(emptyDirPath)) return emptyDirPath;
-  emptyDirPath = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-llm-'));
-  return emptyDirPath;
+// Every directory this process made and has not removed yet, with the files its call may leave.
+const madeHere = new Map<string, readonly string[]>();
+let exitHooked = false;
+
+async function emptyDir<T>(call: (dir: string) => Promise<T>, leaves: readonly string[] = []): Promise<T> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-llm-'));
+  madeHere.set(dir, leaves);
+  if (!exitHooked) {
+    exitHooked = true;
+    process.on('exit', () => { for (const d of madeHere.keys()) leave(d); });
+  }
+  try {
+    return await call(dir);
+  } finally {
+    leave(dir);
+  }
+}
+
+/**
+ * Remove a directory this process made: the files its call named, each by its exact name, then
+ * the directory, if that left it empty. Never throws.
+ *
+ * Only while the directory is still on the list. `killLlmChildren` removes a directory and
+ * forgets it, and the call's own cleanup runs a few ms later, when the killed child closes. By
+ * then that name may have been drawn again, by someone else.
+ */
+function leave(dir: string): void {
+  if (!madeHere.has(dir)) return;
+  for (const name of madeHere.get(dir) ?? []) {
+    if (name !== path.basename(name)) continue;   // a file in the directory, never a path out of it
+    try { fs.rmSync(path.join(dir, name), { force: true }); } catch { /* the rmdir below tells */ }
+  }
+  try {
+    fs.rmdirSync(dir);
+    madeHere.delete(dir);
+  } catch (e) {
+    // Already gone counts as removed. Anything else (not empty, say) keeps it on the list.
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') madeHere.delete(dir);
+  }
 }
 
 const UNKNOWN_OPTION = /unknown option|unrecognized option|unknown argument|unexpected argument/i;
@@ -327,7 +388,11 @@ const UNKNOWN_OPTION = /unknown option|unrecognized option|unknown argument|unex
 /** The CLI's own words, plus what to do when they mean it is too old for these flags. */
 function cliError(r: RunResult): Error {
   const hint = UNKNOWN_OPTION.test(r.stderr) ? ' (repo-tour needs a newer Claude Code: run `claude update`)' : '';
-  return new Error(`claude exited ${r.code}: ${r.stderr.trim().slice(0, 200)}${hint}`);
+  // On one line. The tutor shows a reader only the first line of an error, and so does the PR
+  // judge, but the real CLI complains about an unknown flag on two (`error: unknown option
+  // '--x'`, then `(Did you mean --y?)`), and the hint, added at the end, landed on the second.
+  const said = r.stderr.trim().replace(/\s*\n\s*/g, ' ').slice(0, 200);
+  return new Error(`claude exited ${r.code}: ${said}${hint}`);
 }
 /**
  * Whether this machine's claude CLI understands `--include-partial-messages`.
@@ -372,10 +437,10 @@ const claude: Provider = {
     const bin = resolveBin('claude', 'REPO_TOUR_CLAUDE_BIN');
     if (!bin) throw new Error('the claude CLI is not installed');
 
-    const r = await runProcess(
+    const r = await emptyDir((where) => runProcess(
       bin, ['-p', '--model', model, '--output-format', 'json', ...ISOLATED],
-      prompt, emptyDir(), timeoutMs, signal,
-    );
+      prompt, where, timeoutMs, signal,
+    ));
     if (r.code !== 0) throw cliError(r);
 
     const envelope = JSON.parse(r.stdout) as {
@@ -419,7 +484,7 @@ const claude: Provider = {
       let outputTokens = 0;
       let usd = 0;
 
-      const r = await streamProcess(bin, args, prompt, emptyDir(), timeoutMs, (line) => {
+      const r = await emptyDir((where) => streamProcess(bin, args, prompt, where, timeoutMs, (line) => {
         let d: StreamLine;
         try { d = JSON.parse(line) as StreamLine; }
         catch { return; }  // hook chatter and blank frames are not our business
@@ -447,7 +512,7 @@ const claude: Provider = {
           outputTokens = d.usage?.output_tokens ?? 0;
           usd = d.total_cost_usd ?? 0;
         }
-      }, signal);
+      }, signal));
 
       const text = (final || streamed).trim();
       return { r, reply: { text, inputTokens, outputTokens, usd, metered: true }, streamed };
@@ -480,6 +545,9 @@ const claude: Provider = {
   },
 };
 
+/** The one file a codex call writes into its directory: its final message. */
+const CODEX_ANSWER = 'answer.txt';
+
 /**
  * OpenAI's Codex CLI.
  *
@@ -505,11 +573,18 @@ const codex: Provider = {
     const bin = resolveBin('codex', 'REPO_TOUR_CODEX_BIN');
     if (!bin) throw new Error('the codex CLI is not installed');
 
-    const out = path.join(os.tmpdir(), `repo-tour-codex-${process.pid}-${Date.now()}.txt`);
-    // In an empty directory, like claude: out of reach of the toured repo's AGENTS.md. Its
-    // read-only sandbox is still a shell, which is not "no tools" (a follow-up in the ledger).
-    const where = emptyDir();
-    try {
+    // In an empty directory of its own, like claude: out of reach of the toured repo's
+    // AGENTS.md. Its read-only sandbox is still a shell, which is not "no tools" (T-19).
+    //
+    // The answer file lives in that same directory, private (0700) and this call's alone. It
+    // used to have a guessable name in shared /tmp, where someone else could create it first.
+    // It is named to `emptyDir` as the one file this call may leave, so every cleanup removes
+    // it by that exact name, never recursively. A codex call that had written its answer but
+    // not exited when `killLlmChildren` ran used to keep its 0700 directory, holding the
+    // model's answer. Killed, it now fails rather than returning that answer, which is right:
+    // nobody is waiting for it.
+    return emptyDir(async (where) => {
+      const out = path.join(where, CODEX_ANSWER);
       const r = await runProcess(
         bin,
         ['exec', '--ephemeral', '--skip-git-repo-check', '--sandbox', 'read-only',
@@ -520,10 +595,11 @@ const codex: Provider = {
       if (r.code !== 0 && !text) {
         throw new Error(`codex exited ${r.code}: ${r.stderr.trim().slice(0, 200)}`);
       }
+      // Killed while it closed: it had exited 0, but `close` waited on its pipes, and
+      // killLlmChildren took the directory, answer and all, in between. Killed means failed.
+      if (!madeHere.has(where)) throw new Error('cancelled: the process is stopping');
       return { text, inputTokens: 0, outputTokens: 0, usd: 0, metered: false };
-    } finally {
-      try { fs.rmSync(out, { force: true }); } catch { /* a leftover temp file is not a failure */ }
-    }
+    }, [CODEX_ANSWER]);
   },
 };
 
