@@ -3,10 +3,12 @@
  *
  * A learner's file is compared to the reference on exactly three axes: which exported
  * symbols exist (by name and kind), which imports are declared (by raw specifier), and
- * whether the file parses at all. Nothing about what a function DOES is ever inspected —
- * `extract()` only ever sees top-level declarations, so a renamed local variable inside a
- * function body is invisible to it by construction, which is what makes this check honest
- * about what it can and cannot catch.
+ * whether the file parses at all. Nothing about what a function DOES is ever inspected.
+ * Only exported symbols are compared, and nothing `extract()` reads from inside a function
+ * body is ever exported: the declarations it records inside an IIFE or a module-pattern
+ * wrapper (T-15, T-16) are always unexported. So a renamed local variable inside a function
+ * body is invisible to this check by construction, which is what makes it honest about what
+ * it can and cannot catch.
  *
  * `extract()`'s parser map is module-private and `src/extract.ts` is T-11's file this
  * week, so rather than reach into it, this writes the learner's source to a throwaway

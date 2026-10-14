@@ -244,6 +244,69 @@ function isEligibleCandidate(s: SymbolRecord): boolean {
 }
 
 /**
+ * T-16 — the fallback path's second screen, and again ONLY that path's. A module-pattern
+ * script (`var app = (function () { ... })()`) records BOTH the wrapper's name — a `variable`
+ * whose range is the whole wrapper — and the declarations inside it (`src/extract.ts`).
+ * Biggest span first would hand the one slot to `app` and skip every function inside as an
+ * overlap, so the learner would rebuild the whole module as one step. So a `variable`
+ * candidate yields its slot when another candidate lies STRICTLY inside it, and the wrapper
+ * becomes boilerplate around the code it holds — exactly how T-15's bare
+ * `(function () { ... })()`, which has no name to record, already plans.
+ *
+ * Strictly: the other candidate starts on a later line or ends on an earlier one. Before
+ * T-16 no `variable` contained another symbol at all, and a multi-declarator statement
+ * records each of its names with the SAME statement range — equal, not inside — so nothing
+ * T-12 or T-15 shipped moves. Candidates only: a wrapper whose body holds nothing eligible
+ * (sql-gauntlet's `argSection`, around one one-line `const`) keeps its step. And only a
+ * `variable` yields: a class keeps T-12's slot over its own methods.
+ *
+ * One sort, never a scan of every pair (T-16 review): comparing each variable with each
+ * candidate took seconds to plan one generated script of 60,000 variables. In start-line
+ * order, the candidates that start after a variable's first line form a suffix, and one of
+ * them lies inside the variable exactly when the earliest end in that suffix is no later
+ * than the variable's last line. A candidate that starts ON its first line lies inside only
+ * by ending sooner.
+ */
+function variablesThatYield(candidates: SymbolRecord[]): Set<SymbolRecord> {
+  const byStart = candidates.slice().sort((a, b) => a.line - b.line);
+  const earliestEndFrom = new Array<number>(byStart.length + 1).fill(Infinity);
+  for (let i = byStart.length - 1; i >= 0; i--) {
+    earliestEndFrom[i] = Math.min(byStart[i]!.endLine, earliestEndFrom[i + 1]!);
+  }
+  const earliestEndOn = new Map<number, number>();
+  for (const c of byStart) earliestEndOn.set(c.line, Math.min(c.endLine, earliestEndOn.get(c.line) ?? Infinity));
+
+  const yielding = new Set<SymbolRecord>();
+  for (const s of candidates) {
+    if (s.kind !== 'variable') continue;
+    const startsLater = firstStartingAfter(byStart, s.line);
+    if (earliestEndFrom[startsLater]! <= s.endLine || (earliestEndOn.get(s.line) ?? Infinity) < s.endLine) {
+      yielding.add(s);
+    }
+  }
+  return yielding;
+}
+
+/** The index of the first candidate, in start-line order, that starts after `line`. */
+function firstStartingAfter(byStart: SymbolRecord[], line: number): number {
+  let lo = 0;
+  let hi = byStart.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (byStart[mid]!.line <= line) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/** A file that exports nothing: every recorded symbol, through both screens above. */
+function fallbackCandidates(symbols: SymbolRecord[]): SymbolRecord[] {
+  const eligible = symbols.filter(isEligibleCandidate);
+  const yielding = variablesThatYield(eligible);
+  return eligible.filter((s) => !yielding.has(s));
+}
+
+/**
  * The symbols worth a step: biggest span first, capped at five, then restored to file
  * order for presentation. Overlapping candidates are skipped once a bigger one is taken —
  * `extract.ts` marks a class's public methods `exported` whenever the class is, so a class
@@ -255,13 +318,14 @@ function isEligibleCandidate(s: SymbolRecord): boolean {
  * UNLESS the file exports nothing at all (T-15: a plain script or a CommonJS module has no
  * ESM `export`, but its top-level functions are still exactly what a learner needs
  * stubbed), in which case every recorded symbol is a candidate instead, screened by
- * `isEligibleCandidate`. The screen belongs to that fallback alone: it exists to stop the
- * one-line requires and aliases the fallback itself made eligible, so a file that DOES
- * export something is untouched by this ticket, in every language.
+ * `isEligibleCandidate` and then `variablesThatYield` (T-16). Both screens belong to that
+ * fallback alone: the first stops the one-line requires and aliases the fallback itself made
+ * eligible, the second stops a module-pattern wrapper swallowing the code inside it, so a
+ * file that DOES export something is untouched by either ticket, in every language.
  */
 function selectLoadBearing(symbols: SymbolRecord[]): SymbolRecord[] {
   const exported = symbols.filter((s) => s.exported);
-  const candidates = exported.length > 0 ? exported : symbols.filter(isEligibleCandidate);
+  const candidates = exported.length > 0 ? exported : fallbackCandidates(symbols);
   const bySpanDesc = candidates
     .slice()
     .sort((a, b) => (b.endLine - b.line) - (a.endLine - a.line) || a.line - b.line);
