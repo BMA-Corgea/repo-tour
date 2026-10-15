@@ -34,9 +34,12 @@ const GRAMMAR_FOR: Record<string, string> = {
  * T-31 — the parser runtime, held so that it can be let go of.
  *
  * web-tree-sitter runs ONE wasm instance per loaded copy of the package, with a heap capped at
- * 2 GiB. A file that needs more aborts it, and every later call into that copy throws
- * `Aborted()`: for the rest of the digest, and for every digest after it in a server that runs
- * for days. A copy cannot be restarted in place. It has to be dropped, and a fresh one loaded.
+ * 2 GiB. A file that needs more aborts it. The parser that aborted throws `Aborted()` on every
+ * later call, even for a one-line file (tree-sitter resumes the parse it died in); the copy keeps
+ * its whole heap; and anything else that needs memory from it can abort again. Measured: a fresh
+ * parser on a dead copy sometimes works and sometimes aborts, depending on what the dead parse
+ * left. A copy in that state cannot be trusted or restarted in place. It is dropped, and a fresh
+ * one loaded.
  *
  * So the package is loaded with `require`, never `import`: an ES module stays loaded for the
  * life of the process, and the dead copy's heap with it. Each copy comes through its own
@@ -618,6 +621,17 @@ const contentKey = (language: string, text: string): string =>
 /** What `Aborted()` means here: allocation failure is where the parser's wasm build aborts. */
 const OUT_OF_MEMORY = 'the parser ran out of memory on it (its limit is 2 GiB)';
 
+/** A wasm trap (`WebAssembly.RuntimeError`): an abort, or the runtime's own fault. The copy cannot be trusted after one. */
+const isTrap = (err: unknown): boolean => err instanceof Error && err.name === 'RuntimeError';
+
+/**
+ * T-31 review S1 — a copy keeps the high-water mark of its heap for as long as it lives, and in
+ * a server that is days. A file this long can grow it by hundreds of megabytes (measured: about 30
+ * to 330 bytes of heap per character, depending on how dense the code is), so a call that parsed
+ * one lets go of the copy at its end. The next call loads a fresh one: 20-54 ms.
+ */
+const LARGE_TEXT = 1024 * 1024;
+
 /** Why a file could not be extracted, in one line: the error's own words, or what an abort means. */
 function why(err: unknown): string {
   if (!(err instanceof Error)) return String(err);
@@ -649,6 +663,7 @@ export async function extract(root: string, files: FileRecord[]): Promise<Extrac
   const extracts: FileExtract[] = [];
   const unparsed: UnparsedFile[] = [];
   let filesWithParseErrors = 0;
+  let largest = 0;
 
   for (const file of targets) {
     const language = file.language!;
@@ -659,12 +674,6 @@ export async function extract(root: string, files: FileRecord[]): Promise<Extrac
       text = fs.readFileSync(path.join(root, file.path), 'utf8');
     } catch (err) {
       skip(`could not be read: ${(err as NodeJS.ErrnoException).code ?? why(err)}`);
-      continue;
-    }
-
-    const fatal = fatalContent.size > 0 ? fatalContent.get(contentKey(language, text)) : undefined;
-    if (fatal) {
-      skip(fatal);
       continue;
     }
 
@@ -686,6 +695,15 @@ export async function extract(root: string, files: FileRecord[]): Promise<Extrac
       continue;
     }
 
+    // Content that has already killed a runtime is not given the chance to do it again. Checked
+    // here, after the last await, because another digest may have learned it while this one waited.
+    const fatal = fatalContent.size > 0 ? fatalContent.get(contentKey(language, text)) : undefined;
+    if (fatal) {
+      skip(fatal);
+      continue;
+    }
+
+    largest = Math.max(largest, text.length);
     let tree: Tree | null = null;
     try {
       tree = ready.parser.parse(text);
@@ -710,17 +728,26 @@ export async function extract(root: string, files: FileRecord[]): Promise<Extrac
     } catch (err) {
       const reason = why(err);
       skip(reason);
-      if (err instanceof Error && err.name === 'RuntimeError') {
+      if (isTrap(err)) {
         // A wasm trap: this copy of the parser cannot be trusted again, and after an abort it
         // holds its whole heap. Let go of it, and never parse this content again.
         fatalContent.set(contentKey(language, text), reason);
         release(ready.rt);
+      } else {
+        // A plain error leaves the copy sound, but tree-sitter resumes an interrupted parse on
+        // the parser's next call, so the next file must not start inside this one's.
+        try { ready.parser.reset(); } catch { release(ready.rt); }
       }
-    } finally {
-      // A runtime that has been let go of can free nothing, and needs to free nothing.
-      if (tree && runtime === ready.rt) tree.delete();
+    }
+    // A runtime that has been let go of can free nothing, and needs to free nothing. Freeing can
+    // need memory too; a copy that traps here is let go of like any other (the extract stands).
+    if (tree && runtime === ready.rt) {
+      try { tree.delete(); } catch (err) { if (isTrap(err)) release(ready.rt); }
     }
   }
+
+  // Review S1: let go of a copy that a large file grew, or it keeps that heap for the life of the process.
+  if (largest > LARGE_TEXT && runtime) release(runtime);
 
   const edges: Array<{ from: string; to: string }> = [];
   const inDegree: Record<string, number> = {};

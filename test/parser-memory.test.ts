@@ -36,13 +36,34 @@ const EVENTS = ['uncaughtException', 'unhandledRejection', 'exit', 'beforeExit']
 const listeners = (): Record<string, number> =>
   Object.fromEntries(EVENTS.map((e) => [e, process.listenerCount(e)]));
 
-/** A full collection, asked for from inside the test: vitest does not start this process with --expose-gc. */
+/**
+ * A full collection, asked for from inside the test: vitest does not start this process with
+ * --expose-gc. Node's docs warn that changing V8 flags after start-up can be unpredictable; this one
+ * only makes `gc` available to new contexts, and it is the one way to ask for a collection here
+ * without a vitest config for one file. (Review N5: kept, with this note. Without it the test would
+ * wait on V8's own memory reducer, which took 6-10 s in the review's runs.)
+ */
 async function collect(): Promise<void> {
   v8.setFlagsFromString('--expose-gc');
   const gc = vm.runInNewContext('gc') as () => void;
   gc();
   await new Promise((r) => setTimeout(r, 50));
   gc();
+}
+
+/**
+ * Collect until `back(reading)` holds, for up to 5 s, and return the last reading. A copy that has
+ * been let go of is not always freed by the first collection: measured, once in a sequence of
+ * digests, it took one more collection a second later (497 MiB, then 2 MiB).
+ */
+async function settle(read: () => number, back: (n: number) => boolean): Promise<number> {
+  const deadline = Date.now() + 5000;
+  for (;;) {
+    await collect();
+    const n = read();
+    if (back(n) || Date.now() > deadline) return n;
+    await new Promise((r) => setTimeout(r, 250));
+  }
 }
 
 describe('T-31 AC3: a file that exhausts the parser is skipped, and the rest are still read', () => {
@@ -78,8 +99,7 @@ describe('T-31 AC3: a file that exhausts the parser is skipped, and the rest are
       expect(listeners(), 'loading a fresh parser left listeners on the process').toEqual(before);
 
       // Let go of means let go of: the dead copy's heap is garbage, and a collection gives it back.
-      await collect();
-      const rss = process.memoryUsage().rss;
+      const rss = await settle(() => process.memoryUsage().rss, (n) => n < 1024 * MIB);
       expect(rss, `the dead parser's 2 GiB is still held after a collection: rss ${Math.round(rss / MIB)} MiB`)
         .toBeLessThan(1024 * MIB);
 
@@ -94,4 +114,25 @@ describe('T-31 AC3: a file that exhausts the parser is skipped, and the rest are
       fs.rmSync(root, { recursive: true, force: true });
     }
   }, 180_000);
+
+  it('a large file that parses does not leave its heap behind for the life of the process (review S1)', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-t31-grown-'));
+    try {
+      // 3 MiB of a generated concatenation: it parses, and grows the parser's heap to about 500 MiB on its way.
+      write(path.join(root, 'src/big.js'), `var h = 'x'${"\n+'y'".repeat((3 * MIB) / 5)};\nmodule.exports = h;\n`);
+      write(path.join(root, 'src/small.js'), 'function small() { return 1; }\nmodule.exports = { small };\n');
+      await collect();
+      const before = process.memoryUsage().external;
+
+      const result = await digest(root, { write: false });
+      expect(result.manifest.unparsed, 'the large file should parse').toEqual([]);
+      expect(result.extracts.map((x) => x.path)).toEqual(['src/big.js', 'src/small.js']);
+
+      const grownBy = await settle(() => process.memoryUsage().external - before, (n) => n < 150 * MIB);
+      expect(grownBy, `the parser kept the heap a large file grew: ${Math.round(grownBy / MIB)} MiB more than before`)
+        .toBeLessThan(150 * MIB);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }, 120_000);
 });

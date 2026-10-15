@@ -20,6 +20,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import vm from 'node:vm';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
@@ -32,7 +33,7 @@ import { extract } from '../src/extract.js';
 import { inventory } from '../src/inventory.js';
 import { grammarsDir } from '../src/assets.js';
 import { buildCodeTour } from '../src/codetour.js';
-import { renderRepoView } from '../src/repoview.js';
+import { HIGHLIGHTER, renderRepoView } from '../src/repoview.js';
 import { renderView } from '../src/view.js';
 import type { FileRecord } from '../src/types.js';
 
@@ -117,13 +118,17 @@ function sourceFiles(dir: string): string[] {
 
 /**
  * Every function in src/ that takes a tree-sitter value (a parameter whose type is declared in
- * web-tree-sitter's typings) and can reach itself through calls, directly or through other
- * functions: a recursive syntax-tree walk, which a deep enough file overflows. Calls are
- * resolved by TypeScript's own checker, so two inner functions that share a name (both import
- * walks called theirs `visit`) are told apart. A function passed by name (`kids.forEach(visit)`)
- * counts as a call.
+ * web-tree-sitter's typings, or holds one: an array of nodes, or an object with a node in it) and
+ * can reach itself through calls, directly or through other functions: a recursive syntax-tree
+ * walk, which a deep enough file overflows. Calls are resolved by TypeScript's own checker, so two
+ * inner functions that share a name (both import walks called theirs `visit`) are told apart.
+ * Counted as calls (review S2): a function passed by name (`kids.forEach(visit)`); a function
+ * literal nested in another, as a callback is (`kids.forEach((c) => walk(c))`); `walk.call(...)`,
+ * `.apply`, `.bind`; a function held in an object property; and an alias (`const self = walk`).
+ * Also returns every function seen to take a tree-sitter value, so a check can make sure the
+ * types still resolve: if they did not, every parameter would be `any` and nothing would be found.
  */
-function recursiveSyntaxWalks(): string[] {
+function recursiveSyntaxWalks(): { walks: string[]; syntaxFunctions: string[] } {
   const srcDir = path.join(REPO, 'src');
   const program = ts.createProgram(sourceFiles(srcDir), {
     target: ts.ScriptTarget.ES2022,
@@ -142,13 +147,22 @@ function recursiveSyntaxWalks(): string[] {
     for (let p = n.parent; p; p = p.parent) if (isFn(p)) return p;
     return null;
   };
-  const target = (expr: ts.Expression): Fn | null => {
+  const target = (expr: ts.Expression, hops = 0): Fn | null => {
+    if (hops > 4) return null;
+    // `walk.call(this, c)`, `.apply`, `.bind`: the function is the receiver
+    if (ts.isPropertyAccessExpression(expr) && ['call', 'apply', 'bind'].includes(expr.name.text)) {
+      const through = target(expr.expression, hops + 1);
+      if (through) return through;
+    }
     let symbol = checker.getSymbolAtLocation(expr);
     if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
     const decl = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
     if (!decl) return null;
     if (isFn(decl)) return decl;
-    if (ts.isVariableDeclaration(decl) && decl.initializer && isFn(decl.initializer)) return decl.initializer;
+    if ((ts.isVariableDeclaration(decl) || ts.isPropertyAssignment(decl)) && decl.initializer) {
+      if (isFn(decl.initializer)) return decl.initializer;
+      if (ts.isIdentifier(decl.initializer)) return target(decl.initializer, hops + 1); // const self = walk
+    }
     return null;
   };
 
@@ -166,15 +180,30 @@ function recursiveSyntaxWalks(): string[] {
         edge(enclosing(n), target(n.expression));
         for (const arg of n.arguments) if (ts.isIdentifier(arg)) edge(enclosing(n), target(arg));
       }
+      // a function literal inside another runs when its parent hands it on: a callback is a call
+      if (isFn(n)) edge(enclosing(n), n);
       ts.forEachChild(n, scan);
     };
     scan(sf);
   }
 
-  const fromTreeSitter = (type: ts.Type): boolean =>
+  const declaredInTreeSitter = (t: ts.Type): boolean => {
+    const decl = (t.aliasSymbol ?? t.getSymbol())?.declarations?.[0];
+    return !!decl && decl.getSourceFile().fileName.includes('web-tree-sitter');
+  };
+  // A node, a node or null, an array of nodes, or an object holding one (one level down).
+  const fromTreeSitter = (type: ts.Type, depth = 0): boolean =>
     (type.isUnion() ? type.types : [type]).some((t) => {
-      const decl = (t.aliasSymbol ?? t.getSymbol())?.declarations?.[0];
-      return !!decl && decl.getSourceFile().fileName.includes('web-tree-sitter');
+      if (declaredInTreeSitter(t)) return true;
+      if (depth > 0) return false;
+      if (checker.isArrayType(t)) return checker.getTypeArguments(t as ts.TypeReference).some((e) => fromTreeSitter(e, 1));
+      if (t.flags & ts.TypeFlags.Object && !t.getCallSignatures().length) {
+        return t.getProperties().some((p) => {
+          const where = p.valueDeclaration ?? p.declarations?.[0];
+          return !!where && fromTreeSitter(checker.getTypeOfSymbolAtLocation(p, where), 1);
+        });
+      }
+      return false;
     });
   const takesSyntax = (fn: Fn): boolean => fn.parameters.some((p) => fromTreeSitter(checker.getTypeAtLocation(p)));
   const reachesItself = (start: Fn): boolean => {
@@ -193,21 +222,37 @@ function recursiveSyntaxWalks(): string[] {
   const nameOf = (fn: Fn): string => {
     if (fn.name) return fn.name.getText();
     const parent = fn.parent;
-    return parent && ts.isVariableDeclaration(parent) ? parent.name.getText() : '(anonymous)';
+    return parent && (ts.isVariableDeclaration(parent) || ts.isPropertyAssignment(parent))
+      ? parent.name.getText() : '(anonymous)';
   };
-  const out: string[] = [];
-  for (const fn of calls.keys()) {
-    if (!takesSyntax(fn) || !reachesItself(fn)) continue;
+  const where = (fn: Fn): string => {
     const sf = fn.getSourceFile();
-    const line = sf.getLineAndCharacterOfPosition(fn.getStart()).line + 1;
-    out.push(`${path.relative(REPO, sf.fileName)}:${line} ${nameOf(fn)}`);
+    return `${path.relative(REPO, sf.fileName)}:${sf.getLineAndCharacterOfPosition(fn.getStart()).line + 1} ${nameOf(fn)}`;
+  };
+  const walks: string[] = [];
+  const syntaxFunctions: string[] = [];
+  for (const sf of program.getSourceFiles()) {
+    if (!sf.fileName.startsWith(srcDir)) continue;
+    const each = (n: ts.Node): void => {
+      if (isFn(n) && takesSyntax(n)) {
+        syntaxFunctions.push(nameOf(n));
+        if (reachesItself(n)) walks.push(where(n));
+      }
+      ts.forEachChild(n, each);
+    };
+    each(sf);
   }
-  return out.sort();
+  return { walks: walks.sort(), syntaxFunctions };
 }
 
 describe('T-31 AC1: no syntax-tree walk in src/ is recursive', () => {
   it('no function that takes a syntax node calls itself, directly or through another', () => {
-    const walks = recursiveSyntaxWalks();
+    const { walks, syntaxFunctions } = recursiveSyntaxWalks();
+    // The check is only worth something while it can see syntax nodes at all (review S2).
+    for (const fn of ['countErrors', 'jsImports', 'pythonImports', 'jsSymbols', 'unwrapParens']) {
+      expect(syntaxFunctions, `the check no longer sees that ${fn} takes a syntax node: are web-tree-sitter's types resolving?`)
+        .toContain(fn);
+    }
     expect(walks, `recursive syntax-tree walk(s) in src/: ${walks.join(', ')}. A tree is as deep as a chain is ` +
       'long, so a generated file overflows the stack. Walk with a cursor or an explicit stack (T-31).').toEqual([]);
   }, 60_000);
@@ -407,6 +452,29 @@ describe('T-31 AC2: one file that fails is skipped with a note, and the digest g
     }
   });
 
+  it('a trap while freeing a tree does not end the digest either (review N3)', async () => {
+    const root = plant(appTree);
+    try {
+      // Freeing a tree is a wasm call too. Simulated here: the review could not make a real one trap.
+      const TreeClass = requireHere('web-tree-sitter').Tree as { prototype: { delete(): void; rootNode: { text: string } } };
+      const real = TreeClass.prototype.delete;
+      vi.spyOn(TreeClass.prototype, 'delete').mockImplementation(function (this: { rootNode: { text: string } }) {
+        if (this.rootNode.text.includes(MARKER)) {
+          const trap = new Error('Aborted(). Build with -sASSERTIONS for more info.');
+          trap.name = 'RuntimeError';
+          throw trap;
+        }
+        return real.call(this);
+      });
+      const { result, error } = await digestOf(root);
+      expect(error, `a trap while freeing one file's tree ended the digest: ${threw(error)}`).toBeUndefined();
+      expect(result!.manifest.unparsed).toEqual([]);
+      expect(result!.extracts.map((e) => e.path)).toEqual(['src/app.js', 'src/broken.js', 'src/util.js', 'src/zeta.js']);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('a file gone between the inventory and the parse: listed, not dropped without a word', async () => {
     const root = plant(appTree);
     try {
@@ -424,6 +492,35 @@ describe('T-31 AC2: one file that fails is skipped with a note, and the digest g
 });
 
 // ----------------------------------------------------------------- AC4: where the owner looks
+
+/**
+ * Run the page's own script, the one that draws the file tree and the file header, in a sandbox
+ * with just enough of a document (as `test/askpanel-drop.test.ts` does for the Ask panel). Returns
+ * the tree it drew, row by row, and a way to open a file and read its header. Review S3: checking
+ * the script's text proved only that the text was there, on every page.
+ */
+function drawPage(html: string): { rows: Map<string, string>; open: (p: string) => string } {
+  const data = /window\.__REPO__ = (\{[\s\S]*?\});<\/script>/.exec(html)?.[1];
+  const app = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]!)
+    .find((s) => s.includes('var D = window.__REPO__;'));
+  expect(data && app, 'the page has no file data or no page script').toBeTruthy();
+  const el = () => ({
+    innerHTML: '', textContent: '', scrollTop: 0, style: {},
+    addEventListener() {}, querySelectorAll: () => [], querySelector: () => null,
+    getBoundingClientRect: () => ({ top: 0, bottom: 0 }),
+  });
+  const ids: Record<string, ReturnType<typeof el>> = { tree: el(), code: el(), crumb: el(), filemeta: el(), range: el() };
+  const sandbox: Record<string, unknown> = { document: { getElementById: (id: string) => ids[id] ?? null }, JSON };
+  sandbox['window'] = sandbox;
+  sandbox['__REPO__'] = JSON.parse(data!);
+  vm.runInNewContext(HIGHLIGHTER, sandbox);
+  vm.runInNewContext(app!, sandbox);
+
+  const rows = new Map<string, string>();
+  for (const m of ids['tree']!.innerHTML.matchAll(/<div class="row" data-p="([^"]*)"[^>]*>(.*?)<\/div>/g)) rows.set(m[1]!, m[2]!);
+  const repo = sandbox['__repo'] as { open: (p: string) => void };
+  return { rows, open: (p) => { repo.open(p); return ids['filemeta']!.textContent; } };
+}
 
 describe('T-31 AC4: the repo page names the file it did not read, and the tour goes around it', () => {
   it('the bar says which file and why, the file is marked, and every other file is toured', async () => {
@@ -452,8 +549,16 @@ describe('T-31 AC4: the repo page names the file it did not read, and the tour g
       expect(broken?.unread, 'the browsable copy of the file does not say it was not read')
         .toBe('TypeError: injected by test/iterative-walks.test.ts');
       expect(data.files.find((f: { path: string }) => f.path === 'src/util.js')?.unread).toBeUndefined();
-      expect(html, 'the page script never marks a not-read file in the tree').toContain('class="nr"');
-      expect(html, 'the page script never says so in the file header').toContain("' · not read: '");
+
+      // What the page's own script draws: the tag on that row and no other, and the header's note.
+      const page = drawPage(html);
+      expect(page.rows.get('src/broken.js'), 'the tree does not mark the file it did not read')
+        .toContain('<span class="nr" title="TypeError: injected by test/iterative-walks.test.ts">not read</span>');
+      const tagged = [...page.rows].filter(([, row]) => row.includes('class="nr"')).map(([p]) => p);
+      expect(tagged, 'the tree marks files that were read').toEqual(['src/broken.js']);
+      expect(page.open('src/broken.js'), 'the file header does not say the file was not read')
+        .toBe('3 lines · javascript · not read: TypeError: injected by test/iterative-walks.test.ts');
+      expect(page.open('src/util.js')).toBe('3 lines · javascript');
 
       // The digest view (`repo-tour view`) says it too.
       expect(renderView(r)).toContain('1 file was not read');
@@ -469,6 +574,10 @@ describe('T-31 AC4: the repo page names the file it did not read, and the tour g
       const plan = buildCodeTour(r);
       const html = renderRepoView(r, { steps: plan.steps, itinerary: plan.itinerary });
       expect(html, 'a "not read" bar on a page where every file was read').not.toContain('class="bar unread"');
+      const page = drawPage(html);
+      expect(page.rows.size, 'the page script drew no tree').toBeGreaterThan(3);
+      expect([...page.rows.values()].filter((row) => row.includes('class="nr"')), 'a "not read" tag where every file was read')
+        .toEqual([]);
       expect(renderView(r), 'the digest view says a file was not read when every file was').not.toContain('was not read');
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
