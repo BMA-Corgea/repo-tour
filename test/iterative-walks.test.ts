@@ -468,8 +468,8 @@ describe('T-31 AC4: the repo page names the file it did not read, and the tour g
       const r = await digest(root, { write: false });
       const plan = buildCodeTour(r);
       const html = renderRepoView(r, { steps: plan.steps, itinerary: plan.itinerary });
-      expect(html).not.toContain('class="bar unread"');
-      expect(renderView(r)).not.toContain('was not read');
+      expect(html, 'a "not read" bar on a page where every file was read').not.toContain('class="bar unread"');
+      expect(renderView(r), 'the digest view says a file was not read when every file was').not.toContain('was not read');
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

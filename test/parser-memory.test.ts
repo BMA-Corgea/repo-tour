@@ -62,7 +62,8 @@ describe('T-31 AC3: a file that exhausts the parser is skipped, and the rest are
       try { first = await digest(root, { write: false }); } catch (e) { error = e; }
       expect(error, `one file that exhausted the parser ended the digest: ${String(error)}`).toBeUndefined();
 
-      expect(first!.manifest.unparsed).toEqual([
+      expect(first!.manifest.unparsed, 'only the file that exhausted the parser belongs here: '
+        + 'the files after it failed as well, on the parser it left dead').toEqual([
         { path: 'src/a-catalog.js', reason: 'the parser ran out of memory on it (its limit is 2 GiB)' },
       ]);
       expect(first!.extracts.map((x) => x.path), 'files parsed after the abort were lost')
