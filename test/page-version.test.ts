@@ -235,6 +235,8 @@ interface Driver {
   /** A crash: this test's own child, killed outright, whatever it is doing. */
   kill(): Promise<void>;
   close(): Promise<void>;
+  /** What the server printed to its log so far. */
+  stderr(): string;
 }
 
 function startDriver(rt: Runtime, pkg: string, repo: string, under: string): Driver {
@@ -281,6 +283,7 @@ function startDriver(rt: Runtime, pkg: string, repo: string, under: string): Dri
       proc.kill('SIGKILL');
       await exited;
     },
+    stderr: () => stderr,
     async close() {
       proc.stdin!.end();
       // Only this test's own child: it settles its build first, so it normally exits by itself.
@@ -527,7 +530,7 @@ describe.concurrent('AC4: a Rebuild cut off by a restart is resumed', () => {
 describe.concurrent('AC1: the walk never passes off what it cannot read as an unchanged build', () => {
   const COMPILED = RUNTIMES[1]!;
 
-  it(`${COMPILED.name}: a code folder the server cannot list never matches a page from another process`, async ({ expect }) => {
+  it.skipIf(process.getuid?.() === 0)(`${COMPILED.name}: a code folder the server cannot list never matches a page from another process (not as root, which reads it anyway)`, async ({ expect }) => {
     // Node imports a module by name through a folder it can search but not list, so the
     // server runs normally while the walk sees nothing: a stamp that never changes would reuse
     // every page as current, through any edit (T-29 again, silently).
@@ -543,9 +546,31 @@ describe.concurrent('AC1: the walk never passes off what it cannot read as an un
         const opened = await d.send({ do: 'open', look: [] });
         expect(opened.running, 'a build the walk could not read is unknown, so its pages must be rebuilt, not reused').toBe(true);
         await d.send({ do: 'settle' });
+        expect(d.stderr(), 'and the server says why, or a fail-safe that always trips would go unseen').toContain('could not read every module');
       });
     } finally {
       if (fs.existsSync(path.join(pkg, 'dist'))) fs.chmodSync(path.join(pkg, 'dist'), 0o755);
+      fs.rmSync(under, { recursive: true, force: true });
+    }
+  }, 180_000);
+
+  it(`${TSX_RUNTIME.name}: a link to nothing in the code folder is not part of the build`, async ({ expect }) => {
+    // An editor's lock file is a link to nowhere (Emacs leaves `.#name.ts` behind after a crash).
+    // Nothing can load it, so it is no part of the code that runs, and must not make every start
+    // rebuild every page.
+    const under = scratch('dangling');
+    try {
+      const rt = TSX_RUNTIME;
+      const pkg = copyPackage(rt, under);
+      const repo = fixtureRepo(under);
+      fs.symlinkSync(path.join(under, 'nowhere', 'someone@somehost.12345'), path.join(pkg, 'src', '.#askpanel.ts'));
+      await withDriver(rt, pkg, repo, under, (d) => d.send({ do: 'build' }));
+      await withDriver(rt, pkg, repo, under, async (d) => {
+        const opened = await d.send({ do: 'open', look: [] });
+        expect(opened.running, 'nothing that runs has changed: a fresh server must reuse the page').toBe(false);
+        expect(d.stderr(), 'and the fail-safe has nothing to report').not.toContain('could not read every module');
+      });
+    } finally {
       fs.rmSync(under, { recursive: true, force: true });
     }
   }, 180_000);
@@ -731,6 +756,26 @@ describe('AC4: a rebuild the reader asks for re-renders', () => {
     }
   }, 60_000);
 
+  it('a marker a few minutes ahead, as when a fast clock is corrected at boot, is still resumed', async () => {
+    const under = scratch('marker-clock');
+    let fresh: RepoTourServer | null = null;
+    try {
+      const repo = fixtureRepo(under);
+      const first = new RepoTourServer({ statePath: path.join(under, 'state.json'), interpret: false });
+      first.addRepo(repo);
+      await first.build(repo, () => {});
+
+      const marker = path.join(repo, '.repo-tour', 'building.json');
+      const ahead = new Date(Date.now() + 2 * 60 * 1000).toISOString();
+      fs.writeFileSync(marker, JSON.stringify({ startedAt: ahead, lines: ['reading the tree…'], force: true }));
+      fresh = new RepoTourServer({ statePath: path.join(under, 'state.json'), interpret: false });
+      expect(fresh.listRepos()[0]!.running, 'the clock stepped back two minutes: the Rebuild the reader pressed must still resume').toBe(true);
+    } finally {
+      if (fresh) await settle(fresh);
+      fs.rmSync(under, { recursive: true, force: true });
+    }
+  }, 60_000);
+
   it('a marker dated in the future is not resumed, whatever it says', async () => {
     // The marker lives in the toured repository, which can ship one. A negative age passed the
     // resume window, and with `force` it now rebuilt a current page at every start.
@@ -860,7 +905,7 @@ describe('AC7: a rebuild waits until the page that started it has been sent', ()
 });
 
 describe('after an update, the listing reads each stale page\'s .json, not its HTML', () => {
-  it('reports the newest build of a stale repo without opening its page', async () => {
+  it.skipIf(process.getuid?.() === 0)('reports the newest build of a stale repo without opening its page (not as root, which reads it anyway)', async () => {
     // Every page goes stale after an update to the app, and every open tab polls the listing every
     // four seconds. Reading each stale page's whole HTML (megabytes) to report its .json was waste.
     const under = scratch('listing');
