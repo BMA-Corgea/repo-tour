@@ -491,6 +491,12 @@ async function main(): Promise<void> {
   if (cov.filesWithParseErrors > 0) {
     console.log(`  parse errors    ${padStart(String(cov.filesWithParseErrors), 6)} files had at least one`);
   }
+  // T-31: one file never stops a digest; it is named here instead
+  const unparsed = m.unparsed ?? [];
+  if (unparsed.length > 0) {
+    console.log(`  not read        ${padStart(String(unparsed.length), 6)} ${unparsed.length === 1 ? 'file' : 'files'}, left out of the tour:`);
+    for (const u of unparsed) console.log(`    ${u.path}: ${u.reason}`);
+  }
   console.log(`  note: ${cov.note}`);
 
   printRanked(result.ranked, args.top);

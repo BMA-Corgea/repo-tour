@@ -295,6 +295,8 @@ export function renderView(result: DigestResult, opts: ViewOptions = {}): string
   const dropped = result.ranked.length - rows.length;
   const cov = m.graphCoverage;
   const covPct = cov.totalImports === 0 ? 0 : Math.round((cov.resolvedInternal / cov.totalImports) * 100);
+  // T-31: absent in a digest written before T-31
+  const unparsed = m.unparsed ?? [];
   const classes = Object.entries(m.counts.byClassification).sort((a, b) => b[1] - a[1]);
   const wall = m.cost.wallMs < 1000 ? `${m.cost.wallMs}ms` : `${(m.cost.wallMs / 1000).toFixed(1)}s`;
 
@@ -374,6 +376,8 @@ ${tourCss}
   ${cov.leftTheTree.toLocaleString()} left it.
   ${escapeHtml(cov.note)}
   ${cov.filesWithParseErrors > 0 ? `<br><br>${cov.filesWithParseErrors} file(s) had at least one parse error and should not be trusted downstream.` : ''}
+  ${unparsed.length > 0 ? `<br><br>${unparsed.length} ${unparsed.length === 1 ? 'file was' : 'files were'} not read, so their imports are missing here: ${
+    unparsed.map((u) => `<code>${escapeHtml(u.path)}</code> (${escapeHtml(u.reason)})`).join(', ')}.` : ''}
 </div>
 
 <h2>Repositories</h2>

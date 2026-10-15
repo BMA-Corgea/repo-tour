@@ -14,7 +14,9 @@ import { extract } from './extract.js';
 import { rank, type RankOptions } from './rank.js';
 import { rollup, type TierDigest } from './rollup.js';
 import { planIncremental, type IncrementalPlan, type PriorFile } from './incremental.js';
-import type { FileExtract, FileRecord, ImportGraph, Inventory, RankedFile, RepoRef } from './types.js';
+import type {
+  FileExtract, FileRecord, ImportGraph, Inventory, RankedFile, RepoRef, UnparsedFile,
+} from './types.js';
 
 export const SCHEMA_VERSION = 1;
 export const CACHE_DIR = '.repo-tour';
@@ -55,6 +57,12 @@ export interface DigestManifest {
   /** Criterion 10 in spirit: the graph states its own coverage rather than implying completeness. */
   graphCoverage: ImportGraph['coverage'] & { note: string };
   skipped: Array<{ path: string; reason: string }>;
+  /**
+   * T-31: files that were inventoried but could not be parsed, each with why. One file never
+   * stops a digest; it is listed here instead. Every digest since T-31 writes it; a digest.json
+   * written before then has none, so a reader takes absent as empty.
+   */
+  unparsed?: UnparsedFile[];
 }
 
 export interface DigestResult {
@@ -89,7 +97,7 @@ export async function digest(rootInput: string, opts: DigestOptions = {}): Promi
   const inventoryMs = Date.now() - t0;
 
   const t1 = Date.now();
-  const { extracts, graph } = await extract(root, inv.files);
+  const { extracts, graph, unparsed } = await extract(root, inv.files);
   const extractMs = Date.now() - t1;
 
   const t2 = Date.now();
@@ -148,6 +156,7 @@ export async function digest(rootInput: string, opts: DigestOptions = {}): Promi
         'imports produce few or no edges; this is a structure, not the structure.',
     },
     skipped: inv.skipped,
+    unparsed,
   };
 
   if (opts.write !== false) {
