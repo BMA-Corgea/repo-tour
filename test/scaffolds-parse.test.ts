@@ -346,6 +346,16 @@ const FILES: Record<string, string> = {
     '',
   ].join('\n'),
 
+  // ---- a variable's type is never its body: an arrow's return-type literal, an annotation's own arrow
+  'src/parse.ts': [
+    'export const parse = (raw: string): { ok: boolean; value: unknown; error: string | null } => JSON.parse(raw);',
+    '',
+  ].join('\n'),
+  'src/twice.ts': [
+    'export const twice: (n: number) => number = (n) => n * 2;',
+    '',
+  ].join('\n'),
+
   // ---- a conditional type: its `? … : …` must survive the cut (found by the hide probe after slice 1)
   'src/unwrap.ts': [
     'export type Unwrap<T> = T extends Promise<infer U>',
@@ -658,6 +668,25 @@ describe('T-30 AC2 — the same defect in other shapes: each practice file parse
     for (const member of ["kind: 'circle'", "kind: 'square'", "kind: 'rect'"]) expectHidden(p, member);
   });
 
+  it('an arrow\'s return-type literal is a type: the body is hidden, the return type kept', () => {
+    const p = practiceFor('src/parse.ts', [1, 1]);
+    expectParses(p);
+    expectKept(p, '(raw: string): { ok: boolean; value: unknown; error: string | null } => {');
+    expectHidden(p, 'JSON.parse');
+  });
+
+  it('a typed constant\'s own arrow is its type: the value\'s arrow is the body', () => {
+    const p = practiceFor('src/twice.ts', [1, 1]);
+    expectParses(p);
+    expectKept(p, 'export const twice: (n: number) => number = (n) => {');
+    expectHidden(p, 'n * 2');
+  });
+
+  it('guard: an index is never a list to hide', () => {
+    const source = 'export const first = rows[0] ?? fallback;\n';
+    expect(stubFile(source, [{ startLine: 1, endLine: 1 }], 'typescript', Q)).toBe(source);
+  });
+
   it('a conditional type keeps its `? … : …`: one branch is hidden and the file parses', () => {
     const p = practiceFor('src/unwrap.ts', [1, 3]);
     expectParses(p);
@@ -834,6 +863,10 @@ describe('T-30 AC4 — the stub stays a stub: main\'s output where main already 
       ['count', 'export function count(): number {\n  // } a stray brace\n  return 1;\n}\n', 'return 1'],
       ['quantify', "export function trim(s: string): string {\n  return s.replace(/^\\s{2,}/, '');\n}\n", 's.replace'],
       ['nest', 'export function nest(): string {\n  return `a${`{`}b`;\n}\n', 'return `'],
+      // review attempt 1, SUGGESTION 2: an escaped quote (M3), `return` before a regex (M1), a `/` in a regex class (M2)
+      ['quote', "export function quote(): string {\n  return 'it\\'s {';\n}\n", "return 'it"],
+      ['isOpen', 'export function isOpen(s: string): boolean {\n  return /[{]/.test(s);\n}\n', '.test(s)'],
+      ['parts', 'export function parts(s: string): string[] {\n  return s.split(/[/{]/);\n}\n', 's.split'],
     ];
     for (const [name, source, answer] of cases) {
       const range = await rangeOf(source, 'typescript', 'ts', name === 'quantify' ? 'trim' : name);
@@ -915,8 +948,30 @@ describe('T-30 AC5 — a range the scan cannot read comes back byte for byte', (
     expect(out, `a range whose brackets cross was cut:\n${out}`).toBe(source);
   });
 
+  // Review attempt 1, BLOCKER 3, the shape of a minified bundle: a declaration starts mid-line, on a
+  // line whose first character closes a template opened on the line before. Read from the range alone,
+  // that backtick opens a template instead, code and template swap, the backticks still balance, and
+  // `${name}` looks like a block to cut.
+  it('a range that starts inside a template opened earlier in the file is left alone', async () => {
+    const source = [
+      'const header = `',
+      '  <h1>Hi</h1>',
+      '`;function render(name) {',
+      '  return `<p>${name}</p>`;',
+      '}const footer = `',
+      '  <p>bye</p>',
+      '`;',
+      '',
+    ].join('\n');
+    const out = stubFile(source, [{ startLine: 3, endLine: 5 }], 'javascript', Q);
+    expect(out, `a range that starts inside a template was cut:\n${out}`).toBe(source);
+    expect(await parseErrorsOf(out, 'javascript', 'js')).toBe(0);
+  });
+
+  // Review attempt 1, M7: this test once passed with its rule deleted, because nothing in the range
+  // was a candidate. The object before the template is one, so only the rule keeps it whole.
   it('a range that ends inside a template literal', () => {
-    const source = 'const page = `\n<main>{body}</main>\n`;\n';
+    const source = "const settings = { theme: 'dark' }; const page = `\n<main>{body}</main>\n`;\n";
     const out = stubFile(source, [{ startLine: 1, endLine: 2 }], 'javascript', Q);
     expect(out, `a range that ends inside a template was cut:\n${out}`).toBe(source);
   });

@@ -117,7 +117,7 @@ function isWordChar(ch: string): boolean {
  * are text up to a `<` or a `{`, and every `{ … }` inside it is a container that is never a body.
  * So an apostrophe, a URL or a `1)` in what the page says is read as the text it is.
  */
-function scanJs(text: string, jsx: boolean): JsScan | null {
+function scanJs(text: string, jsx: boolean, ends?: { inCode: boolean }): JsScan | null {
   const stack: Array<{ ch: string; at: number; depth: number; inParens: boolean; inAngle: boolean; typeLiteral: boolean; inTag?: boolean }> = [];
   let notParens = 0; // stack entries that are not a `(`
   const angles: number[] = []; // the stack depth at which each open generic `<` was seen
@@ -140,6 +140,11 @@ function scanJs(text: string, jsx: boolean): JsScan | null {
   };
   const dropAngles = (above: number): void => {
     while (angles.length > 0 && angles[angles.length - 1]! >= above) angles.pop();
+  };
+  // The text ends inside a template, a comment, a JSX attribute string or a JSX element, not in plain code.
+  const notCode = (): null => {
+    if (ends) ends.inCode = false;
+    return null;
   };
   const pop = (at: number) => {
     // A closer at an arrow's own depth closes the bracket around it, which ends its expression.
@@ -168,19 +173,19 @@ function scanJs(text: string, jsx: boolean): JsScan | null {
         else if (ch === '/' && text[i + 1] === '/') { const eol = text.indexOf('\n', i); i = eol === -1 ? text.length : eol; } // a comment between attributes
         else if (ch === '/' && text[i + 1] === '*') {
           const close = text.indexOf('*/', i + 2);
-          if (close === -1) return null;
+          if (close === -1) return notCode();
           i = close + 1;
         } else if (ch === '>') top.inTag = false;
         else if (ch === '"' || ch === "'") {
           const close = text.indexOf(ch, i + 1); // a JSX attribute string has no escapes and may span lines
-          if (close === -1) return null;
+          if (close === -1) return notCode();
           i = close;
         } else if (ch === '{') push('{jsx', i);
         else if (ch === '<' && /[A-Za-z_$]/.test(text[i + 1] ?? '')) { push('<jsx', i); stack[stack.length - 1]!.inTag = true; }
       } else if (ch === '{') push('{jsx', i);
       else if (ch === '<' && text[i + 1] === '/') {
         const close = text.indexOf('>', i + 2);
-        if (close === -1) return null;
+        if (close === -1) return notCode();
         pop(i);
         i = close;
         if (stack[stack.length - 1]?.ch !== '<jsx') afterElement();
@@ -212,7 +217,7 @@ function scanJs(text: string, jsx: boolean): JsScan | null {
     }
     if (ch === '/' && text[i + 1] === '*') {
       const close = text.indexOf('*/', i + 2);
-      if (close === -1) return null;
+      if (close === -1) return notCode();
       i = close + 1;
       continue;
     }
@@ -339,11 +344,27 @@ function scanJs(text: string, jsx: boolean): JsScan | null {
     word = '';
   }
 
-  if (inTemplate || stack.length > 0) return null;
+  if (inTemplate || stack.some((o) => o.ch === '${' || o.ch === '<jsx')) return notCode();
+  if (stack.length > 0) return null;
   const trimmed = text.trimEnd();
   const rangeEnd = trimmed.endsWith(';') ? trimmed.length - 1 : text.length;
   for (const a of arrows) if (a.end === null) a.end = rangeEnd;
   return { groups, arrows, assignAt, conditionalAt };
+}
+
+/**
+ * Whether line `startLine` begins in plain code. A range is scanned on its own, so a range whose
+ * first line begins inside a template, a comment or JSX that opened earlier (a minified bundle
+ * puts a declaration right after a template's closing backtick) would be read with code and
+ * template swapped. The file is scanned from line 1 up to the range; only a scan that ends
+ * inside one of those says no. One that cannot read the lines before (a misread) changes
+ * nothing.
+ */
+function startsInCode(lines: string[], startLine: number, jsx: boolean): boolean {
+  if (startLine <= 1) return true;
+  const ends = { inCode: true };
+  scanJs(`${lines.slice(0, startLine - 1).join('\n')}\n`, jsx, ends);
+  return ends.inCode;
 }
 
 /** The leading whitespace of the line that holds offset `at`. */
@@ -378,8 +399,8 @@ const VARIABLE = /^\s*(?:export\s+)?(?:declare\s+)?(?:const|let|var)\s+(?!enum\b
  *   - A function, class, interface, enum or method: its LAST top-level `{ … }`. Its body comes
  *     after its signature, return type, heritage and decorators; a type argument (`<…>`) and a
  *     return-type literal are never it.
- *   - A variable: only what follows its top-level `=`, never its type annotation or a type
- *     argument. The outermost candidate at the shallowest depth, the biggest on a tie: an
+ *   - A variable: only what follows its top-level `=`, never its type annotation, a type
+ *     argument or a return-type literal. The shallowest candidate, the biggest on a tie: an
  *     arrow's expression body (on any line), or a block — the module pattern's function, a
  *     callback, an `extend({ … })` object. A list of records is hidden whole, and only when
  *     nothing else is there (`[1, 2].map((n) => …)` hides the callback).
@@ -420,20 +441,19 @@ function stubValue(text: string, scan: JsScan, todo: string): string | null {
       .filter((a) => !a.blockBody && !a.inConsequent && inValue(a.at, a.inParens, a.inAngle))
       .map((a) => ({ start: a.at, end: a.end!, depth: a.depth, cut: () => cutArrow(text, a, todo) })),
   ];
-  const chosen = outermost(candidates) ?? outermost(scan.groups
+  const chosen = pick(candidates) ?? pick(scan.groups
     .filter((g) => g.kind === '[' && !g.typeLiteral && inValue(g.open, g.inParens, g.inAngle))
     .map((g) => ({ start: g.open, end: g.close, depth: g.depth, cut: () => cutPair(text, g, todo) })));
   return chosen ? chosen.cut() : null;
 }
 
-/** Among candidates not inside another: the shallowest, then the biggest, then the first. */
-function outermost<C extends { start: number; end: number; depth: number }>(candidates: C[]): C | null {
-  const byStart = candidates.slice().sort((a, b) => a.start - b.start || b.end - a.end);
-  let reach = -1;
+/**
+ * The shallowest candidate, then the biggest, then the first. A candidate inside another at the
+ * same depth (a block in an arrow's expression) is always the smaller, so it is never the pick.
+ */
+function pick<C extends { start: number; end: number; depth: number }>(candidates: C[]): C | null {
   let best: C | null = null;
-  for (const c of byStart) {
-    if (c.end <= reach) continue; // inside an earlier candidate
-    reach = c.end;
+  for (const c of candidates) {
     if (!best || c.depth < best.depth || (c.depth === best.depth && c.end - c.start > best.end - best.start)) best = c;
   }
   return best;
@@ -575,7 +595,9 @@ export function stubFile(source: string, loadBearing: Range[], language: string,
     if (range.startLine > cursor) out.push(...lines.slice(cursor - 1, range.startLine - 1));
 
     if (JS_LANGUAGES.has(language)) {
-      out.push(...stubJsLikeRange(lines, range.startLine, range.endLine, language, questions, range.originalIndex));
+      out.push(...(startsInCode(lines, range.startLine, language !== 'typescript')
+        ? stubJsLikeRange(lines, range.startLine, range.endLine, language, questions, range.originalIndex)
+        : lines.slice(range.startLine - 1, range.endLine)));
     } else if (language === 'python') {
       out.push(...stubPythonRange(lines, range.startLine, range.endLine, questions, range.originalIndex));
     } else {
