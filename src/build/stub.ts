@@ -6,9 +6,9 @@
  * which decision belongs where. Everything outside `loadBearing` is copied byte-for-byte.
  *
  * This never tries to be clever about a shape it does not recognize. TS/JS pairs every
- * bracket in the range and hides the inside of ONE matched pair `{ … }`, keeping everything
- * before its `{` and everything from its own `}` on; failing that, it turns the arrow on the
- * range's first line into a block, keeping whatever follows the arrow's expression. Python
+ * bracket in the range and hides the inside of ONE matched pair, keeping everything before it
+ * and everything from its own closer on, or turns an arrow's expression into a block; which
+ * pair is the body depends on what the range declares (`stubJsLikeRange`). Python
  * finds the colon that ends the header and then writes whichever body shape that header
  * already has — a same-line `raise` for an inline body, an indented one (measured, never
  * assumed) for a block. Anything neither pattern fits — a bare exported constant with no
@@ -34,22 +34,28 @@ function todoLine(marker: '//' | '#', questions: StubQuestion[], index: number):
   return `${marker} TODO(${label}): ${text}`;
 }
 
-/** A `{ … }` the scan matched: offsets into the range's text, and the brackets around it. */
-interface Block {
+/** A `{ … }`, or a list literal `[ … ]`, that the scan matched: offsets into the range's text, and what surrounds it. */
+interface Group {
+  kind: '{' | '[';
   open: number;
   close: number;
   /** how many brackets enclose it */
   depth: number;
   /** every one of them is a `(`: none is a `[`, a `{` or a template's `${` */
   inParens: boolean;
+  /** it sits inside a generic's `<…>`: a type argument, never a body */
+  inAngle: boolean;
+  /** a type, not a value: after an annotation's `:`, or after `as`, `satisfies`, `extends` or `implements` */
+  typeLiteral: boolean;
 }
 
-/** A `=>` on the range's first line, and where the expression after it ends. */
+/** A `=>`, and where the expression after it ends. */
 interface Arrow {
   at: number;
   depth: number;
   inParens: boolean;
-  /** its body is a block (`=> {`), which the scan already reports as a `Block` */
+  inAngle: boolean;
+  /** its body is a block (`=> {`), which the scan already reports as a `Group` */
   blockBody: boolean;
   /**
    * It is the first branch of a conditional (`c ? () => a : b`), so its expression ends at a `:`
@@ -65,6 +71,13 @@ interface Arrow {
   end: number | null;
 }
 
+interface JsScan {
+  groups: Group[];
+  arrows: Arrow[];
+  /** the first `=` at depth 0 outside a generic's `<…>` — where a variable's or a type's value starts — or -1 */
+  assignAt: number;
+}
+
 /**
  * After one of these, a `/` starts a regex; after anything else it divides. `<` is not one: `</`
  * closes a JSX tag. Two more exceptions live in the scan: `/>` after a `}` ends a JSX tag
@@ -73,6 +86,8 @@ interface Arrow {
  */
 const REGEX_AFTER = new Set(['(', ',', '=', ':', '[', '!', '&', '|', '?', '{', '}', ';', '+', '-', '*', '%', '~', '^', '>']);
 const REGEX_AFTER_WORD = new Set(['return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void', 'throw', 'case', 'do', 'else', 'yield', 'await']);
+/** After one of these words, a `{` or `[` is a type: `x as { … }`, `class A extends B<…>`. */
+const TYPE_AFTER_WORD = new Set(['as', 'satisfies', 'extends', 'implements']);
 const CLOSER_OF: Record<string, string> = { '(': ')', '[': ']', '{': '}' };
 
 function isWordChar(ch: string): boolean {
@@ -82,29 +97,37 @@ function isWordChar(ch: string): boolean {
 /**
  * Pair every bracket in a TS/JS range, the way the language reads it: past comments, quotes,
  * template literals (their `${ … }` included) and regex literals (told from a division by the
- * token before the `/`). Returns null — "unsure" — when a closer has no opener, a bracket or a
- * template is still open at the end of the range, or a block comment never ends. That is what
- * makes every cut below safe: removing the inside of a pair this scan matched cannot unbalance
- * anything, and a range it cannot read is never cut at all.
+ * token before the `/`). Returns null — "unsure" — when a closer has no opener or closes the
+ * wrong kind, a bracket or a template is still open at the end of the range, or a block comment
+ * never ends. Removing the inside of a pair this scan matched cannot unbalance the range.
  *
- * One deliberate leniency: a quote that reaches the end of its line ends there. JavaScript has
- * no multi-line quotes, so the only way to get there is JSX text (`<p>Don't</p>`), whose
- * apostrophe opens nothing.
+ * Two readings are approximate, and both only ever narrow what may be cut: a `<` straight after
+ * a name opens a generic's `<…>` (dropped again at a `;`, a conditional's `?` or an outer closer,
+ * so a comparison like `i<n` costs nothing), and a quote that reaches the end of its line ends
+ * there (JavaScript has no multi-line quotes, so that is JSX text).
  */
-function scanJs(text: string): { blocks: Block[]; arrows: Arrow[] } | null {
-  const stack: Array<{ ch: string; at: number; depth: number; inParens: boolean }> = [];
+function scanJs(text: string): JsScan | null {
+  const stack: Array<{ ch: string; at: number; depth: number; inParens: boolean; inAngle: boolean; typeLiteral: boolean }> = [];
+  let notParens = 0; // stack entries that are not a `(`
+  const angles: number[] = []; // the stack depth at which each open generic `<` was seen
   const ternaries: number[] = [0]; // the conditional `?`s still waiting for their `:`, per bracket level
-  const blocks: Block[] = [];
+  const groups: Group[] = [];
   const arrows: Arrow[] = [];
-  const firstLineEnd = text.includes('\n') ? text.indexOf('\n') : text.length;
+  const openArrows = new Map<number, Arrow[]>(); // expression-bodied arrows still running, by depth
+  let assignAt = -1;
   let inTemplate = false;
   let prev = ''; // the last significant character; 'w' after a word or any other value
   let word = '';
+  let typeColon = false; // the last `:` was an annotation's, not a conditional's
 
-  const allParens = (): boolean => stack.every((o) => o.ch === '(');
-  // A closer at an arrow's own depth closes the bracket around it, which ends its expression.
-  const endArrowsHere = (at: number): void => {
-    for (const a of arrows) if (a.end === null && !a.blockBody && a.depth === stack.length) a.end = at;
+  const push = (ch: string, at: number): void => {
+    const typeLiteral = (prev === ':' && typeColon) || (prev === 'w' && TYPE_AFTER_WORD.has(word));
+    stack.push({ ch, at, depth: stack.length, inParens: notParens === 0, inAngle: angles.length > 0, typeLiteral });
+    if (ch !== '(') notParens++;
+    ternaries.push(0);
+  };
+  const dropAngles = (above: number): void => {
+    while (angles.length > 0 && angles[angles.length - 1]! >= above) angles.pop();
   };
 
   for (let i = 0; i < text.length; i++) {
@@ -114,8 +137,7 @@ function scanJs(text: string): { blocks: Block[]; arrows: Arrow[] } | null {
       if (ch === '\\') i++;
       else if (ch === '`') { inTemplate = false; prev = 'w'; word = ''; }
       else if (ch === '$' && text[i + 1] === '{') {
-        stack.push({ ch: '${', at: i + 1, depth: stack.length, inParens: false });
-        ternaries.push(0);
+        push('${', i + 1);
         inTemplate = false;
         prev = '{';
         i++;
@@ -173,39 +195,49 @@ function scanJs(text: string): { blocks: Block[]; arrows: Arrow[] } | null {
     }
 
     if (ch === '(' || ch === '[' || ch === '{') {
-      stack.push({ ch, at: i, depth: stack.length, inParens: allParens() });
-      ternaries.push(0);
+      // A `[` straight after a value indexes it (`a[0]`, `T[]`); only one after anything else is a list.
+      const list = ch === '[' && !(prev === ')' || prev === ']' || prev === '}' || (prev === 'w' && !REGEX_AFTER_WORD.has(word)));
+      push(ch === '[' && !list ? '[index' : ch, i);
       prev = ch;
       word = '';
       continue;
     }
 
     if (ch === ')' || ch === ']' || ch === '}') {
-      endArrowsHere(i);
+      // A closer at an arrow's own depth closes the bracket around it, which ends its expression.
+      for (const a of openArrows.get(stack.length) ?? []) a.end = i;
+      openArrows.delete(stack.length);
       const open = stack.pop();
       if (!open) return null;
+      if (open.ch !== '(') notParens--;
       ternaries.pop();
+      dropAngles(stack.length + 1);
       if (open.ch === '${') {
         if (ch !== '}') return null;
         inTemplate = true;
         continue;
       }
-      if (CLOSER_OF[open.ch] !== ch) return null;
-      if (ch === '}') blocks.push({ open: open.at, close: i, depth: open.depth, inParens: open.inParens });
+      if (CLOSER_OF[open.ch === '[index' ? '[' : open.ch] !== ch) return null;
+      if (open.ch === '{' || open.ch === '[') {
+        groups.push({
+          kind: open.ch, open: open.at, close: i, depth: open.depth,
+          inParens: open.inParens, inAngle: open.inAngle, typeLiteral: open.typeLiteral,
+        });
+      }
       prev = ch;
       word = '';
       continue;
     }
 
     if (ch === '=' && text[i + 1] === '>') {
-      if (i < firstLineEnd) {
-        let next = i + 2;
-        while (next < text.length && /\s/.test(text[next]!)) next++;
-        arrows.push({
-          at: i, depth: stack.length, inParens: allParens(), blockBody: text[next] === '{',
-          inConsequent: ternaries[ternaries.length - 1]! > 0, end: null,
-        });
-      }
+      let next = i + 2;
+      while (next < text.length && /\s/.test(text[next]!)) next++;
+      const arrow: Arrow = {
+        at: i, depth: stack.length, inParens: notParens === 0, inAngle: angles.length > 0,
+        blockBody: text[next] === '{', inConsequent: ternaries[ternaries.length - 1]! > 0, end: null,
+      };
+      arrows.push(arrow);
+      if (!arrow.blockBody) openArrows.set(stack.length, [...(openArrows.get(stack.length) ?? []), arrow]);
       i++;
       prev = '>';
       word = '';
@@ -223,9 +255,21 @@ function scanJs(text: string): { blocks: Block[]; arrows: Arrow[] } | null {
 
     // A `!` straight after a value is a non-null assertion, not a `not`: the value is still the last thing seen.
     if (ch === '!' && text[i + 1] !== '=' && (prev === ')' || prev === ']' || (prev === 'w' && !REGEX_AFTER_WORD.has(word)))) continue;
+    // A `<` straight after a name opens a generic's `<…>`; its `>` closes it. A `;` or an outer closer ends a comparison taken for one.
+    if (ch === '<' && i > 0 && isWordChar(text[i - 1]!)) angles.push(stack.length);
+    if (ch === '>' && text[i + 1] !== '=' && angles.length > 0 && angles[angles.length - 1] === stack.length) angles.pop();
+    if (ch === ';') dropAngles(stack.length);
     // `?.` and `??` are not a conditional's `?`; every conditional `?` is answered by a `:` at its own level.
-    if (ch === '?' && text[i + 1] !== '.' && text[i + 1] !== '?' && prev !== '?') ternaries[ternaries.length - 1]!++;
-    if (ch === ':' && ternaries[ternaries.length - 1]! > 0) ternaries[ternaries.length - 1]!--;
+    if (ch === '?' && text[i + 1] !== '.' && text[i + 1] !== '?' && prev !== '?') {
+      ternaries[ternaries.length - 1]!++;
+      dropAngles(stack.length);
+    }
+    if (ch === ':') {
+      typeColon = !(ternaries[ternaries.length - 1]! > 0);
+      if (!typeColon) ternaries[ternaries.length - 1]!--;
+    }
+    if (ch === '=' && assignAt === -1 && stack.length === 0 && angles.length === 0
+      && text[i + 1] !== '=' && !'=!<>+-*/%&|^?'.includes(text[i - 1] ?? '')) assignAt = i;
     prev = ch;
     word = '';
   }
@@ -234,7 +278,7 @@ function scanJs(text: string): { blocks: Block[]; arrows: Arrow[] } | null {
   const trimmed = text.trimEnd();
   const rangeEnd = trimmed.endsWith(';') ? trimmed.length - 1 : text.length;
   for (const a of arrows) if (a.end === null) a.end = rangeEnd;
-  return { blocks, arrows };
+  return { groups, arrows, assignAt };
 }
 
 /** The leading whitespace of the line that holds offset `at`. */
@@ -243,53 +287,107 @@ function indentAt(text: string, at: number): string {
   return /^[ \t]*/.exec(text.slice(lineStart))![0];
 }
 
+/** Hide the inside of one matched pair: everything through its opener, the TODO line, everything from its own closer on. */
+function cutPair(text: string, g: Group, todo: string): string {
+  const closeLineStart = text.lastIndexOf('\n', g.close) + 1;
+  const tail = text.slice(closeLineStart, g.close).trim() === '' ? text.slice(closeLineStart) : text.slice(g.close);
+  return `${text.slice(0, g.open + 1)}\n${indentAt(text, g.open)}  ${todo}\n${tail}`;
+}
+
+/** Turn an arrow's expression body into a block, keeping whatever followed the expression. */
+function cutArrow(text: string, a: Arrow, todo: string): string {
+  const indent = indentAt(text, a.at);
+  return `${text.slice(0, a.at + 2)} {\n${indent}  ${todo}\n${indent}}${text.slice(a.end!)}`;
+}
+
+/** `type X = …`, `export declare type X<T> = …`. */
+const TYPE_ALIAS = /^\s*(?:export\s+)?(?:declare\s+)?type\s+[A-Za-z_$]/;
+/** `const x = …`, `export let x: T = …`; not `const enum`. */
+const VARIABLE = /^\s*(?:export\s+)?(?:declare\s+)?(?:const|let|var)\s+(?!enum\b)/;
+
 /**
- * Replace one range of a TS/JS/TSX file. The body to hide is chosen from the brackets the scan
- * paired, outermost first, and only among those inside nothing but parentheses: a `[ … ]` is a
- * list, and hiding one element of it would hide the wrong thing.
+ * Replace one range of a TS/JS/TSX file. Which pair holds the body depends on what the range
+ * declares, and only pairs inside nothing but parentheses are ever candidates (a `[ … ]` element,
+ * a `{ … }` member and a template's `${ … }` are all part of something bigger):
  *
- *   1. A block: the biggest `{ … }` at the shallowest depth any block reaches (the first, on a
- *      tie). At depth 0 that is a declaration's own body, never a destructured or default
- *      parameter (those sit inside the parameter list's parentheses), and the body rather than a
- *      smaller `Readonly<{ … }>` or return-type literal. With nothing at depth 0 it is what the
- *      declaration hands to a call: the module pattern's function, a callback, an `extend({ … })`
- *      object. Keep everything through its `{`, add the TODO line, then keep everything from its
- *      own `}` to the end of the range, so `})();`, `});` and `}>;` survive.
- *   2. Else the arrow on the range's FIRST line, if it is as shallow as any block: its expression
- *      body becomes a block, and what followed the expression (`);`, a final `;`) is kept. A block
- *      at the same depth wins, because there the arrow is a type (`f(): () => void { … }`). An
- *      arrow that is a conditional's first branch (`c ? () => a : b`) is never cut: its expression
- *      ends at that `:`.
- *   3. Neither, or a range the scan cannot read: leave the range exactly as it was.
+ *   - A function, class, interface, enum or method: its LAST top-level `{ … }`. Its body comes
+ *     after its signature, return type, heritage and decorators; a type argument (`<…>`) and a
+ *     return-type literal are never it.
+ *   - A variable: only what follows its top-level `=`, never its type annotation or a type
+ *     argument. The outermost candidate at the shallowest depth, the biggest on a tie: an
+ *     arrow's expression body (on any line), or a block — the module pattern's function, a
+ *     callback, an `extend({ … })` object. A list of records is hidden whole, and only when
+ *     nothing else is there (`[1, 2].map((n) => …)` hides the callback).
+ *   - A type alias: main's own cut from its first top-level `{` (every union member goes with
+ *     it, and a range-final `;` stays); a function type's return type; or, inside a generic, the
+ *     pair itself, so `Readonly<{ … }>` keeps its `}>;`.
  *
- * The TODO line sits two spaces inside the line it opens, and a closing line keeps its own
- * indentation, so a function inside a wrapper still reads as one.
+ * An arrow that is a conditional's first branch is never cut, and a range the scan cannot read is
+ * left exactly as it was. The TODO line sits two spaces inside the line it opens, and a closing
+ * line keeps its own indentation, so a function inside a wrapper still reads as one.
  */
 function stubJsLikeRange(lines: string[], start: number, end: number, questions: StubQuestion[], index: number): string[] {
   const untouched = lines.slice(start - 1, end);
   const text = untouched.join('\n');
   const scan = scanJs(text);
   if (scan === null) return untouched;
-
-  const blocks = scan.blocks.filter((b) => b.inParens);
-  const arrows = scan.arrows.filter((a) => a.inParens && !a.blockBody && !a.inConsequent);
-  let depth = Infinity;
-  for (const b of blocks) depth = Math.min(depth, b.depth);
-  for (const a of arrows) depth = Math.min(depth, a.depth);
-  if (depth === Infinity) return untouched;
   const todo = todoLine('//', questions, index);
+  const out = VARIABLE.test(text) ? stubValue(text, scan, todo)
+    : TYPE_ALIAS.test(text) ? stubTypeAlias(text, scan, todo)
+    : stubDeclarationBody(text, scan, todo);
+  return out === null ? untouched : out.split('\n');
+}
 
-  const atDepth = blocks.filter((b) => b.depth === depth);
-  if (atDepth.length > 0) {
-    const body = atDepth.reduce((best, b) => (b.close - b.open > best.close - best.open ? b : best));
-    const closeLineStart = text.lastIndexOf('\n', body.close) + 1;
-    const tail = text.slice(closeLineStart, body.close).trim() === '' ? text.slice(closeLineStart) : text.slice(body.close);
-    return `${text.slice(0, body.open + 1)}\n${indentAt(text, body.open)}  ${todo}\n${tail}`.split('\n');
+function stubDeclarationBody(text: string, scan: JsScan, todo: string): string | null {
+  const tops = scan.groups.filter((g) => g.kind === '{' && g.depth === 0 && !g.inAngle && !g.typeLiteral);
+  return tops.length > 0 ? cutPair(text, tops[tops.length - 1]!, todo) : null;
+}
+
+function stubValue(text: string, scan: JsScan, todo: string): string | null {
+  if (scan.assignAt === -1) return null;
+  const inValue = (at: number, inParens: boolean, inAngle: boolean): boolean => at > scan.assignAt && inParens && !inAngle;
+  type Candidate = { start: number; end: number; depth: number; cut: () => string };
+  const candidates: Candidate[] = [
+    ...scan.groups
+      .filter((g) => g.kind === '{' && !g.typeLiteral && inValue(g.open, g.inParens, g.inAngle))
+      .map((g) => ({ start: g.open, end: g.close, depth: g.depth, cut: () => cutPair(text, g, todo) })),
+    ...scan.arrows
+      .filter((a) => !a.blockBody && !a.inConsequent && inValue(a.at, a.inParens, a.inAngle))
+      .map((a) => ({ start: a.at, end: a.end!, depth: a.depth, cut: () => cutArrow(text, a, todo) })),
+  ];
+  const chosen = outermost(candidates) ?? outermost(scan.groups
+    .filter((g) => g.kind === '[' && !g.typeLiteral && inValue(g.open, g.inParens, g.inAngle))
+    .map((g) => ({ start: g.open, end: g.close, depth: g.depth, cut: () => cutPair(text, g, todo) })));
+  return chosen ? chosen.cut() : null;
+}
+
+/** Among candidates not inside another: the shallowest, then the biggest, then the first. */
+function outermost<C extends { start: number; end: number; depth: number }>(candidates: C[]): C | null {
+  const byStart = candidates.slice().sort((a, b) => a.start - b.start || b.end - a.end);
+  let reach = -1;
+  let best: C | null = null;
+  for (const c of byStart) {
+    if (c.end <= reach) continue; // inside an earlier candidate
+    reach = c.end;
+    if (!best || c.depth < best.depth || (c.depth === best.depth && c.end - c.start > best.end - best.start)) best = c;
   }
+  return best;
+}
 
-  const arrow = arrows.find((a) => a.depth === depth)!;
-  const indent = indentAt(text, arrow.at);
-  return `${text.slice(0, arrow.at + 2)} {\n${indent}  ${todo}\n${indent}}${text.slice(arrow.end!)}`.split('\n');
+function stubTypeAlias(text: string, scan: JsScan, todo: string): string | null {
+  if (scan.assignAt === -1) return null;
+  const blocks = scan.groups.filter((g) => g.kind === '{' && g.open > scan.assignAt && g.inParens);
+  const top = blocks.find((g) => g.depth === 0 && !g.inAngle);
+  if (top) {
+    // Main's cut, which hid a whole union: what follows this `{` at the top level is complete
+    // groups (`| { … }`, `& Reason`, `[]`), so dropping it with the inside keeps the range balanced.
+    const semicolon = text.trimEnd().endsWith(';') ? ';' : '';
+    return `${text.slice(0, top.open + 1)}\n${indentAt(text, top.open)}  ${todo}\n}${semicolon}`;
+  }
+  const fnType = scan.arrows.find((a) => a.at > scan.assignAt && a.depth === 0 && !a.inAngle && !a.blockBody && !a.inConsequent);
+  if (fnType) return cutArrow(text, fnType, todo);
+  const inner = blocks.slice().sort((a, b) => a.depth - b.depth || a.open - b.open)[0];
+  return inner ? cutPair(text, inner, todo) : null;
 }
 
 /** A line that opens a Python block this stubber understands: `def`, `async def`, `class`. */

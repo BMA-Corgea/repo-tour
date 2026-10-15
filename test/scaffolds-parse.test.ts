@@ -204,6 +204,81 @@ const FILES: Record<string, string> = {
     'export const tick = hasTimer ? () => timer.read() : fallbackTick;',
     '',
   ].join('\n'),
+
+  // ---- review attempt 1, BLOCKER 2: which block is the body. Main hid each of these.
+  'src/shape.ts': [
+    'export type Shape =',
+    "  | { kind: 'circle'; r: number }",
+    "  | { kind: 'square'; side: number }",
+    "  | { kind: 'rect'; w: number; h: number };",
+    '',
+  ].join('\n'),
+  'src/gate.ts': [
+    'export type Gate = { open: false } | ({ open: true } & Reason);',
+    '',
+  ].join('\n'),
+  'src/bands.ts': [
+    'export const BANDS: { id: string; label: string }[] = [',
+    "  { id: 'low', label: 'Low' },",
+    "  { id: 'high', label: 'High' },",
+    '];',
+    '',
+  ].join('\n'),
+  'src/counter.ts': [
+    'export const useCounter = create<{ count: number; inc: () => void }>()((set) => ({',
+    '  count: 0,',
+    '  inc: () => set((s) => ({ count: s.count + 1 })),',
+    '}));',
+    '',
+  ].join('\n'),
+  'src/Field.tsx': [
+    'export const Field = forwardRef<HTMLInputElement, { label: string; hint?: string }>((props, ref) => {',
+    '  const id = useId();',
+    '  return <input id={id} ref={ref} />;',
+    '});',
+    '',
+  ].join('\n'),
+  'src/auth.ts': [
+    'export function useAuth(): { user: string | null; login: () => void; logout: () => void } {',
+    '  return useContext(AuthContext);',
+    '}',
+    '',
+  ].join('\n'),
+  'src/fixtures.ts': [
+    'export const test = base.extend<{ offline: boolean }>({',
+    '  offline: [false, { option: true }],',
+    '});',
+    '',
+  ].join('\n'),
+  // ---- review attempt 1, SUGGESTION 1: where main was broken, hide the body, not a parameter or an attribute
+  // The shape of shadcn/ui's Button (MIT), written here in its minimal form rather than copied.
+  'src/Button.tsx': [
+    'export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(',
+    '  ({ className, variant, ...props }, ref) => (',
+    '    <button className={cn(className, variant)} ref={ref} {...props} />',
+    '  ),',
+    ');',
+    '',
+  ].join('\n'),
+  'src/Item.tsx': [
+    'export const Item = ({ label }: { label: string }) => <li className="item">{label}</li>;',
+    '',
+  ].join('\n'),
+  'src/ui.ts': [
+    'export const useUi = create<UiState>()(',
+    '  persist((set) => ({',
+    '    open: false,',
+    '    toggle: () => set((s) => ({ open: !s.open })),',
+    "  }), { name: 'ui' }),",
+    ');',
+    '',
+  ].join('\n'),
+  'src/click.ts': [
+    'export const onClick = useCallback<(e: MouseEvent) => void>((e) => {',
+    '  e.preventDefault();',
+    '}, []);',
+    '',
+  ].join('\n'),
   'src/Row.tsx': [
     'export const Row = ({ cells }: { cells: string[] }) => (',
     '  <tr>',
@@ -439,10 +514,15 @@ describe('T-30 AC2 — the same defect in other shapes: each practice file parse
     expect(p.scaffold, 'the generic\'s tail `}>;` was dropped').toMatch(/\n\}>;\n/);
   });
 
-  it('a list of records is left whole, never cut inside one element', () => {
+  // Changed at review attempt 1, with the foreman's approval (t30-01): this test said "left whole". A
+  // declaration's list of records is its body, so it is hidden whole; never one element of it.
+  it('a list of records is hidden whole, never cut inside one element', () => {
     const p = practiceFor('src/columns.js', [1, 4]);
     expectParses(p);
-    expect(p.scaffold, 'a list of records should come back untouched').toBe(p.reference);
+    expectKept(p, 'const COLUMNS = [');
+    expectHidden(p, "key: 'id'");
+    expectHidden(p, "key: 'name'");
+    expect(p.scaffold, 'the list\'s own `];` was dropped').toMatch(/\n\];\n/);
   });
 
   it('an arrow inside a call: `values.map((n) => n * 2)` keeps the call\'s `);`', () => {
@@ -488,6 +568,81 @@ describe('T-30 AC2 — the same defect in other shapes: each practice file parse
     expectKept(p, '  var Cell = Backbone.Model.extend({');
     expectKept(p, '}();');
     expectHidden(p, 'alive: false');
+  });
+
+  it('a union type: every member is hidden, as main hid them', () => {
+    const p = practiceFor('src/shape.ts', [1, 4]);
+    expectParses(p);
+    for (const member of ["kind: 'circle'", "kind: 'square'", "kind: 'rect'"]) expectHidden(p, member);
+  });
+
+  it('a union with a parenthesised intersection: both members are hidden', () => {
+    const p = practiceFor('src/gate.ts', [1, 1]);
+    expectParses(p);
+    expectHidden(p, 'open: false');
+    expectHidden(p, 'open: true');
+  });
+
+  it('a typed constant: the records are hidden, never the type annotation', () => {
+    const p = practiceFor('src/bands.ts', [1, 4]);
+    expectParses(p);
+    expectKept(p, 'export const BANDS: { id: string; label: string }[] = [');
+    expectHidden(p, "id: 'low'");
+  });
+
+  it('a type argument is never the body: zustand\'s create<{…}>()((set) => …) hides the store', () => {
+    const p = practiceFor('src/counter.ts', [1, 4]);
+    expectParses(p);
+    expectKept(p, 'create<{ count: number; inc: () => void }>()((set) => ');
+    expectHidden(p, 'count: 0');
+  });
+
+  it('a type argument is never the body: forwardRef<El, {…}>((props, ref) => {…}) hides the component', () => {
+    const p = practiceFor('src/Field.tsx', [1, 4]);
+    expectParses(p);
+    expectKept(p, 'forwardRef<HTMLInputElement, { label: string; hint?: string }>((props, ref) => {');
+    expectHidden(p, 'useId()');
+  });
+
+  it('a return-type literal bigger than the body: the body is hidden, the return type kept', () => {
+    const p = practiceFor('src/auth.ts', [1, 3]);
+    expectParses(p);
+    expectKept(p, 'export function useAuth(): { user: string | null; login: () => void; logout: () => void } {');
+    expectHidden(p, 'useContext');
+  });
+
+  it('a call\'s object after a type argument: base.extend<{…}>({…}) hides the object', () => {
+    const p = practiceFor('src/fixtures.ts', [1, 3]);
+    expectParses(p);
+    expectKept(p, 'export const test = base.extend<{ offline: boolean }>({');
+    expectHidden(p, 'option: true');
+  });
+
+  it('shadcn\'s forwardRef: the arrow\'s body is hidden, its destructured parameters kept', () => {
+    const p = practiceFor('src/Button.tsx', [1, 5]);
+    expectParses(p);
+    expectKept(p, '({ className, variant, ...props }, ref) => {');
+    expectHidden(p, '<button');
+  });
+
+  it('a one-line arrow component: the whole JSX is hidden, not one attribute', () => {
+    const p = practiceFor('src/Item.tsx', [1, 1]);
+    expectParses(p);
+    expectKept(p, 'export const Item = ({ label }: { label: string }) => {');
+    expectHidden(p, '<li');
+  });
+
+  it('zustand\'s persist: the store is hidden, not the options object', () => {
+    const p = practiceFor('src/ui.ts', [1, 6]);
+    expectParses(p);
+    expectHidden(p, 'open: false');
+  });
+
+  it('an arrow inside a type argument is never cut: useCallback<(e) => void>((e) => {…}) hides the callback', () => {
+    const p = practiceFor('src/click.ts', [1, 3]);
+    expectParses(p);
+    expectKept(p, 'useCallback<(e: MouseEvent) => void>((e) => {');
+    expectHidden(p, 'preventDefault');
   });
 
   it('every JS/TS practice file this plan produces parses (the sweep)', () => {
