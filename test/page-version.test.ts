@@ -52,6 +52,12 @@ const TSX_RUNTIME = RUNTIMES[0]!;
 const PANEL = 'The connection to repo-tour dropped before the answer arrived';
 const PANEL_CHANGE = 'dropped before the answer arrived';
 
+/**
+ * What a browser says of a request another site's page made: `cross-site` from another domain,
+ * `same-site` from another local app on another port (a GONS page, say). Both are another site here.
+ */
+const OTHER_SITES = ['cross-site', 'same-site'];
+
 /** Past the skins half's 2 s window, so no held value can hide a re-read. */
 const PAST_THE_WINDOW_MS = 2_100;
 
@@ -716,8 +722,10 @@ describe('AC4: a rebuild the reader asks for re-renders', () => {
       };
 
       for (const route of ['/api/rebuild', '/api/build']) {
-        expect.soft(await post(route, repo, 'cross-site'), `${route} from another site must be refused`).toBe(403);
-        expect.soft(await idle(), `${route} from another site must start nothing`).toBe(true);
+        for (const site of OTHER_SITES) {
+          expect.soft(await post(route, repo, site), `${route} from another site (${site}) must be refused`).toBe(403);
+          expect.soft(await idle(), `${route} from another site (${site}) must start nothing`).toBe(true);
+        }
         expect.soft(await post(route, `${repo}/`, undefined), `${route} for a path spelled unlike the loaded one must be refused`).toBe(404);
         expect.soft(await post(route, elsewhere, undefined), `${route} for a folder that is not loaded must be refused`).toBe(404);
       }
@@ -829,8 +837,10 @@ describe('AC8: only repo-tour\'s own pages change its list and its model (folded
     await withServer(async (port, server, under) => {
       const theirs = folder(under, 'theirs');
       const loaded = (p: string): boolean => server.listRepos().some((r) => r.path === p);
-      expect.soft(await post(port, '/api/add', 'not json', 'cross-site'), 'another site, before the body is read').toBe(403);
-      expect.soft(await post(port, '/api/add', JSON.stringify({ path: theirs }), 'cross-site'), 'another site').toBe(403);
+      for (const site of OTHER_SITES) {
+        expect.soft(await post(port, '/api/add', 'not json', site), `another site (${site}), before the body is read`).toBe(403);
+        expect.soft(await post(port, '/api/add', JSON.stringify({ path: theirs }), site), `another site (${site})`).toBe(403);
+      }
       expect(loaded(theirs), 'another site must not load a folder').toBe(false);
 
       const ours = folder(under, 'ours');
@@ -846,8 +856,10 @@ describe('AC8: only repo-tour\'s own pages change its list and its model (folded
       const repo = folder(under, 'kept');
       server.addRepo(repo);
       const loaded = (): boolean => server.listRepos().some((r) => r.path === repo);
-      expect.soft(await post(port, '/api/remove', 'not json', 'cross-site'), 'another site, before the body is read').toBe(403);
-      expect.soft(await post(port, '/api/remove', JSON.stringify({ path: repo }), 'cross-site'), 'another site').toBe(403);
+      for (const site of OTHER_SITES) {
+        expect.soft(await post(port, '/api/remove', 'not json', site), `another site (${site}), before the body is read`).toBe(403);
+        expect.soft(await post(port, '/api/remove', JSON.stringify({ path: repo }), site), `another site (${site})`).toBe(403);
+      }
       expect(loaded(), 'another site must not unload a repository').toBe(true);
 
       expect(await post(port, '/api/remove', JSON.stringify({ path: repo }), 'same-origin'), 'repo-tour\'s own page').toBe(200);
@@ -861,9 +873,11 @@ describe('AC8: only repo-tour\'s own pages change its list and its model (folded
   it('POST /api/llm-set', async () => {
     await withServer(async (port, server) => {
       const before = server.getChoice();
-      expect.soft(await post(port, '/api/llm-set', 'not json', 'cross-site'), 'another site, before the body is read').toBe(403);
-      expect.soft(await post(port, '/api/llm-set', JSON.stringify({ provider: 'codex' }), 'cross-site'), 'another site').toBe(403);
-      expect.soft(await post(port, '/api/llm-set', JSON.stringify({ for: 'tutor', provider: 'codex' }), 'cross-site'), 'another site, for the tutor').toBe(403);
+      for (const site of OTHER_SITES) {
+        expect.soft(await post(port, '/api/llm-set', 'not json', site), `another site (${site}), before the body is read`).toBe(403);
+        expect.soft(await post(port, '/api/llm-set', JSON.stringify({ provider: 'codex' }), site), `another site (${site})`).toBe(403);
+        expect.soft(await post(port, '/api/llm-set', JSON.stringify({ for: 'tutor', provider: 'codex' }), site), `another site (${site}), for the tutor`).toBe(403);
+      }
       expect(server.getChoice(), 'another site must not choose the model a build sends source to').toEqual(before);
       expect(server.getTutorChoice().provider, 'nor the tutor\'s').toBe(before.provider);
 

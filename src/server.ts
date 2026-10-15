@@ -307,7 +307,7 @@ function codeVersion(dir: string, ext: string, self: string): string {
     h.update(`unread:${process.pid}:${Date.now()}:${randomBytes(8).toString('hex')}`);
     // Said out loud: a trip that never clears would otherwise rebuild every page on every start,
     // with nothing to say why.
-    console.warn(`repo-tour: could not read every module under ${dir}, so this run rebuilds each cached tour page it opens`);
+    console.warn(`repo-tour: could not read every module under ${dir}, so this run treats every cached tour page as stale`);
   }
   return h.digest('hex');
 }
