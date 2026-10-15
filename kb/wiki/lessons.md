@@ -10,6 +10,33 @@ One entry per lesson, newest first, each citing the ticket or incident it came f
 
 ---
 
+## A crash that kills a shared runtime is not a per-file failure (T-31, 2026-10-15)
+
+The parser runs in one WebAssembly runtime per process. A file too big for it aborted the runtime, and
+every later parse in the process failed with it, so a try/catch around one file guarded nothing. Twice
+the seat concluded the dead runtime's 2 GiB "cannot be freed", and twice its own probe held the
+reference. Node keeps a required module in two places, `require.cache` and the requiring module's
+`children`; deleting the cache entry alone frees nothing.
+
+**The rule:** handle a failure where the thing it breaks lives (here: replace the runtime, and remember
+the file so it is not paid for twice). Before saying memory cannot be freed, measure from a function
+whose locals die, and collect more than once.
+
+## A stamp names the code that runs, and a route that does more is open to more callers (T-29, 2026-10-15)
+
+T-29's first stamp would have been read from disk on demand. A `dist/` server keeps its old code while
+`npm run build` rewrites the files, so a stamp computed then labels the old code's pages with the new
+code's hash, and the restarted server reuses them as current. The review also measured what the seat's
+own evidence had denied: making `/api/build` force a render turned a no-op into a paid re-render that
+any site could trigger. And the walk's first fail-safe tripped on an editor's dangling lock file,
+rebuilding every page on every start, without a word.
+
+**The rule:** hash what the process loaded, once, at load. Before a route does more, check who can call
+it, and measure a claim of "no wider" instead of reasoning it. A fail-safe trips only on what could be
+running code, and prints a line when it trips. And check the "before" on the code that showed the
+symptom: today's main already re-rendered the owner's page by luck (T-14 touched one of the five hashed
+files), so a green "before" at the owner's layer hid a defect the module tests show red.
+
 ## Re-parse what you change, and never let one file stop a digest (T-16, 2026-10-13)
 
 T-15 and T-16 changed which ranges become build steps without re-parsing the practice file each step

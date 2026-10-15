@@ -13,6 +13,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { DigestResult } from './digest.js';
+import type { UnparsedFile } from './types.js';
 import type { CodeStep } from './codetour.js';
 import type { Architecture } from './architecture.js';
 import { baseCss, alternateCss, skinPicker, skinScript } from './skins.js';
@@ -50,6 +51,8 @@ interface EmbeddedFile {
   text: string;
   language: string | null;
   loc: number;
+  /** T-31: why the digest could not read this file's structure; the tree and the file header say so */
+  unread?: string;
 }
 
 function escapeHtml(s: string): string {
@@ -356,7 +359,10 @@ const APP = `
     if (nd.dir) {
       return '<div class="row dim" style="padding-left:' + pad + 'px"><span class="ic">▸</span>' + esc(name) + '</div>';
     }
-    return '<div class="row" data-p="' + esc(nd.p) + '" style="padding-left:' + pad + 'px"><span class="ic">·</span>' + esc(name) + '</div>';
+    // T-31: a file the digest could not read the structure of is still browsable, and says so.
+    var unread = byPath[nd.p] && byPath[nd.p].unread;
+    var mark = unread ? '<span class="nr" title="' + esc(unread).replace(/"/g, '&quot;') + '">not read</span>' : '';
+    return '<div class="row" data-p="' + esc(nd.p) + '" style="padding-left:' + pad + 'px"><span class="ic">·</span>' + esc(name) + mark + '</div>';
   }).join('');
 
   treeEl.addEventListener('click', function (e) {
@@ -383,7 +389,8 @@ const APP = `
       crumbEl.innerHTML = parts.map(function (s, i) {
         return i === parts.length - 1 ? '<b>' + esc(s) + '</b>' : '<span class="d">' + esc(s) + '</span>';
       }).join(' / ');
-      metaEl.textContent = f.loc.toLocaleString() + ' lines' + (f.language ? ' · ' + f.language : '');
+      metaEl.textContent = f.loc.toLocaleString() + ' lines' + (f.language ? ' · ' + f.language : '')
+        + (f.unread ? ' · not read: ' + f.unread : '');
 
       var rows2 = treeEl.querySelectorAll('.row');
       for (var j = 0; j < rows2.length; j++) rows2[j].classList.toggle('on', rows2[j].getAttribute('data-p') === p);
@@ -1024,6 +1031,23 @@ const TOUR_BOOTSTRAP = `
  * loaded." A tab that looks exactly like the two dead ones beside it tells a reader nothing.
  * So it carries the real count, and says so out loud while one is being read.
  */
+/**
+ * T-31 — the bar under the stop count when the digest could not read some files: how many,
+ * which, and why. The tour goes around them, so a reader would otherwise be left to wonder why
+ * a file is never visited. Nothing at all when every file was read.
+ */
+function unreadBar(unparsed: UnparsedFile[]): string {
+  if (unparsed.length === 0) return '';
+  const SHOWN = 3;
+  const n = unparsed.length;
+  const which = unparsed.slice(0, SHOWN)
+    .map((u) => `<code>${escapeHtml(u.path)}</code>: ${escapeHtml(u.reason)}`)
+    .join('; ');
+  const more = n > SHOWN ? `; and ${n - SHOWN} more` : '';
+  return `<div class="bar unread"><span class="said"><b>${n} ${n === 1 ? 'file was' : 'files were'} not read</b>, `
+    + `so the tour leaves ${n === 1 ? 'it' : 'them'} out — ${which}${more}</span></div>`;
+}
+
 function prTabScript(repoPath: string): string {
   return `
 (function () {
@@ -1104,6 +1128,11 @@ export function renderRepoView(result: DigestResult, opts: RepoViewOptions): str
     wanted.push(p);
   }
 
+  // T-31: the files the digest could not read the structure of, and why. Absent in a digest
+  // written before T-31, which had no such files: one of them took the whole digest down.
+  const unparsed = m.unparsed ?? [];
+  const unreadWhy = new Map(unparsed.map((u) => [u.path, u.reason] as const));
+
   const embedded: EmbeddedFile[] = [];
   let bytes = 0;
   for (const p of wanted) {
@@ -1113,7 +1142,8 @@ export function renderRepoView(result: DigestResult, opts: RepoViewOptions): str
     try { text = fs.readFileSync(path.join(root, p), 'utf8'); } catch { continue; }
     if (bytes + text.length > maxBytes && !opts.itinerary.includes(p)) continue;
     bytes += text.length;
-    embedded.push({ path: p, text, language: f.language, loc: f.loc });
+    const unread = unreadWhy.get(p);
+    embedded.push({ path: p, text, language: f.language, loc: f.loc, ...(unread ? { unread } : {}) });
   }
 
   const repo = m.repos.find((r) => r.root === '');
@@ -1183,6 +1213,7 @@ ${opts.servedBy ? `<script>${prTabScript(opts.servedBy.repoPath)}</script>` : ''
   <span class="said">·</span>
   <span class="said">${shown.toLocaleString()} of ${total.toLocaleString()} files browsable here; generated, vendored and binary content is left out.</span>
 </div>
+${unreadBar(unparsed)}
 <div class="bar snapshot">
   <span class="said">
     A snapshot of <b>${repo?.head ? escapeHtml(repo.head.slice(0, 10)) : 'an uncommitted tree'}</b>${repo?.branch ? ` on ${escapeHtml(repo.branch)}` : ''},

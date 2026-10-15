@@ -113,6 +113,14 @@ tr.hit td.ln { background:var(--hl); }
 .bar.snapshot { padding:7px 20px; background:var(--canvas); }
 .bar.snapshot b { color:var(--ink); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
 .bar.snapshot code { background:var(--chip); padding:1px 6px; border-radius:4px; font-size:11px; }
+/* T-31: files the digest could not read. The bar names them; the tree marks them. */
+.bar.unread { padding:7px 20px; background:var(--hl); border-bottom:1px solid var(--hl-line); }
+.bar.unread .said { color:var(--ink); }
+.bar.unread code { background:var(--chip); padding:1px 6px; border-radius:4px; font-size:11px; }
+.tree .nr {
+  margin-left:auto; padding:0 5px; border:1px solid var(--hl-line); border-radius:4px;
+  background:var(--hl); color:var(--ink); font-size:10px; font-weight:400; flex:none;
+}
 
 /* The side column is DOCKED, not floating. An explanation worth reading needs a column,
    not a tooltip — and a docked panel leaves the code fully visible beside it. */

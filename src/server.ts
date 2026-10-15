@@ -18,7 +18,7 @@
  * No framework and no dependencies: node:http, and the same renderer the static export uses.
  */
 
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -31,6 +31,7 @@ import { buildArchitecture, architectureBrief } from './architecture.js';
 import { interpretStops, applyMeanings, interpretArchitecture, DEFAULT_MODEL } from './interpret.js';
 import { renderRepoView } from './repoview.js';
 import { baseCss, alternateCss, skinPicker, skinScript } from './skins.js';
+import { assetsDir } from './assets.js';
 import {
   surveyProviders, resolveChoice, resolveTutorChoice, providerById, killLlmChildren,
   runLlm, runLlmStream, type LlmChoice,
@@ -109,10 +110,17 @@ function markerPath(repoPath: string): string {
   return path.join(repoPath, CACHE_DIR, 'building.json');
 }
 
-function markBuilding(repoPath: string, lines: string[]): void {
+/**
+ * `force` records that the reader asked for this build. A resumed build is dropped when the
+ * page for its tree is already current, which is right for a build that had in fact finished
+ * and wrong for a Rebuild the reader pressed: that was pressed on a current page.
+ */
+function markBuilding(repoPath: string, lines: string[], force = false): void {
   try {
     fs.mkdirSync(path.dirname(markerPath(repoPath)), { recursive: true });
-    fs.writeFileSync(markerPath(repoPath), JSON.stringify({ startedAt: new Date().toISOString(), lines }, null, 2));
+    fs.writeFileSync(markerPath(repoPath), JSON.stringify(
+      { startedAt: new Date().toISOString(), lines, ...(force ? { force: true } : {}) }, null, 2,
+    ));
   } catch { /* a build that cannot record itself still runs */ }
 }
 
@@ -123,11 +131,22 @@ function clearBuilding(repoPath: string): void {
 /** A marker older than this is from a run nobody is waiting for any more. */
 const RESUME_WINDOW_MS = 6 * 60 * 60 * 1000;
 
-function wasBuilding(repoPath: string): boolean {
+/** How far ahead of now a marker may be dated and still be this machine's own. */
+const CLOCK_SLACK_MS = 10 * 60 * 1000;
+
+/**
+ * A build the last run did not finish, if it is recent enough to resume, and whether it was asked
+ * for. A marker dated well in the future is nobody's build: the marker lives in the toured
+ * repository, which can ship one, and a negative age would pass any window. A few minutes ahead is
+ * allowed, because a clock can step back between the marker's last write and a restart (a fast
+ * clock corrected at boot), and that must not lose a Rebuild the reader pressed.
+ */
+function wasBuilding(repoPath: string): { force: boolean } | null {
   try {
-    const m = JSON.parse(fs.readFileSync(markerPath(repoPath), 'utf8')) as { startedAt: string };
-    return Date.now() - Date.parse(m.startedAt) < RESUME_WINDOW_MS;
-  } catch { return false; }
+    const m = JSON.parse(fs.readFileSync(markerPath(repoPath), 'utf8')) as { startedAt: string; force?: boolean };
+    const age = Date.now() - Date.parse(m.startedAt);
+    return age > -CLOCK_SLACK_MS && age < RESUME_WINDOW_MS ? { force: m.force === true } : null;
+  } catch { return null; }
 }
 
 /**
@@ -139,21 +158,31 @@ function wasBuilding(repoPath: string): boolean {
  * multi-minute wait before you can read anything at all.
  */
 function newestRendered(repoPath: string): Rendered | null {
+  const meta = newestRenderedMeta(repoPath);
+  if (!meta) return null;
+  try {
+    return { ...meta, html: fs.readFileSync(path.join(renderedDir(repoPath), `${meta.fingerprint}.html`), 'utf8') };
+  } catch { return null; }
+}
+
+/**
+ * The same build's `.json` alone, for the listing.
+ *
+ * After an update to the app every page is stale, so the listing falls back to this for every
+ * repository not yet reopened, on every poll from every open tab. The page itself is megabytes
+ * the listing would read only to throw away.
+ */
+function newestRenderedMeta(repoPath: string): RenderedMeta | null {
   const dir = renderedDir(repoPath);
-  let best: { at: string; fp: string } | null = null;
+  let best: RenderedMeta | null = null;
   try {
     for (const f of fs.readdirSync(dir)) {
       if (!f.endsWith('.json')) continue;
       const meta = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')) as RenderedMeta;
-      if (!best || meta.builtAt > best.at) best = { at: meta.builtAt, fp: meta.fingerprint };
+      if (!best || meta.builtAt > best.builtAt) best = meta;
     }
   } catch { return null; }
-  if (!best) return null;
-  try {
-    const meta = JSON.parse(fs.readFileSync(path.join(dir, `${best.fp}.json`), 'utf8')) as RenderedMeta;
-    const html = fs.readFileSync(path.join(dir, `${best.fp}.html`), 'utf8');
-    return { ...meta, html };
-  } catch { return null; }
+  return best;
 }
 
 function readRendered(repoPath: string, fp: string): Rendered | null {
@@ -202,27 +231,103 @@ interface Job {
 }
 
 /**
- * A hash of everything that decides how a page LOOKS, as opposed to what it says.
+ * A hash of everything that decides what a cached page holds and how it looks: the code that
+ * built it, and the skins.
  *
  * Rendered pages are cached to disk with their CSS and scripts inlined, because a tour has
- * to open from `file://` with no network. That means a page carries the presentation it was
- * built with, forever: adding two skins changed nothing about any tour already on disk —
+ * to open from `file://` with no network. That means a page carries the code and the skins it
+ * was built with, forever: adding two skins changed nothing about any tour already on disk —
  * neither their CSS nor their options were in those files, so the picker could not offer
  * what was not there.
  *
- * Hashing the renderer's own inputs makes that automatic. Change a skin, edit the view, and
- * every cached page stops matching without anyone having to remember to invalidate it.
+ * Stamping each page with this, and reusing a page only while its stamp still matches, makes
+ * that automatic. Change a skin or any module, and every cached page stops matching without
+ * anyone having to remember to invalidate it.
  *
- * Re-rendering is cheap: the digest is incremental and every explanation is already cached
- * by content hash, so a presentation change costs a render, not a re-read and not a token.
+ * Re-rendering is cheap: it re-runs the digest and the render, and every explanation the same
+ * model has already written is cached by content, so it costs tokens only for what has none.
  */
+
 /**
- * Held briefly, never for the life of the process.
+ * The code half: every module of the build that is running, hashed once, as this module loads.
  *
- * Memoising it forever was the same mistake as baking the boot id into a cached page: a
- * running server could not notice its own skins changing, so editing one changed nothing
- * until a restart. A couple of seconds is long enough to keep the four-second poll from
+ * It used to hash five hand-listed modules, which missed most of what decides a page: which
+ * stops exist (`extract.ts`), the Ask panel inlined into every page (`askpanel.ts`), and
+ * thirty-odd more. So the owner's autoSQL tour, built before the tutor's rework, kept the old
+ * panel, because nothing on the list had changed (T-29). This takes no list: it walks the
+ * folder this module was loaded from (`src/` under tsx, `dist/` when compiled) and hashes the
+ * path and bytes of every file with this module's own extension.
+ *
+ * Once, never again. A process cannot change its code without restarting: `tsx watch`
+ * restarts on an edit, and a `dist/` server keeps running the old code while `npm run build`
+ * rewrites the files under it. Read later, the files would stamp the old code's pages with the
+ * new code's hash, and the restarted server would take those pages as current. Node reads the
+ * whole static import graph before it runs any of it, so this runs straight after the running
+ * code was read: what it hashes is a second read, tens of milliseconds after the first.
+ *
+ * What it cannot read, it does not pass off as unchanged. A folder Node can search but not list
+ * still serves every import by name, so a walk that saw nothing would give the same hash
+ * through any edit, and every cached page would pass as current. Any read that fails, or a
+ * walk that never reached this very module, makes the hash unique to this process instead: its
+ * pages are rebuilt once rather than trusted. Links are followed, by what they point to.
+ */
+function codeVersion(dir: string, ext: string, self: string): string {
+  const h = createHash('sha256');
+  let complete = true;
+  let sawSelf = false;
+  const seen = new Set<string>();
+  const walk = (at: string): void => {
+    let names: string[];
+    try {
+      const real = fs.realpathSync(at);
+      if (seen.has(real)) return; // a linked folder that loops back
+      seen.add(real);
+      names = fs.readdirSync(at).sort();
+    } catch { complete = false; return; }
+    for (const name of names) {
+      const abs = path.join(at, name);
+      let st: fs.Stats;
+      try { st = fs.statSync(abs); } catch (e) {
+        // A link to nothing (an editor's lock file) cannot be code that runs: nothing could load
+        // it. Anything else unreadable leaves the walk incomplete.
+        if ((e as NodeJS.ErrnoException).code !== 'ENOENT') complete = false;
+        continue;
+      }
+      if (st.isDirectory()) { walk(abs); continue; }
+      if (!st.isFile() || !name.endsWith(ext)) continue;
+      // The path as well as the bytes, so a renamed module is a different build.
+      h.update(`${path.relative(dir, abs)}\0`);
+      try { h.update(fs.readFileSync(abs)); } catch { complete = false; }
+      h.update('\0');
+      if (abs === self) sawSelf = true;
+    }
+  };
+  walk(dir);
+  if (!complete || !sawSelf) {
+    h.update(`unread:${process.pid}:${Date.now()}:${randomBytes(8).toString('hex')}`);
+    // Said out loud: a trip that never clears would otherwise rebuild every page on every start,
+    // with nothing to say why.
+    console.warn(`repo-tour: could not read every module under ${dir}, so this run treats every cached tour page as stale`);
+  }
+  return h.digest('hex');
+}
+
+const RUNNING_CODE = ((): string => {
+  const self = fileURLToPath(import.meta.url);
+  return codeVersion(path.dirname(self), path.extname(self), self);
+})();
+
+/**
+ * The skins half: held briefly, never for the life of the process.
+ *
+ * The renderer reads the skins on every render, so a saved stylesheet reaches the next page
+ * without a restart, and the stamp has to see it the same way. Memoising it forever was the
+ * same mistake as baking the boot id into a cached page: a running server could not notice
+ * its own skins changing. A couple of seconds is long enough to keep the four-second poll from
  * re-reading ten small files, and short enough that a saved stylesheet lands immediately.
+ *
+ * Read from `assetsDir()`, the root the renderer reads, which `configureAssets()` or
+ * `REPO_TOUR_ASSETS` can move away from this package's own `assets/`.
  */
 let presentationCache: { value: string; at: number } | null = null;
 const PRESENTATION_TTL_MS = 2000;
@@ -231,26 +336,22 @@ function presentationVersion(): string {
   if (presentationCache && Date.now() - presentationCache.at < PRESENTATION_TTL_MS) {
     return presentationCache.value;
   }
-  const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
   const h = createHash('sha256');
+  h.update(RUNNING_CODE);
 
   const feed = (file: string): void => {
     try { h.update(fs.readFileSync(file)); } catch { /* absent input is itself a state */ }
   };
 
   // the skins and the vendored tour assets
-  for (const dir of [path.join(root, 'assets', 'skins'), path.join(root, 'assets')]) {
+  const assets = assetsDir();
+  for (const dir of [path.join(assets, 'skins'), assets]) {
     let entries: string[] = [];
     try { entries = fs.readdirSync(dir).sort(); } catch { continue; }
     for (const f of entries) {
       if (!/\.(css|js)$/.test(f)) continue;
       feed(path.join(dir, f));
     }
-  }
-  // and the modules that build the page. Absent in a compiled install, which is fine: the
-  // assets alone still catch every skin change.
-  for (const f of ['repoview.ts', 'skins.ts', 'codetour.ts', 'architecture.ts', 'interpret.ts']) {
-    feed(path.join(root, 'src', f));
   }
 
   presentationCache = { value: h.digest('hex').slice(0, 12), at: Date.now() };
@@ -273,6 +374,18 @@ function heroCredit(): { photographer: string; url: string } | null {
 
 function hasHero(): boolean {
   return fs.existsSync(path.join(assetsImgDir(), 'hero.jpg'));
+}
+
+/**
+ * A request a page on another site made.
+ *
+ * Such a page can POST here without a preflight, with a `text/plain` body. A browser labels its
+ * own requests: `same-origin` from repo-tour's pages, `none` from the address bar. A non-browser
+ * caller sends no such header at all. Only an explicit other site is refused.
+ */
+function fromAnotherSite(req: http.IncomingMessage): boolean {
+  const site = req.headers?.['sec-fetch-site'];
+  return typeof site === 'string' && site !== 'same-origin' && site !== 'none';
 }
 
 function git(repoPath: string, args: string[]): string | null {
@@ -402,13 +515,14 @@ export class RepoTourServer {
    * Deliberately automatic: someone asked for this build, the process died under them, and
    * making them ask again — with no way to know they had to — is how minutes of work get
    * lost silently. A marker whose repo is already built at its current state is stale and is
-   * simply cleared.
+   * simply cleared, unless it records a Rebuild the reader pressed: that is resumed anyway.
    */
   private resumeInterrupted(): void {
     for (const r of this.repos) {
-      if (!wasBuilding(r.path)) { clearBuilding(r.path); continue; }
-      if (this.lookup(r.path, fingerprint(r.path))) { clearBuilding(r.path); continue; }
-      const job = this.startJob(r.path);
+      const was = wasBuilding(r.path);
+      if (!was) { clearBuilding(r.path); continue; }
+      if (!was.force && this.lookup(r.path, fingerprint(r.path))) { clearBuilding(r.path); continue; }
+      const job = this.startJob(r.path, was.force);
       job.lines.unshift('resuming a build the last run did not finish…');
     }
   }
@@ -513,8 +627,8 @@ export class RepoTourServer {
       const fp = fingerprint(r.path);
       // Fall back to the newest build of ANY tree state: a repo whose code has moved still
       // HAS a tour, and reporting "no tour yet" would both be false and hide a readable one.
-      const built = this.lookup(r.path, fp) ?? newestRendered(r.path) ?? null;
-      const meta = built ? (({ html, ...rest }) => rest)(built) : null;
+      const hit = this.lookup(r.path, fp);
+      const meta = hit ? (({ html, ...rest }) => rest)(hit) : newestRenderedMeta(r.path);
       return {
         ...r,
         built: meta,
@@ -525,11 +639,26 @@ export class RepoTourServer {
     });
   }
 
-  /** Build (or rebuild) a repository's tour. Returns the rendered page. */
-  async build(repoPath: string, onLine: (s: string) => void): Promise<Rendered> {
+  /**
+   * Build (or rebuild) a repository's tour. Returns the rendered page.
+   *
+   * The page already built for this tree comes back instead, unless `force` says the reader
+   * asked for a rebuild, or its stamp is not the current one.
+   */
+  async build(repoPath: string, onLine: (s: string) => void, opts: { force?: boolean } = {}): Promise<Rendered> {
+    // Taken before anything is read or rendered. A skin saved while the build runs then leaves
+    // the stamp older than the page, which costs one needless re-render. Taken after the
+    // render, it could name a stylesheet the page does not carry, and that page would be
+    // reused as current until the next change.
+    const presentation = presentationVersion();
     const fp = fingerprint(repoPath);
-    const already = this.lookup(repoPath, fp);
-    if (already) return already;
+    if (!opts.force) {
+      const already = this.lookup(repoPath, fp);
+      // The stamp is checked here as well as in readRendered(), because the page in memory
+      // skips that check. Without it, the rebuild /r starts for a stale page in memory handed
+      // that same page back, rendered nothing, and was started again on every open.
+      if (already && already.presentation === presentation) return already;
+    }
 
     onLine('reading the tree…');
     const result = await digest(repoPath, { write: true });
@@ -577,7 +706,7 @@ export class RepoTourServer {
 
     const rendered: Rendered = {
       fingerprint: fp,
-      presentation: presentationVersion(),
+      presentation,
       html,
       builtAt: new Date().toISOString(),
       stops: steps.length,
@@ -648,25 +777,45 @@ export class RepoTourServer {
     return job;
   }
 
-  private startJob(repoPath: string): Job {
+  /**
+   * `force`: the reader asked for this build, so it renders even when the page is current.
+   *
+   * `answering`: the response this job was started from. The build's first stretch is
+   * synchronous (the inventory walks and hashes the whole tree before anything yields), so
+   * started inside the request it held that response back for as long as the walk took:
+   * seconds on a tree of a few thousand files, on the first open after every update to the
+   * app. It starts once that response has closed instead. A response that has already closed, one
+   * without events (the tests' stand-ins), or none, starts it on the next turn of the event loop:
+   * waiting for a `close` that has gone by would leave the job "running" and never started, and
+   * hand that dead job to every later Rebuild. The job and its marker exist at once either way, so
+   * nothing starts it twice and a crash in between still resumes it.
+   */
+  private startJob(repoPath: string, force = false, answering?: http.ServerResponse): Job {
     const running = this.jobs.get(repoPath);
     if (running?.state === 'running') return running;
 
     const job: Job = { repo: repoPath, state: 'running', lines: [], startedAt: Date.now() };
     this.jobs.set(repoPath, job);
-    markBuilding(repoPath, job.lines);
+    markBuilding(repoPath, job.lines, force);
 
-    void this.build(repoPath, (line) => {
-      job.lines.push(line);
-      // Kept current on disk so a resumed build can say where the last one got to.
-      markBuilding(repoPath, job.lines);
-    })
-      .then(() => { job.state = 'done'; job.lines.push('ready'); clearBuilding(repoPath); })
-      .catch((e: unknown) => {
-        job.state = 'failed';
-        job.lines.push(e instanceof Error ? e.message : String(e));
-        clearBuilding(repoPath);
-      });
+    const go = (): void => {
+      void this.build(repoPath, (line) => {
+        job.lines.push(line);
+        // Kept current on disk so a resumed build can say where the last one got to.
+        markBuilding(repoPath, job.lines, force);
+      }, { force })
+        .then(() => { job.state = 'done'; job.lines.push('ready'); clearBuilding(repoPath); })
+        .catch((e: unknown) => {
+          job.state = 'failed';
+          job.lines.push(e instanceof Error ? e.message : String(e));
+          clearBuilding(repoPath);
+        });
+    };
+    if (typeof answering?.once === 'function' && !answering.destroyed && !answering.writableFinished) {
+      answering.once('close', go);
+    } else {
+      setImmediate(go);
+    }
 
     return job;
   }
@@ -963,6 +1112,11 @@ export class RepoTourServer {
       }
 
       if (route === '/api/llm-set' && req.method === 'POST') {
+        // The choice decides where a build sends a loaded repository's source: another site's
+        // page switching it to another vendor would send it there under the owner's own login.
+        if (fromAnotherSite(req)) {
+          return this.json(res, 403, { error: 'the model is only chosen from repo-tour\'s own pages' });
+        }
         const body = JSON.parse(await this.readBody(req)) as Partial<LlmChoice> & { for?: string };
         if (body.provider && !providerById(body.provider)) {
           return this.json(res, 400, { error: `no such provider: ${body.provider}` });
@@ -986,11 +1140,8 @@ export class RepoTourServer {
        */
       if (route === '/api/ask' && req.method === 'POST') {
         // This route can now read files out of a loaded repository and spend tutor-model
-        // tokens, so a page on another origin must not be able to drive it. The panel is
-        // same-origin; a browser labels its request `same-origin`, and a non-browser caller
-        // sends no such header at all — only an explicit cross-site request is refused.
-        const site = req.headers?.['sec-fetch-site'];
-        if (typeof site === 'string' && site !== 'same-origin' && site !== 'none') {
+        // tokens, so a page on another origin must not be able to drive it.
+        if (fromAnotherSite(req)) {
           return this.json(res, 403, { error: 'the Ask panel is only reachable from its own page' });
         }
         let payload: { messages?: unknown; context?: AskContext };
@@ -1025,6 +1176,9 @@ export class RepoTourServer {
       }
 
       if (route === '/api/add' && req.method === 'POST') {
+        if (fromAnotherSite(req)) {
+          return this.json(res, 403, { error: 'a repository is only loaded from repo-tour\'s own pages' });
+        }
         const { path: p } = JSON.parse(await this.readBody(req)) as { path?: string };
         if (!p) return this.json(res, 400, { error: 'a path is required' });
         const added = this.addRepo(p);
@@ -1035,16 +1189,30 @@ export class RepoTourServer {
       }
 
       if (route === '/api/remove' && req.method === 'POST') {
+        if (fromAnotherSite(req)) {
+          return this.json(res, 403, { error: 'a repository is only removed from repo-tour\'s own pages' });
+        }
         const { path: p } = JSON.parse(await this.readBody(req)) as { path?: string };
         if (p) this.removeRepo(p);
         return this.json(res, 200, { ok: true });
       }
 
       if ((route === '/api/build' || route === '/api/rebuild') && req.method === 'POST') {
+        // A forced build is a whole digest and render, and it re-sends every stop whose
+        // explanation failed, so only repo-tour's own pages may ask for one (another site's
+        // page can POST here without a preflight), and only for a repository as it was loaded:
+        // another spelling of the same folder would be a job of its own.
+        if (fromAnotherSite(req)) {
+          return this.json(res, 403, { error: 'a build is only started from repo-tour\'s own pages' });
+        }
         const { path: p } = JSON.parse(await this.readBody(req)) as { path?: string };
         if (!p) return this.json(res, 400, { error: 'a path is required' });
-        this.cache.delete(p);
-        this.startJob(p);
+        if (!this.repos.some((r) => r.path === p)) return this.json(res, 404, { error: 'not loaded' });
+        // The reader asked, so it renders. Unforced, build() hands back the page already built
+        // whenever the tree and the stamp both match, and dropping the page from memory first
+        // only made it read the same page back from disk: Rebuild rendered nothing, and a reader
+        // had no way to put new code onto a page (found by the T-16 seat, 2026-10-13).
+        this.startJob(p, true, res);
         return this.json(res, 200, { ok: true });
       }
 
@@ -1111,20 +1279,24 @@ export class RepoTourServer {
           // It costs no tokens — interpretation is cached by content — and the freshness
           // chip already offers the result when it lands.
           if (cached.presentation !== presentationVersion() && job?.state !== 'running') {
-            this.startJob(p);
+            this.startJob(p, false, res);
           }
           return this.html(res, 200, cached.html);
         }
 
-        // The tree has moved since the last build. Serve that build anyway — it is still the
-        // truth about the commit it describes, and making it unreachable turns every edit
-        // into a wait before anything can be read. The page carries a quiet marker instead.
+        // No page for this tree with today's stamp: the tree has moved since the last build, or
+        // the code that built it has. Serve the newest build anyway — it is still the truth
+        // about the commit it describes, and making it unreachable turns every edit into a wait
+        // before anything can be read. The page carries a quiet marker instead.
         const older = newestRendered(p);
         if (older) {
-          // The renderer itself has moved on (a new skin, a changed view). That is the app
-          // updating rather than the reader's code changing, and re-rendering costs no
-          // tokens — so start it behind them and let the chip offer the result.
-          if (older.presentation !== presentationVersion() && job?.state !== 'running') this.startJob(p);
+          // The app itself has moved on (a new skin, any changed module), so start the rebuild
+          // behind them and let the chip offer the result. It builds the tree as it is now: if
+          // the tree has moved too, that is the build the chip's Rebuild would have offered.
+          // Every stop the same model has already explained is cached by content, so tokens go
+          // only on what has no explanation from it yet: what moved, every stop after the model
+          // is changed, and any whose explanation failed before.
+          if (older.presentation !== presentationVersion() && job?.state !== 'running') this.startJob(p, false, res);
           return this.html(res, 200, older.html);
         }
 

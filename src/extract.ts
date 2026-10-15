@@ -8,12 +8,15 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { Parser, Language } from 'web-tree-sitter';
-import type { Node as SyntaxNode } from 'web-tree-sitter';
+import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
+import type { Node as SyntaxNode, Parser, Tree } from 'web-tree-sitter';
 import type {
-  FileExtract, FileRecord, ImportGraph, ImportRecord, SymbolKind, SymbolRecord,
+  FileExtract, FileRecord, ImportGraph, ImportRecord, SymbolKind, SymbolRecord, UnparsedFile,
 } from './types.js';
 import { grammarsDir } from './assets.js';
+
+type TreeSitter = typeof import('web-tree-sitter');
 
 /** Grammar versions are pinned by the resolved package — see spec §10, grammar drift. */
 function grammarPath(name: string): string {
@@ -27,22 +30,83 @@ const GRAMMAR_FOR: Record<string, string> = {
   tsx: 'tsx',
 };
 
-const parsers = new Map<string, Parser>();
-let initialized = false;
+/**
+ * T-31 — the parser runtime, held so that it can be let go of.
+ *
+ * web-tree-sitter runs ONE wasm instance per loaded copy of the package, with a heap capped at
+ * 2 GiB. A file that needs more aborts it. The parser that aborted throws `Aborted()` on every
+ * later call, even for a one-line file (tree-sitter resumes the parse it died in); the copy keeps
+ * its whole heap; and anything else that needs memory from it can abort again. Measured: a fresh
+ * parser on a dead copy sometimes works and sometimes aborts, depending on what the dead parse
+ * left. A copy in that state cannot be trusted or restarted in place. It is dropped, and a fresh
+ * one loaded.
+ *
+ * So the package is loaded with `require`, never `import`: an ES module stays loaded for the
+ * life of the process, and the dead copy's heap with it. Each copy comes through its own
+ * `createRequire`, and letting go of one deletes it from `require.cache`. With its parsers
+ * dropped too, nothing reaches it, and V8 frees its heap at the next collection. Measured: 2.1 GB
+ * back to 70 MB after one collection, and three aborts in a row never held more than one heap.
+ * Neither loading a copy nor letting go of one adds a process listener.
+ */
+interface Runtime {
+  treeSitter: TreeSitter;
+  parsers: Map<string, Parser>;
+  /** Delete this copy from `require.cache`: once its parsers are dropped, the last thing that reaches it. */
+  forget(): void;
+}
+
+let runtime: Runtime | null = null;
+let starting: Promise<Runtime> | null = null;
+
+function liveRuntime(): Promise<Runtime> {
+  if (runtime) return Promise.resolve(runtime);
+  starting ??= (async () => {
+    const load = createRequire(import.meta.url);
+    const id = load.resolve('web-tree-sitter');
+    const treeSitter = load('web-tree-sitter') as TreeSitter;
+    const forget = (): void => { delete load.cache[id]; };
+    try {
+      await treeSitter.Parser.init();
+    } catch (err) {
+      forget();
+      throw err;
+    }
+    const rt: Runtime = { treeSitter, parsers: new Map(), forget };
+    runtime = rt;
+    return rt;
+  })().finally(() => { starting = null; });
+  return starting;
+}
+
+/** Let go of a runtime that trapped: its state cannot be trusted, and after an abort it holds its whole heap. */
+function release(rt: Runtime): void {
+  if (runtime !== rt) return;
+  runtime = null;
+  rt.parsers.clear();
+  rt.forget();
+}
+
+/**
+ * The live runtime's parser for `language`, or null. Read without awaiting, so that nothing can
+ * let go of the runtime between this read and the parse that follows it.
+ */
+function readyParser(language: string): { rt: Runtime; parser: Parser } | null {
+  const rt = runtime;
+  const parser = rt?.parsers.get(language);
+  return rt && parser ? { rt, parser } : null;
+}
 
 export async function initParsers(languages: string[] = Object.keys(GRAMMAR_FOR)): Promise<void> {
-  if (!initialized) {
-    await Parser.init();
-    initialized = true;
-  }
+  const rt = await liveRuntime();
   for (const lang of languages) {
-    if (parsers.has(lang)) continue;
+    if (rt.parsers.has(lang)) continue;
     const grammar = GRAMMAR_FOR[lang];
     if (!grammar) continue;
-    const language = await Language.load(grammarPath(grammar));
-    const parser = new Parser();
+    const language = await rt.treeSitter.Language.load(grammarPath(grammar));
+    if (rt.parsers.has(lang)) continue; // another digest loaded it while this one waited
+    const parser = new rt.treeSitter.Parser();
     parser.setLanguage(language);
-    parsers.set(lang, parser);
+    rt.parsers.set(lang, parser);
   }
 }
 
@@ -182,7 +246,20 @@ function pythonImports(root: SyntaxNode): ImportRecord[] {
     if (raw) out.push({ raw, resolved: null, line: lineOf(node) });
   };
 
-  const visit = (node: SyntaxNode, depth: number): void => {
+  // T-31: an explicit stack, not recursion — no syntax-tree walk in src/ recurses. Children go
+  // on in reverse so they come off in source order: the order the recursive walk reported.
+  const stack: Array<{ node: SyntaxNode; depth: number }> = [];
+  const pushChildren = (node: SyntaxNode, depth: number): void => {
+    const children = node.children;
+    for (let i = children.length - 1; i >= 0; i--) {
+      const child = children[i];
+      if (child) stack.push({ node: child, depth });
+    }
+  };
+
+  pushChildren(root, 0);
+  while (stack.length) {
+    const { node, depth } = stack.pop()!;
     if (node.type === 'import_statement') {
       for (const child of node.children) {
         if (!child) continue;
@@ -192,20 +269,18 @@ function pythonImports(root: SyntaxNode): ImportRecord[] {
           if (inner) push(inner.text, node);
         }
       }
-      return;
+      continue;
     }
     if (node.type === 'import_from_statement') {
       const mod =
         node.childForFieldName('module_name') ??
         node.children.find((c) => c?.type === 'relative_import' || c?.type === 'dotted_name');
       if (mod) push(mod.text, node);
-      return;
+      continue;
     }
     // imports hide inside `if TYPE_CHECKING:` and `try:` blocks often enough to be worth descending
-    if (depth < 4) for (const child of node.children) if (child) visit(child, depth + 1);
-  };
-
-  for (const child of root.children) if (child) visit(child, 0);
+    if (depth < 4) pushChildren(node, depth + 1);
+  }
   return out;
 }
 
@@ -423,28 +498,49 @@ function jsSymbols(root: SyntaxNode): SymbolRecord[] {
   return out;
 }
 
+/** The module an import, an `export ... from`, a `require(...)` or an `import(...)` names, or null. */
+function jsImportAt(node: SyntaxNode): ImportRecord | null {
+  if (node.type === 'import_statement' || node.type === 'export_statement') {
+    const source = node.childForFieldName('source');
+    return source ? { raw: unquote(source.text), resolved: null, line: lineOf(node) } : null;
+  }
+  // call_expression
+  const fn = node.childForFieldName('function');
+  const args = node.childForFieldName('arguments');
+  const isRequire = fn?.text === 'require';
+  const isDynamic = fn?.type === 'import';
+  if (!(isRequire || isDynamic) || !args) return null;
+  const str = args.children.find((c) => c?.type === 'string');
+  return str ? { raw: unquote(str.text), resolved: null, line: lineOf(node) } : null;
+}
+
+/**
+ * Every import in the file, in source order.
+ *
+ * T-31: a cursor, not recursion. A string concatenation or a method chain nests to the left,
+ * so its tree is as deep as it is long, and the recursive walk this replaces overflowed the
+ * stack at about 5,000 terms of generated code — taking the whole digest down with it. The
+ * cursor visits the same nodes in the same order (pre-order, children left to right) at any
+ * depth, and only builds a node object where an import can be.
+ */
 function jsImports(root: SyntaxNode): ImportRecord[] {
   const out: ImportRecord[] = [];
-
-  const visit = (node: SyntaxNode): void => {
-    if (node.type === 'import_statement' || node.type === 'export_statement') {
-      const source = node.childForFieldName('source');
-      if (source) out.push({ raw: unquote(source.text), resolved: null, line: lineOf(node) });
-    } else if (node.type === 'call_expression') {
-      const fn = node.childForFieldName('function');
-      const args = node.childForFieldName('arguments');
-      const isRequire = fn?.text === 'require';
-      const isDynamic = fn?.type === 'import';
-      if ((isRequire || isDynamic) && args) {
-        const str = args.children.find((c) => c?.type === 'string');
-        if (str) out.push({ raw: unquote(str.text), resolved: null, line: lineOf(node) });
+  const cursor = root.walk();
+  try {
+    for (;;) {
+      const type = cursor.nodeType;
+      if (type === 'import_statement' || type === 'export_statement' || type === 'call_expression') {
+        const found = jsImportAt(cursor.currentNode);
+        if (found) out.push(found);
+      }
+      if (cursor.gotoFirstChild()) continue;
+      while (!cursor.gotoNextSibling()) {
+        if (!cursor.gotoParent()) return out;
       }
     }
-    for (const child of node.children) if (child) visit(child);
-  };
-
-  visit(root);
-  return out;
+  } finally {
+    cursor.delete();
+  }
 }
 
 // ---------------------------------------------------------------- resolution
@@ -508,9 +604,49 @@ function resolveImport(
 export interface ExtractResult {
   extracts: FileExtract[];
   graph: ImportGraph;
+  /** T-31: the files that could not be read, parsed or walked, each with why. They have no extract. */
+  unparsed: UnparsedFile[];
 }
 
-/** Parse every parseable, non-floored file and build the intra-repo import graph. */
+/**
+ * T-31 — content that made a parser runtime trap, keyed `language:sha256`, with the reason: it
+ * is never parsed again in this process. A file too big for the parser takes seconds to fail and
+ * 2 GiB while it does, and a server rebuilds the same repository every time it changes.
+ */
+const fatalContent = new Map<string, string>();
+
+const contentKey = (language: string, text: string): string =>
+  `${language}:${createHash('sha256').update(text).digest('hex')}`;
+
+/** What `Aborted()` means here: allocation failure is where the parser's wasm build aborts. */
+const OUT_OF_MEMORY = 'the parser ran out of memory on it (its limit is 2 GiB)';
+
+/** A wasm trap (`WebAssembly.RuntimeError`): an abort, or the runtime's own fault. The copy cannot be trusted after one. */
+const isTrap = (err: unknown): boolean => err instanceof Error && err.name === 'RuntimeError';
+
+/**
+ * T-31 review S1 — a copy keeps the high-water mark of its heap for as long as it lives, and in
+ * a server that is days. A file this long can grow it by hundreds of megabytes (measured: about 30
+ * to 330 bytes of heap per character, depending on how dense the code is), so a call that parsed
+ * one lets go of the copy at its end. The next call loads a fresh one: 20-54 ms.
+ */
+const LARGE_TEXT = 1024 * 1024;
+
+/** Why a file could not be extracted, in one line: the error's own words, or what an abort means. */
+function why(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  if (err.name === 'RuntimeError' && err.message.startsWith('Aborted(')) return OUT_OF_MEMORY;
+  const line = `${err.name}: ${err.message.split('\n')[0] ?? ''}`;
+  return line.length > 200 ? `${line.slice(0, 199)}…` : line;
+}
+
+/**
+ * Parse every parseable, non-floored file and build the intra-repo import graph.
+ *
+ * T-31: one file can never stop this. A file that cannot be read, that the parser gives no tree
+ * for, or whose tree cannot be walked is recorded in `unparsed` with why, gets no extract, and
+ * every other file is extracted exactly as it would be without it.
+ */
 export async function extract(root: string, files: FileRecord[]): Promise<ExtractResult> {
   const targets = files.filter(
     (f) =>
@@ -525,37 +661,93 @@ export async function extract(root: string, files: FileRecord[]): Promise<Extrac
   const index = new Set(files.map((f) => f.path));
   const repoOf = new Map(files.map((f) => [f.path, f.repo] as const));
   const extracts: FileExtract[] = [];
+  const unparsed: UnparsedFile[] = [];
   let filesWithParseErrors = 0;
+  let largest = 0;
 
   for (const file of targets) {
-    const parser = parsers.get(file.language!);
-    if (!parser) continue;
+    const language = file.language!;
+    const skip = (reason: string): void => { unparsed.push({ path: file.path, reason }); };
 
     let text: string;
     try {
       text = fs.readFileSync(path.join(root, file.path), 'utf8');
-    } catch {
+    } catch (err) {
+      skip(`could not be read: ${(err as NodeJS.ErrnoException).code ?? why(err)}`);
       continue;
     }
 
-    const tree = parser.parse(text);
-    if (!tree) continue;
-    const rootNode = tree.rootNode;
-    const parseErrors = rootNode.hasError ? countErrors(rootNode) : 0;
-    if (parseErrors > 0) filesWithParseErrors++;
-
-    const isPython = file.language === 'python';
-    const symbols = isPython ? pythonSymbols(rootNode) : jsSymbols(rootNode);
-    const imports = isPython ? pythonImports(rootNode) : jsImports(rootNode);
-
-    const repoRoot = repoOf.get(file.path) ?? '';
-    for (const imp of imports) {
-      imp.resolved = resolveImport(imp.raw, file.path, file.language!, repoRoot, index);
+    // Normally ready at once. After a runtime has been let go of, the next file loads a fresh
+    // one. The parser is read AFTER the last await, so from here to the end of this file nothing
+    // awaits, and no other digest can let go of the runtime this file is parsed on.
+    let ready = readyParser(language);
+    try {
+      for (let tries = 0; !ready && tries < 3; tries++) {
+        await initParsers([language]);
+        ready = readyParser(language);
+      }
+    } catch (err) {
+      skip(`the parser could not be started: ${why(err)}`);
+      continue;
+    }
+    if (!ready) {
+      skip('the parser could not be started');
+      continue;
     }
 
-    extracts.push({ path: file.path, language: file.language!, symbols, imports, parseErrors });
-    tree.delete();
+    // Content that has already killed a runtime is not given the chance to do it again. Checked
+    // here, after the last await, because another digest may have learned it while this one waited.
+    const fatal = fatalContent.size > 0 ? fatalContent.get(contentKey(language, text)) : undefined;
+    if (fatal) {
+      skip(fatal);
+      continue;
+    }
+
+    largest = Math.max(largest, text.length);
+    let tree: Tree | null = null;
+    try {
+      tree = ready.parser.parse(text);
+      if (!tree) {
+        skip('the parser returned no tree');
+        continue;
+      }
+      const rootNode = tree.rootNode;
+      const parseErrors = rootNode.hasError ? countErrors(rootNode) : 0;
+
+      const isPython = language === 'python';
+      const symbols = isPython ? pythonSymbols(rootNode) : jsSymbols(rootNode);
+      const imports = isPython ? pythonImports(rootNode) : jsImports(rootNode);
+
+      const repoRoot = repoOf.get(file.path) ?? '';
+      for (const imp of imports) {
+        imp.resolved = resolveImport(imp.raw, file.path, language, repoRoot, index);
+      }
+
+      if (parseErrors > 0) filesWithParseErrors++;
+      extracts.push({ path: file.path, language, symbols, imports, parseErrors });
+    } catch (err) {
+      const reason = why(err);
+      skip(reason);
+      if (isTrap(err)) {
+        // A wasm trap: this copy of the parser cannot be trusted again, and after an abort it
+        // holds its whole heap. Let go of it, and never parse this content again.
+        fatalContent.set(contentKey(language, text), reason);
+        release(ready.rt);
+      } else {
+        // A plain error leaves the copy sound, but tree-sitter resumes an interrupted parse on
+        // the parser's next call, so the next file must not start inside this one's.
+        try { ready.parser.reset(); } catch { release(ready.rt); }
+      }
+    }
+    // A runtime that has been let go of can free nothing, and needs to free nothing. Freeing can
+    // need memory too; a copy that traps here is let go of like any other (the extract stands).
+    if (tree && runtime === ready.rt) {
+      try { tree.delete(); } catch (err) { if (isTrap(err)) release(ready.rt); }
+    }
   }
+
+  // Review S1: let go of a copy that a large file grew, or it keeps that heap for the life of the process.
+  if (largest > LARGE_TEXT && runtime) release(runtime);
 
   const edges: Array<{ from: string; to: string }> = [];
   const inDegree: Record<string, number> = {};
@@ -591,5 +783,6 @@ export async function extract(root: string, files: FileRecord[]): Promise<Extrac
         filesWithParseErrors,
       },
     },
+    unparsed,
   };
 }
