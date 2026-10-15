@@ -799,6 +799,82 @@ describe('AC4: a rebuild the reader asks for re-renders', () => {
   }, 60_000);
 });
 
+describe('AC8: only repo-tour\'s own pages change its list and its model (folded in from T-32)', () => {
+  // These routes take a text/plain POST, which another site's page can send without a preflight.
+  // /api/llm-set is the serious one: switched to codex, the next build sends a loaded repository's
+  // source to another vendor under the owner's own login. Each route refuses another site before it
+  // reads the body: a body that is not JSON gets the 403, not a parse error.
+  async function withServer(use: (port: number, server: RepoTourServer, under: string) => Promise<void>): Promise<void> {
+    const under = scratch('own-pages');
+    const server = new RepoTourServer({ statePath: path.join(under, 'state.json'), interpret: false, port: 0 });
+    const { port, close } = await server.listen();
+    try { await use(port, server, under); } finally {
+      await close();
+      await settle(server);
+      fs.rmSync(under, { recursive: true, force: true });
+    }
+  }
+  const post = async (port: number, route: string, body: string, site?: string): Promise<number> => (await fetch(`http://127.0.0.1:${port}${route}`, {
+    method: 'POST',
+    headers: { 'content-type': 'text/plain;charset=UTF-8', ...(site ? { 'sec-fetch-site': site } : {}) },
+    body,
+  })).status;
+  const folder = (under: string, name: string): string => {
+    const dir = path.join(under, name);
+    fs.mkdirSync(dir, { recursive: true });
+    return dir;
+  };
+
+  it('POST /api/add', async () => {
+    await withServer(async (port, server, under) => {
+      const theirs = folder(under, 'theirs');
+      const loaded = (p: string): boolean => server.listRepos().some((r) => r.path === p);
+      expect.soft(await post(port, '/api/add', 'not json', 'cross-site'), 'another site, before the body is read').toBe(403);
+      expect.soft(await post(port, '/api/add', JSON.stringify({ path: theirs }), 'cross-site'), 'another site').toBe(403);
+      expect(loaded(theirs), 'another site must not load a folder').toBe(false);
+
+      const ours = folder(under, 'ours');
+      const plain = folder(under, 'plain');
+      expect(await post(port, '/api/add', JSON.stringify({ path: ours }), 'same-origin'), 'repo-tour\'s own page').toBe(200);
+      expect(await post(port, '/api/add', JSON.stringify({ path: plain })), 'a caller that is not a browser').toBe(200);
+      expect(loaded(ours) && loaded(plain), 'both still load').toBe(true);
+    });
+  }, 60_000);
+
+  it('POST /api/remove', async () => {
+    await withServer(async (port, server, under) => {
+      const repo = folder(under, 'kept');
+      server.addRepo(repo);
+      const loaded = (): boolean => server.listRepos().some((r) => r.path === repo);
+      expect.soft(await post(port, '/api/remove', 'not json', 'cross-site'), 'another site, before the body is read').toBe(403);
+      expect.soft(await post(port, '/api/remove', JSON.stringify({ path: repo }), 'cross-site'), 'another site').toBe(403);
+      expect(loaded(), 'another site must not unload a repository').toBe(true);
+
+      expect(await post(port, '/api/remove', JSON.stringify({ path: repo }), 'same-origin'), 'repo-tour\'s own page').toBe(200);
+      expect(loaded(), 'removed by its own page').toBe(false);
+      server.addRepo(repo);
+      expect(await post(port, '/api/remove', JSON.stringify({ path: repo })), 'a caller that is not a browser').toBe(200);
+      expect(loaded(), 'and by a caller that is not a browser').toBe(false);
+    });
+  }, 60_000);
+
+  it('POST /api/llm-set', async () => {
+    await withServer(async (port, server) => {
+      const before = server.getChoice();
+      expect.soft(await post(port, '/api/llm-set', 'not json', 'cross-site'), 'another site, before the body is read').toBe(403);
+      expect.soft(await post(port, '/api/llm-set', JSON.stringify({ provider: 'codex' }), 'cross-site'), 'another site').toBe(403);
+      expect.soft(await post(port, '/api/llm-set', JSON.stringify({ for: 'tutor', provider: 'codex' }), 'cross-site'), 'another site, for the tutor').toBe(403);
+      expect(server.getChoice(), 'another site must not choose the model a build sends source to').toEqual(before);
+      expect(server.getTutorChoice().provider, 'nor the tutor\'s').toBe(before.provider);
+
+      expect(await post(port, '/api/llm-set', JSON.stringify({ provider: 'codex' }), 'same-origin'), 'repo-tour\'s own page').toBe(200);
+      expect(server.getChoice().provider).toBe('codex');
+      expect(await post(port, '/api/llm-set', JSON.stringify({ provider: before.provider })), 'a caller that is not a browser').toBe(200);
+      expect(server.getChoice().provider).toBe(before.provider);
+    });
+  }, 60_000);
+});
+
 describe('AC7: a rebuild waits until the page that started it has been sent', () => {
   it('opening a stale page answers before the rebuild does any work', async () => {
     // The digest's first stretch is synchronous: the inventory walks and hashes the whole tree
