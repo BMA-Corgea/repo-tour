@@ -1112,6 +1112,11 @@ export class RepoTourServer {
       }
 
       if (route === '/api/llm-set' && req.method === 'POST') {
+        // The choice decides where a build sends a loaded repository's source: another site's
+        // page switching it to another vendor would send it there under the owner's own login.
+        if (fromAnotherSite(req)) {
+          return this.json(res, 403, { error: 'the model is only chosen from repo-tour\'s own pages' });
+        }
         const body = JSON.parse(await this.readBody(req)) as Partial<LlmChoice> & { for?: string };
         if (body.provider && !providerById(body.provider)) {
           return this.json(res, 400, { error: `no such provider: ${body.provider}` });
@@ -1171,6 +1176,9 @@ export class RepoTourServer {
       }
 
       if (route === '/api/add' && req.method === 'POST') {
+        if (fromAnotherSite(req)) {
+          return this.json(res, 403, { error: 'a repository is only loaded from repo-tour\'s own pages' });
+        }
         const { path: p } = JSON.parse(await this.readBody(req)) as { path?: string };
         if (!p) return this.json(res, 400, { error: 'a path is required' });
         const added = this.addRepo(p);
@@ -1181,6 +1189,9 @@ export class RepoTourServer {
       }
 
       if (route === '/api/remove' && req.method === 'POST') {
+        if (fromAnotherSite(req)) {
+          return this.json(res, 403, { error: 'a repository is only removed from repo-tour\'s own pages' });
+        }
         const { path: p } = JSON.parse(await this.readBody(req)) as { path?: string };
         if (p) this.removeRepo(p);
         return this.json(res, 200, { ok: true });
