@@ -98,6 +98,17 @@ export interface FileExtract {
   parseErrors: number;
 }
 
+/**
+ * T-31 — a file the digest could not read the structure of: it could not be read, the parser
+ * gave no tree for it, or its tree could not be walked. It has no extract, so the tour goes
+ * around it. The reason is said where the owner looks, never swallowed.
+ */
+export interface UnparsedFile {
+  path: string;
+  /** one line: the failure's own words, or a plain sentence when the parser ran out of memory */
+  reason: string;
+}
+
 export interface ImportGraph {
   nodes: string[];
   edges: Array<{ from: string; to: string }>;
