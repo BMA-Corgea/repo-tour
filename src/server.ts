@@ -131,16 +131,21 @@ function clearBuilding(repoPath: string): void {
 /** A marker older than this is from a run nobody is waiting for any more. */
 const RESUME_WINDOW_MS = 6 * 60 * 60 * 1000;
 
+/** How far ahead of now a marker may be dated and still be this machine's own. */
+const CLOCK_SLACK_MS = 10 * 60 * 1000;
+
 /**
  * A build the last run did not finish, if it is recent enough to resume, and whether it was asked
- * for. A marker dated in the future is nobody's build: the marker lives in the toured repository,
- * which can ship one, and a negative age would pass any window.
+ * for. A marker dated well in the future is nobody's build: the marker lives in the toured
+ * repository, which can ship one, and a negative age would pass any window. A few minutes ahead is
+ * allowed, because a clock can step back between the marker's last write and a restart (a fast
+ * clock corrected at boot), and that must not lose a Rebuild the reader pressed.
  */
 function wasBuilding(repoPath: string): { force: boolean } | null {
   try {
     const m = JSON.parse(fs.readFileSync(markerPath(repoPath), 'utf8')) as { startedAt: string; force?: boolean };
     const age = Date.now() - Date.parse(m.startedAt);
-    return age >= 0 && age < RESUME_WINDOW_MS ? { force: m.force === true } : null;
+    return age > -CLOCK_SLACK_MS && age < RESUME_WINDOW_MS ? { force: m.force === true } : null;
   } catch { return null; }
 }
 
@@ -282,7 +287,12 @@ function codeVersion(dir: string, ext: string, self: string): string {
     for (const name of names) {
       const abs = path.join(at, name);
       let st: fs.Stats;
-      try { st = fs.statSync(abs); } catch { complete = false; continue; }
+      try { st = fs.statSync(abs); } catch (e) {
+        // A link to nothing (an editor's lock file) cannot be code that runs: nothing could load
+        // it. Anything else unreadable leaves the walk incomplete.
+        if ((e as NodeJS.ErrnoException).code !== 'ENOENT') complete = false;
+        continue;
+      }
       if (st.isDirectory()) { walk(abs); continue; }
       if (!st.isFile() || !name.endsWith(ext)) continue;
       // The path as well as the bytes, so a renamed module is a different build.
@@ -293,7 +303,12 @@ function codeVersion(dir: string, ext: string, self: string): string {
     }
   };
   walk(dir);
-  if (!complete || !sawSelf) h.update(`unread:${process.pid}:${Date.now()}:${randomBytes(8).toString('hex')}`);
+  if (!complete || !sawSelf) {
+    h.update(`unread:${process.pid}:${Date.now()}:${randomBytes(8).toString('hex')}`);
+    // Said out loud: a trip that never clears would otherwise rebuild every page on every start,
+    // with nothing to say why.
+    console.warn(`repo-tour: could not read every module under ${dir}, so this run rebuilds each cached tour page it opens`);
+  }
   return h.digest('hex');
 }
 
