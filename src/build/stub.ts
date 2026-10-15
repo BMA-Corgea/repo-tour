@@ -76,7 +76,13 @@ interface JsScan {
   arrows: Arrow[];
   /** the first `=` at depth 0 outside a generic's `<…>` — where a variable's or a type's value starts — or -1 */
   assignAt: number;
+  /** the first conditional `?` at depth 0 (`T extends U ? A : B`), or -1 */
+  conditionalAt: number;
 }
+
+/** Where a `<` may open a JSX element: where an expression may start. */
+const JSX_AFTER = new Set(['', '(', ',', '=', ':', '[', '!', '&', '|', '?', '{', ';', '>']);
+const JSX_AFTER_WORD = new Set(['return', 'yield', 'default']);
 
 /**
  * After one of these, a `/` starts a regex; after anything else it divides. `<` is not one: `</`
@@ -104,10 +110,15 @@ function isWordChar(ch: string): boolean {
  * Two readings are approximate, and both only ever narrow what may be cut: a `<` straight after
  * a name opens a generic's `<…>` (dropped again at a `;`, a conditional's `?` or an outer closer,
  * so a comparison like `i<n` costs nothing), and a quote that reaches the end of its line ends
- * there (JavaScript has no multi-line quotes, so that is JSX text).
+ * there (JavaScript has no multi-line quotes).
+ *
+ * With `jsx` (a `.tsx` or `.js` file), a `<` where an expression may start, followed by a tag
+ * name, opens a JSX element. Its tag holds attributes (whose strings may span lines), its children
+ * are text up to a `<` or a `{`, and every `{ … }` inside it is a container that is never a body.
+ * So an apostrophe, a URL or a `1)` in what the page says is read as the text it is.
  */
-function scanJs(text: string): JsScan | null {
-  const stack: Array<{ ch: string; at: number; depth: number; inParens: boolean; inAngle: boolean; typeLiteral: boolean }> = [];
+function scanJs(text: string, jsx: boolean): JsScan | null {
+  const stack: Array<{ ch: string; at: number; depth: number; inParens: boolean; inAngle: boolean; typeLiteral: boolean; inTag?: boolean }> = [];
   let notParens = 0; // stack entries that are not a `(`
   const angles: number[] = []; // the stack depth at which each open generic `<` was seen
   const ternaries: number[] = [0]; // the conditional `?`s still waiting for their `:`, per bracket level
@@ -115,6 +126,7 @@ function scanJs(text: string): JsScan | null {
   const arrows: Arrow[] = [];
   const openArrows = new Map<number, Arrow[]>(); // expression-bodied arrows still running, by depth
   let assignAt = -1;
+  let conditionalAt = -1;
   let inTemplate = false;
   let prev = ''; // the last significant character; 'w' after a word or any other value
   let word = '';
@@ -129,9 +141,55 @@ function scanJs(text: string): JsScan | null {
   const dropAngles = (above: number): void => {
     while (angles.length > 0 && angles[angles.length - 1]! >= above) angles.pop();
   };
+  const pop = (at: number) => {
+    // A closer at an arrow's own depth closes the bracket around it, which ends its expression.
+    for (const a of openArrows.get(stack.length) ?? []) a.end = at;
+    openArrows.delete(stack.length);
+    const open = stack.pop();
+    if (!open) return null;
+    if (open.ch !== '(') notParens--;
+    ternaries.pop();
+    dropAngles(stack.length + 1);
+    return open;
+  };
+  // After a JSX element closes, the code around it (if any) has just seen a value.
+  const afterElement = (): void => {
+    prev = 'w';
+    word = '';
+  };
 
   for (let i = 0; i < text.length; i++) {
     const ch = text[i]!;
+    const top = stack[stack.length - 1];
+
+    if (!inTemplate && top?.ch === '<jsx') {
+      if (top.inTag) {
+        if (ch === '/' && text[i + 1] === '>') { pop(i); i++; if (stack[stack.length - 1]?.ch !== '<jsx') afterElement(); }
+        else if (ch === '/' && text[i + 1] === '/') { const eol = text.indexOf('\n', i); i = eol === -1 ? text.length : eol; } // a comment between attributes
+        else if (ch === '/' && text[i + 1] === '*') {
+          const close = text.indexOf('*/', i + 2);
+          if (close === -1) return null;
+          i = close + 1;
+        } else if (ch === '>') top.inTag = false;
+        else if (ch === '"' || ch === "'") {
+          const close = text.indexOf(ch, i + 1); // a JSX attribute string has no escapes and may span lines
+          if (close === -1) return null;
+          i = close;
+        } else if (ch === '{') push('{jsx', i);
+        else if (ch === '<' && /[A-Za-z_$]/.test(text[i + 1] ?? '')) { push('<jsx', i); stack[stack.length - 1]!.inTag = true; }
+      } else if (ch === '{') push('{jsx', i);
+      else if (ch === '<' && text[i + 1] === '/') {
+        const close = text.indexOf('>', i + 2);
+        if (close === -1) return null;
+        pop(i);
+        i = close;
+        if (stack[stack.length - 1]?.ch !== '<jsx') afterElement();
+      } else if (ch === '<' && /[A-Za-z_$>]/.test(text[i + 1] ?? '')) {
+        push('<jsx', i);
+        stack[stack.length - 1]!.inTag = true;
+      }
+      continue; // anything else in a tag is an attribute's name or `=`, and in children it is text
+    }
 
     if (inTemplate) {
       if (ch === '\\') i++;
@@ -204,18 +262,16 @@ function scanJs(text: string): JsScan | null {
     }
 
     if (ch === ')' || ch === ']' || ch === '}') {
-      // A closer at an arrow's own depth closes the bracket around it, which ends its expression.
-      for (const a of openArrows.get(stack.length) ?? []) a.end = i;
-      openArrows.delete(stack.length);
-      const open = stack.pop();
+      const open = pop(i);
       if (!open) return null;
-      if (open.ch !== '(') notParens--;
-      ternaries.pop();
-      dropAngles(stack.length + 1);
       if (open.ch === '${') {
         if (ch !== '}') return null;
         inTemplate = true;
         continue;
+      }
+      if (open.ch === '{jsx') {
+        if (ch !== '}') return null;
+        continue; // back in the element's tag or children
       }
       if (CLOSER_OF[open.ch === '[index' ? '[' : open.ch] !== ch) return null;
       if (open.ch === '{' || open.ch === '[') {
@@ -253,6 +309,14 @@ function scanJs(text: string): JsScan | null {
       continue;
     }
 
+    // A JSX element, where an expression may start. `<T,>(` and `<T extends U>(` are a generic arrow's type parameters.
+    if (ch === '<' && jsx && (JSX_AFTER.has(prev) || (prev === 'w' && JSX_AFTER_WORD.has(word)))
+      && /[A-Za-z_$>]/.test(text[i + 1] ?? '') && !/^<[A-Za-z_$][\w$]*\s*(?:,|extends\b)/.test(text.slice(i, i + 64))) {
+      push('<jsx', i);
+      stack[stack.length - 1]!.inTag = true;
+      continue;
+    }
+
     // A `!` straight after a value is a non-null assertion, not a `not`: the value is still the last thing seen.
     if (ch === '!' && text[i + 1] !== '=' && (prev === ')' || prev === ']' || (prev === 'w' && !REGEX_AFTER_WORD.has(word)))) continue;
     // A `<` straight after a name opens a generic's `<…>`; its `>` closes it. A `;` or an outer closer ends a comparison taken for one.
@@ -263,6 +327,7 @@ function scanJs(text: string): JsScan | null {
     if (ch === '?' && text[i + 1] !== '.' && text[i + 1] !== '?' && prev !== '?') {
       ternaries[ternaries.length - 1]!++;
       dropAngles(stack.length);
+      if (stack.length === 0 && conditionalAt === -1) conditionalAt = i;
     }
     if (ch === ':') {
       typeColon = !(ternaries[ternaries.length - 1]! > 0);
@@ -278,7 +343,7 @@ function scanJs(text: string): JsScan | null {
   const trimmed = text.trimEnd();
   const rangeEnd = trimmed.endsWith(';') ? trimmed.length - 1 : text.length;
   for (const a of arrows) if (a.end === null) a.end = rangeEnd;
-  return { groups, arrows, assignAt };
+  return { groups, arrows, assignAt, conditionalAt };
 }
 
 /** The leading whitespace of the line that holds offset `at`. */
@@ -326,10 +391,10 @@ const VARIABLE = /^\s*(?:export\s+)?(?:declare\s+)?(?:const|let|var)\s+(?!enum\b
  * left exactly as it was. The TODO line sits two spaces inside the line it opens, and a closing
  * line keeps its own indentation, so a function inside a wrapper still reads as one.
  */
-function stubJsLikeRange(lines: string[], start: number, end: number, questions: StubQuestion[], index: number): string[] {
+function stubJsLikeRange(lines: string[], start: number, end: number, language: string, questions: StubQuestion[], index: number): string[] {
   const untouched = lines.slice(start - 1, end);
   const text = untouched.join('\n');
-  const scan = scanJs(text);
+  const scan = scanJs(text, language !== 'typescript');
   if (scan === null) return untouched;
   const todo = todoLine('//', questions, index);
   const out = VARIABLE.test(text) ? stubValue(text, scan, todo)
@@ -378,6 +443,7 @@ function stubTypeAlias(text: string, scan: JsScan, todo: string): string | null 
   if (scan.assignAt === -1) return null;
   const blocks = scan.groups.filter((g) => g.kind === '{' && g.open > scan.assignAt && g.inParens);
   const top = blocks.find((g) => g.depth === 0 && !g.inAngle);
+  if (top && scan.conditionalAt > scan.assignAt) return cutPair(text, top, todo); // a conditional type keeps its `? … : …`
   if (top) {
     // Main's cut, which hid a whole union: what follows this `{` at the top level is complete
     // groups (`| { … }`, `& Reason`, `[]`), so dropping it with the inside keeps the range balanced.
@@ -509,7 +575,7 @@ export function stubFile(source: string, loadBearing: Range[], language: string,
     if (range.startLine > cursor) out.push(...lines.slice(cursor - 1, range.startLine - 1));
 
     if (JS_LANGUAGES.has(language)) {
-      out.push(...stubJsLikeRange(lines, range.startLine, range.endLine, questions, range.originalIndex));
+      out.push(...stubJsLikeRange(lines, range.startLine, range.endLine, language, questions, range.originalIndex));
     } else if (language === 'python') {
       out.push(...stubPythonRange(lines, range.startLine, range.endLine, questions, range.originalIndex));
     } else {

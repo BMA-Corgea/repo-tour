@@ -279,6 +279,88 @@ const FILES: Record<string, string> = {
     '}, []);',
     '',
   ].join('\n'),
+
+  // ---- review attempt 1, BLOCKER 1: JSX text is text. Main hid each of these bodies.
+  'src/Notice.tsx': [
+    'export function Notice(props: Props) {',
+    "  const label = props.sent ? 'done' : 'waiting';",
+    "  return <div title={label}>{props.sent && <p>It's sent.</p>}</div>;",
+    '}',
+    '',
+  ].join('\n'),
+  'src/Help.tsx': [
+    'export function Help({ url }: { url: string }) {',
+    '  const label = url.trim();',
+    '  return <p>{url && <a href={url}>https://example.com/help</a>} or {label}</p>;',
+    '}',
+    '',
+  ].join('\n'),
+  'src/Steps.tsx': [
+    'export function Steps() {',
+    '  const n = 2;',
+    '  return <ol><li>1) Install</li><li>{n}) Run</li></ol>;',
+    '}',
+    '',
+  ].join('\n'),
+  'src/Status.tsx': [
+    'export function Status({ ok }: { ok: boolean }) {',
+    "  const tone = ok ? 'good' : 'bad';",
+    "  return <span className={tone}>{ok ? <b>It's on</b> : null}</span>;",
+    '}',
+    '',
+  ].join('\n'),
+  'src/Thanks.tsx': [
+    'export function Thanks({ who }: { who: string }) {',
+    '  const name = who.trim();',
+    '  return <p>Thanks, {name} :)</p>;',
+    '}',
+    '',
+  ].join('\n'),
+  'src/notice.js': [
+    'function Notice(props) {',
+    "  const label = props.sent ? 'done' : 'waiting';",
+    "  return <div title={label}>{props.sent && <p>It's sent.</p>}</div>;",
+    '}',
+    '',
+  ].join('\n'),
+  'src/Banner.tsx': [
+    'export function Banner() {',
+    '  const year = 2026;',
+    '  return (<div className="banner',
+    '    wide">(c) {year}</div>);',
+    '}',
+    '',
+  ].join('\n'),
+
+  // A comment between a tag's attributes (found by the hide probe: the owner's components do this).
+  'src/Cover.tsx': [
+    'export function Cover({ src }: { src: string }) {',
+    "  const alt = '';",
+    '  return (',
+    '    <img',
+    "      // the cover's figures are all in the text below",
+    '      src={src} /* decorative: */ alt={alt}',
+    '    />',
+    '  );',
+    '}',
+    '',
+  ].join('\n'),
+
+  // ---- a conditional type: its `? … : …` must survive the cut (found by the hide probe after slice 1)
+  'src/unwrap.ts': [
+    'export type Unwrap<T> = T extends Promise<infer U>',
+    '  ? { value: U; settled: true }',
+    '  : { value: T; settled: false };',
+    '',
+  ].join('\n'),
+  'src/isglobal.ts': [
+    'export type IsGlobal<N extends string> = typeof globalThis extends {',
+    '  [K in N]: unknown;',
+    '}',
+    '  ? true',
+    '  : false;',
+    '',
+  ].join('\n'),
   'src/Row.tsx': [
     'export const Row = ({ cells }: { cells: string[] }) => (',
     '  <tr>',
@@ -576,6 +658,20 @@ describe('T-30 AC2 — the same defect in other shapes: each practice file parse
     for (const member of ["kind: 'circle'", "kind: 'square'", "kind: 'rect'"]) expectHidden(p, member);
   });
 
+  it('a conditional type keeps its `? … : …`: one branch is hidden and the file parses', () => {
+    const p = practiceFor('src/unwrap.ts', [1, 3]);
+    expectParses(p);
+    expectHidden(p, 'settled: true');
+    expectKept(p, ': { value: T; settled: false };');
+  });
+
+  it('a conditional type whose check is a type literal keeps its branches', () => {
+    const p = practiceFor('src/isglobal.ts', [1, 5]);
+    expectParses(p);
+    expectHidden(p, '[K in N]');
+    expectKept(p, '  ? true\n  : false;');
+  });
+
   it('a union with a parenthesised intersection: both members are hidden', () => {
     const p = practiceFor('src/gate.ts', [1, 1]);
     expectParses(p);
@@ -644,6 +740,23 @@ describe('T-30 AC2 — the same defect in other shapes: each practice file parse
     expectKept(p, 'useCallback<(e: MouseEvent) => void>((e) => {');
     expectHidden(p, 'preventDefault');
   });
+
+  for (const [file, lines, answer, what] of [
+    ['src/Notice.tsx', [1, 4], "const label = props.sent ? 'done'", "an apostrophe in JSX text (It's sent.)"],
+    ['src/Help.tsx', [1, 4], 'url.trim()', 'a URL in JSX text (https://…)'],
+    ['src/Steps.tsx', [1, 4], 'const n = 2', 'prose brackets in JSX text (1) Install)'],
+    ['src/Status.tsx', [1, 4], "ok ? 'good' : 'bad'", 'an apostrophe in a conditional\'s JSX branch'],
+    ['src/Thanks.tsx', [1, 4], 'who.trim()', 'a smiley in JSX text (:))'],
+    ['src/notice.js', [1, 4], "const label = props.sent ? 'done'", 'JSX in a .js file, with an apostrophe'],
+    ['src/Banner.tsx', [1, 5], 'const year = 2026', 'a JSX attribute string that spans two lines'],
+    ['src/Cover.tsx', [1, 9], "const alt = ''", "a comment between a tag's attributes, with an apostrophe"],
+  ] as Array<[string, [number, number], string, string]>) {
+    it(`JSX text is text: ${what} does not stop the body being hidden`, () => {
+      const p = practiceFor(file, lines);
+      expectParses(p);
+      expectHidden(p, answer);
+    });
+  }
 
   it('every JS/TS practice file this plan produces parses (the sweep)', () => {
     expect(practice.size, 'the plan wrote fewer practice files than the fixture tree has shapes').toBeGreaterThanOrEqual(16);
