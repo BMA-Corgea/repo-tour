@@ -10,13 +10,14 @@ here and found via the reference table below.
 <!-- What is in motion right now: one line per active ticket/effort —
      what, why, where it stands, what is next. Never pruned while live. -->
 
-- **Foreman run 2026-10-13 (GA-13, the owner's decision form):** T-14, T-20 and T-16 are on main
-  (`0a6c5b0`, `83eba8e`, `85ef244`) and wait at uat for the owner's accept. **T-19 is parked by the
-  owner** ("not now"). Waiting on the owner's go: **T-29** (cached tour pages never rebuild after most
-  code changes, so a tour opened from cache can show the old tutor panel), and three bugs the seats
-  found that main has too: **T-21**, **T-30**, **T-31** (below). **All six pieces the owner described
-  on day one are shipped**: the sixth, GONS integration, was built on the GUTS side (below), so
-  **T-7 is not needed**.
+- **Foreman run 2026-10-14 (GA-14: the owner's sign-off form, then "go ahead and get started on a
+  foreman loop"):** the owner accepted **T-14, T-20 and T-16**, now complete. **T-29 is on main**
+  (`7d36f02`) and waits at uat: a cached tour page is reused only while the code that made it runs, and
+  Rebuild re-renders. It also took in T-32's three cross-site guards (closed done-elsewhere). **T-30** and
+  **T-31** are in review and landing, one at a time. T-21 is "not now" (the owner, GA-14) and T-19 stays
+  parked. The seats found more that main has too, all waiting on the owner's go: T-33, T-34, T-36, T-37,
+  T-38 and T-44 (below). **All six pieces the owner described on day one are shipped**: the sixth, GONS
+  integration, was built on the GUTS side (below), so **T-7 is not needed**.
 - **GONS integration: built on the GUTS side, so this repo has nothing to do.** 2026-08-27, on the owner's instruction, GUTS
   ticket **T-55** was filed ("Bring repo-tour's PR tours into the GONS Office PR section")
   with a first-hand brief at `GUTS/.autodev/handoffs/T-55.md`, and the live `guts-bridge`
@@ -30,41 +31,48 @@ here and found via the reference table below.
   Known gap, logged LOW on GUTS's side: the Ask panel in a GONS-served tour needs this repo's
   own server running.
 - **T-19** (bug) — The codex provider still gets a shell: its read-only sandbox is not 'no tools' — intake
-- **T-14** (techdebt) — Harden T-11's consumer tests: prove prepare rebuilds dist, and make alternateCs… — uat
-- **T-20** (techdebt) — Isolation tidy-ups from T-18 review attempt 4: latch test, empty-dir cleanup, c… — uat
-- **T-29** (bug) — Cached tour pages outlive the code that made them: the page version hashes 5 of… — intake
-- **T-16** (feature) — Module-pattern and .call(this) IIFEs: record their body declarations too — uat
 - **T-21** (bug) — A Ctrl-C in the first second of a model call, through the ./repo-tour launcher,… — intake
-- **T-30** (bug) — Build scaffolds that do not parse: a step whose first brace opens inside an unc… — intake
-- **T-31** (bug) — One file with a long expression chain aborts the whole digest: the import walk … — intake
+- **T-29** (bug) — Cached tour pages outlive the code that made them: the page version hashes 5 of… — uat
+- **T-30** (bug) — Build scaffolds that do not parse: a step whose first brace opens inside an unc… — auto-review
+- **T-44** (techdebt) — T-20's signal tests fail under heavy load: a 3 s exit budget against a startup … — intake
+- **T-31** (bug) — One file with a long expression chain aborts the whole digest: the import walk … — gate
+- **T-33** (bug) — After an update every open tour reloads at once, and each waits behind the rebu… — intake
+- **T-34** (bug) — Another site's page can start a tour's rebuild with a plain GET of /r (an image… — intake
+- **T-36** (bug) — A file name with a double quote runs script on the repo page and the digest vie… — intake
+- **T-37** (bug) — PR tours: a file not read on one side reads as its whole public surface added o… — intake
+- **T-38** (techdebt) — Parser memory: a file near the parser's limit still peaks at about 4 GB, and wo… — intake
 
 ## Waiting on
 
 <!-- Holds: "waiting at <gate> on <keyholder> since <date>, ping sent to
      <channel>" — no session should discover a hold by archaeology (ruling 24). -->
 
-- **T-14, T-20, T-16** — waiting at accept on the owner since 2026-10-13; the foreman brings all three
-  in one form.
-- **T-29, T-21, T-30, T-31** — waiting at spec_ready (a go-ahead) on the owner since 2026-10-13.
+- **T-29** — waiting at accept on the owner since 2026-10-15; the foreman brings it, with T-30 and T-31,
+  in one form at the end of the run.
+- **T-33, T-34, T-36, T-37, T-38, T-44** — at intake, waiting on the owner's go (the same form).
+- **T-21** — the owner said "not now" (GA-14). **T-19** — parked by the owner (GA-13).
 
 ## Recent past (~15 items / ~30 days)
 
 <!-- One line per completed item, WITH the why. Newest first. Prune from the
      bottom; the permanent record lives in tickets, events.jsonl, and wiki. -->
 
-- 2026-10-13 **T-16 landed** (`85ef244`, at uat) — a top-level `const x = (function () {...})()`, and
-  `(function () {...}).call(this)` with its `.apply`/`.bind` forms, now give up their inner functions as
-  symbols, tour stops and build steps. Why `src/build/plan.ts` changed too: the wrapper's variable spans
-  the whole body, and the biggest-span-first rule dropped everything inside it. Review caught the new
-  step check comparing every pair (20 s for a 60,000-variable script; now 57 ms, with a 1 s test).
-- 2026-10-13 **T-20 landed** (`83eba8e`, at uat) — each model call stands in its own empty folder, gone
-  when the call settles; the "run `claude update`" hint reaches the reader on one line; codex's answer
-  file lives inside its private folder. Folded in: `repo-tour pr` used to ignore the first Ctrl-C or
-  SIGTERM and keep paying for model calls, which is how GONS stops a run on timeout. It now cleans up
-  and ends by the signal (130/143).
-- 2026-10-13 **T-14 landed** (`0a6c5b0`, at verify) — the pack test builds from a temp copy, so it proves
-  `prepare` builds `dist/` without rewriting this checkout's: it had rewritten all 123 files on every run,
-  and GONS runs that `dist/`. A wrong asset root now fails loudly instead of giving unstyled pages.
+- 2026-10-15 **T-29 landed** (`7d36f02`, at uat) — the page version hashes the whole running build, once,
+  at load, so a cached page is reused only while the code that made it runs; the owner's 2026-09-22
+  autoSQL page now rebuilds behind them on the next open, with the T-18 tutor panel, and its 34
+  interpreted stops cost 0 model calls. Rebuild re-renders. Why it grew: the review showed that forcing
+  the build routes let any site trigger paid re-renders, so they answer only repo-tour's own pages.
+- 2026-10-15 **T-32 CLOSED done-elsewhere** (T-29's AC8, `7d36f02`) — `/api/add`, `/api/remove` and
+  `/api/llm-set` acted on another site's request; with codex logged in, a page anywhere could switch the
+  provider and send a toured repo's source to another vendor. Folded into T-29: same file, same rule.
+- 2026-10-14 **T-16 COMPLETE** (accepted by the owner, GA-14; landed `85ef244`) — a top-level
+  `const x = (function () {...})()`, and `(function () {...}).call(this)` with its `.apply`/`.bind`
+  forms, give up their inner functions as symbols, tour stops and build steps.
+- 2026-10-14 **T-20 COMPLETE** (accepted, GA-14; landed `83eba8e`) — each model call stands in its own
+  empty folder; and `repo-tour pr`, which GONS stops by signal on timeout, now cleans up and ends by the
+  signal (130/143) instead of paying on.
+- 2026-10-14 **T-14 COMPLETE** (accepted, GA-14; landed `0a6c5b0`) — the pack test packs a temp copy, so
+  it no longer rewrites the `dist/` GONS runs; a wrong asset root fails loudly.
 - 2026-10-07 **T-18 COMPLETE** — the tutor, accepted by the owner (GA-12: "it looks good. I approve")
   after a rework from his first test drive: a silent stream Firefox closed on a network change,
   and every model call running as a full agent inside the toured repo. Why two review rounds:
