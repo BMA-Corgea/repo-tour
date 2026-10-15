@@ -13,8 +13,10 @@ here and found via the reference table below.
 - **Foreman run 2026-10-14 (GA-14: the owner's sign-off form, then "go ahead and get started on a
   foreman loop"):** the owner accepted **T-14, T-20 and T-16**, now complete. **T-29 is on main**
   (`7d36f02`) and waits at uat: a cached tour page is reused only while the code that made it runs, and
-  Rebuild re-renders. It also took in T-32's three cross-site guards (closed done-elsewhere). **T-30** and
-  **T-31** are in review and landing, one at a time. T-21 is "not now" (the owner, GA-14) and T-19 stays
+  Rebuild re-renders. It also took in T-32's three cross-site guards (closed done-elsewhere). **T-31 is on main**
+  (`062c9b8`) and waits at uat: one file never stops a digest, and the repo page says which file was
+  not read and why. **T-30** is back in build after its review found three blockers (a cut can parse
+  and still hide the wrong block); its seat continues the rework, and it lands after a fresh review. T-21 is "not now" (the owner, GA-14) and T-19 stays
   parked. The seats found more that main has too, all waiting on the owner's go: T-33, T-34, T-36, T-37,
   T-38 and T-44 (below). **All six pieces the owner described on day one are shipped**: the sixth, GONS
   integration, was built on the GUTS side (below), so **T-7 is not needed**.
@@ -33,9 +35,9 @@ here and found via the reference table below.
 - **T-19** (bug) — The codex provider still gets a shell: its read-only sandbox is not 'no tools' — intake
 - **T-21** (bug) — A Ctrl-C in the first second of a model call, through the ./repo-tour launcher,… — intake
 - **T-29** (bug) — Cached tour pages outlive the code that made them: the page version hashes 5 of… — uat
-- **T-30** (bug) — Build scaffolds that do not parse: a step whose first brace opens inside an unc… — auto-review
+- **T-30** (bug) — Build scaffolds that do not parse: a step whose first brace opens inside an unc… — build
 - **T-44** (techdebt) — T-20's signal tests fail under heavy load: a 3 s exit budget against a startup … — intake
-- **T-31** (bug) — One file with a long expression chain aborts the whole digest: the import walk … — gate
+- **T-31** (bug) — One file with a long expression chain aborts the whole digest: the import walk … — uat
 - **T-33** (bug) — After an update every open tour reloads at once, and each waits behind the rebu… — intake
 - **T-34** (bug) — Another site's page can start a tour's rebuild with a plain GET of /r (an image… — intake
 - **T-36** (bug) — A file name with a double quote runs script on the repo page and the digest vie… — intake
@@ -47,8 +49,8 @@ here and found via the reference table below.
 <!-- Holds: "waiting at <gate> on <keyholder> since <date>, ping sent to
      <channel>" — no session should discover a hold by archaeology (ruling 24). -->
 
-- **T-29** — waiting at accept on the owner since 2026-10-15; the foreman brings it, with T-30 and T-31,
-  in one form at the end of the run.
+- **T-29, T-31** — waiting at accept on the owner since 2026-10-15; the foreman brings both in one form
+  at the end of the run.
 - **T-33, T-34, T-36, T-37, T-38, T-44** — at intake, waiting on the owner's go (the same form).
 - **T-21** — the owner said "not now" (GA-14). **T-19** — parked by the owner (GA-13).
 
@@ -57,6 +59,10 @@ here and found via the reference table below.
 <!-- One line per completed item, WITH the why. Newest first. Prune from the
      bottom; the permanent record lives in tickets, events.jsonl, and wiki. -->
 
+- 2026-10-15 **T-31 landed** (`062c9b8`, at uat) — the import walk is iterative, so a 20,000-term chain
+  digests and its far-end `require()` is found; a file that cannot be read is listed with its reason, on the
+  repo page too, and the rest of the tour goes on. Why the parser runtime is replaced after a failure: it is
+  one per process, so a file too big for it used to fail every later file, and its 2 GiB is now let go.
 - 2026-10-15 **T-29 landed** (`7d36f02`, at uat) — the page version hashes the whole running build, once,
   at load, so a cached page is reused only while the code that made it runs; the owner's 2026-09-22
   autoSQL page now rebuilds behind them on the next open, with the T-18 tutor panel, and its 34

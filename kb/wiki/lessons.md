@@ -10,6 +10,18 @@ One entry per lesson, newest first, each citing the ticket or incident it came f
 
 ---
 
+## A crash that kills a shared runtime is not a per-file failure (T-31, 2026-10-15)
+
+The parser runs in one WebAssembly runtime per process. A file too big for it aborted the runtime, and
+every later parse in the process failed with it, so a try/catch around one file guarded nothing. Twice
+the seat concluded the dead runtime's 2 GiB "cannot be freed", and twice its own probe held the
+reference. Node keeps a required module in two places, `require.cache` and the requiring module's
+`children`; deleting the cache entry alone frees nothing.
+
+**The rule:** handle a failure where the thing it breaks lives (here: replace the runtime, and remember
+the file so it is not paid for twice). Before saying memory cannot be freed, measure from a function
+whose locals die, and collect more than once.
+
 ## A stamp names the code that runs, and a route that does more is open to more callers (T-29, 2026-10-15)
 
 T-29's first stamp would have been read from disk on demand. A `dist/` server keeps its old code while
