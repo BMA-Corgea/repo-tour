@@ -10,13 +10,15 @@ here and found via the reference table below.
 <!-- What is in motion right now: one line per active ticket/effort —
      what, why, where it stands, what is next. Never pruned while live. -->
 
+- **Next foreman: read `.autodev/foreman/RESUME.md` first** (local; `.autodev/` is gitignored). The run of
+  2026-10-14/15 wound down at the shared meter's 90% line; T-30 is its first unfinished move.
 - **Foreman run 2026-10-14 (GA-14: the owner's sign-off form, then "go ahead and get started on a
   foreman loop"):** the owner accepted **T-14, T-20 and T-16**, now complete. **T-29 is on main**
   (`7d36f02`) and waits at uat: a cached tour page is reused only while the code that made it runs, and
   Rebuild re-renders. It also took in T-32's three cross-site guards (closed done-elsewhere). **T-31 is on main**
   (`062c9b8`) and waits at uat: one file never stops a digest, and the repo page says which file was
-  not read and why. **T-30** is back in build after its review found three blockers (a cut can parse
-  and still hide the wrong block); its seat continues the rework, and it lands after a fresh review. T-21 is "not now" (the owner, GA-14) and T-19 stays
+  not read and why. **T-30** is in build: its rework fixed the three blockers its review found (a cut
+  can parse and still hide the wrong block), and one regression is left before a fresh review. T-21 is "not now" (the owner, GA-14) and T-19 stays
   parked. The seats found more that main has too, all waiting on the owner's go: T-33, T-34, T-36, T-37,
   T-38 and T-44 (below). **All six pieces the owner described on day one are shipped**: the sixth, GONS
   integration, was built on the GUTS side (below), so **T-7 is not needed**.
