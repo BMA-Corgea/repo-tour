@@ -52,6 +52,11 @@ interface Arrow {
   /** its body is a block (`=> {`), which the scan already reports as a `Block` */
   blockBody: boolean;
   /**
+   * It is the first branch of a conditional (`c ? () => a : b`), so its expression ends at a `:`
+   * the arrow rule does not look for. Such an arrow is never cut.
+   */
+  inConsequent: boolean;
+  /**
    * Where its expression ends: the closer of the bracket around it, else the range's own final
    * `;`, else the range's end. Never a `,` or `;` beside it: JSX text holds both freely
    * (`() => <p>Hello, world</p>`), and running on to the closer only drops what the stub drops
@@ -60,7 +65,12 @@ interface Arrow {
   end: number | null;
 }
 
-/** After one of these, a `/` starts a regex; after anything else it divides. `<` is not one: `</` closes a JSX tag. */
+/**
+ * After one of these, a `/` starts a regex; after anything else it divides. `<` is not one: `</`
+ * closes a JSX tag. Two more exceptions live in the scan: `/>` after a `}` ends a JSX tag
+ * (`attr={x} />`), and a `!` straight after a value is TypeScript's non-null assertion
+ * (`sum[0]! / n`), which leaves the `/` a division.
+ */
 const REGEX_AFTER = new Set(['(', ',', '=', ':', '[', '!', '&', '|', '?', '{', '}', ';', '+', '-', '*', '%', '~', '^', '>']);
 const REGEX_AFTER_WORD = new Set(['return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void', 'throw', 'case', 'do', 'else', 'yield', 'await']);
 const CLOSER_OF: Record<string, string> = { '(': ')', '[': ']', '{': '}' };
@@ -83,6 +93,7 @@ function isWordChar(ch: string): boolean {
  */
 function scanJs(text: string): { blocks: Block[]; arrows: Arrow[] } | null {
   const stack: Array<{ ch: string; at: number; depth: number; inParens: boolean }> = [];
+  const ternaries: number[] = [0]; // the conditional `?`s still waiting for their `:`, per bracket level
   const blocks: Block[] = [];
   const arrows: Arrow[] = [];
   const firstLineEnd = text.includes('\n') ? text.indexOf('\n') : text.length;
@@ -104,6 +115,7 @@ function scanJs(text: string): { blocks: Block[]; arrows: Arrow[] } | null {
       else if (ch === '`') { inTemplate = false; prev = 'w'; word = ''; }
       else if (ch === '$' && text[i + 1] === '{') {
         stack.push({ ch: '${', at: i + 1, depth: stack.length, inParens: false });
+        ternaries.push(0);
         inTemplate = false;
         prev = '{';
         i++;
@@ -137,7 +149,8 @@ function scanJs(text: string): { blocks: Block[]; arrows: Arrow[] } | null {
     if (ch === '`') { inTemplate = true; continue; }
 
     if (ch === '/') {
-      const regex = (prev === '' || REGEX_AFTER.has(prev) || (prev === 'w' && REGEX_AFTER_WORD.has(word))) && text[i + 1] !== '>';
+      const regex = (prev === '' || REGEX_AFTER.has(prev) || (prev === 'w' && REGEX_AFTER_WORD.has(word)))
+        && !(prev === '}' && text[i + 1] === '>');
       if (regex) {
         let j = i + 1;
         let inClass = false;
@@ -161,6 +174,7 @@ function scanJs(text: string): { blocks: Block[]; arrows: Arrow[] } | null {
 
     if (ch === '(' || ch === '[' || ch === '{') {
       stack.push({ ch, at: i, depth: stack.length, inParens: allParens() });
+      ternaries.push(0);
       prev = ch;
       word = '';
       continue;
@@ -170,6 +184,7 @@ function scanJs(text: string): { blocks: Block[]; arrows: Arrow[] } | null {
       endArrowsHere(i);
       const open = stack.pop();
       if (!open) return null;
+      ternaries.pop();
       if (open.ch === '${') {
         if (ch !== '}') return null;
         inTemplate = true;
@@ -184,8 +199,12 @@ function scanJs(text: string): { blocks: Block[]; arrows: Arrow[] } | null {
 
     if (ch === '=' && text[i + 1] === '>') {
       if (i < firstLineEnd) {
-        const rest = text.slice(i + 2).trimStart();
-        arrows.push({ at: i, depth: stack.length, inParens: allParens(), blockBody: rest.startsWith('{'), end: null });
+        let next = i + 2;
+        while (next < text.length && /\s/.test(text[next]!)) next++;
+        arrows.push({
+          at: i, depth: stack.length, inParens: allParens(), blockBody: text[next] === '{',
+          inConsequent: ternaries[ternaries.length - 1]! > 0, end: null,
+        });
       }
       i++;
       prev = '>';
@@ -202,6 +221,11 @@ function scanJs(text: string): { blocks: Block[]; arrows: Arrow[] } | null {
       continue;
     }
 
+    // A `!` straight after a value is a non-null assertion, not a `not`: the value is still the last thing seen.
+    if (ch === '!' && text[i + 1] !== '=' && (prev === ')' || prev === ']' || (prev === 'w' && !REGEX_AFTER_WORD.has(word)))) continue;
+    // `?.` and `??` are not a conditional's `?`; every conditional `?` is answered by a `:` at its own level.
+    if (ch === '?' && text[i + 1] !== '.' && text[i + 1] !== '?' && prev !== '?') ternaries[ternaries.length - 1]!++;
+    if (ch === ':' && ternaries[ternaries.length - 1]! > 0) ternaries[ternaries.length - 1]!--;
     prev = ch;
     word = '';
   }
@@ -233,7 +257,9 @@ function indentAt(text: string, at: number): string {
  *      own `}` to the end of the range, so `})();`, `});` and `}>;` survive.
  *   2. Else the arrow on the range's FIRST line, if it is as shallow as any block: its expression
  *      body becomes a block, and what followed the expression (`);`, a final `;`) is kept. A block
- *      at the same depth wins, because there the arrow is a type (`f(): () => void { … }`).
+ *      at the same depth wins, because there the arrow is a type (`f(): () => void { … }`). An
+ *      arrow that is a conditional's first branch (`c ? () => a : b`) is never cut: its expression
+ *      ends at that `:`.
  *   3. Neither, or a range the scan cannot read: leave the range exactly as it was.
  *
  * The TODO line sits two spaces inside the line it opens, and a closing line keeps its own
@@ -246,8 +272,10 @@ function stubJsLikeRange(lines: string[], start: number, end: number, questions:
   if (scan === null) return untouched;
 
   const blocks = scan.blocks.filter((b) => b.inParens);
-  const arrows = scan.arrows.filter((a) => a.inParens && !a.blockBody);
-  const depth = Math.min(...blocks.map((b) => b.depth), ...arrows.map((a) => a.depth));
+  const arrows = scan.arrows.filter((a) => a.inParens && !a.blockBody && !a.inConsequent);
+  let depth = Infinity;
+  for (const b of blocks) depth = Math.min(depth, b.depth);
+  for (const a of arrows) depth = Math.min(depth, a.depth);
   if (depth === Infinity) return untouched;
   const todo = todoLine('//', questions, index);
 

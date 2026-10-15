@@ -200,6 +200,10 @@ const FILES: Record<string, string> = {
     'export const doubled = [1, 2, 3].map((n) => n * 2);',
     '',
   ].join('\n'),
+  'src/tick.ts': [
+    'export const tick = hasTimer ? () => timer.read() : fallbackTick;',
+    '',
+  ].join('\n'),
   'src/Row.tsx': [
     'export const Row = ({ cells }: { cells: string[] }) => (',
     '  <tr>',
@@ -449,6 +453,12 @@ describe('T-30 AC2 — the same defect in other shapes: each practice file parse
     expect(p.scaffold, 'the call\'s tail `);` was dropped').toMatch(/\n\}\);\n/);
   });
 
+  it('an arrow that is the first branch of a conditional is left whole: its body ends at the `:`', () => {
+    const p = practiceFor('src/tick.ts', [1, 1]);
+    expectParses(p);
+    expect(p.scaffold, 'the conditional lost its second branch').toBe(p.reference);
+  });
+
   it('a JSX body in parentheses: the whole body is hidden, not one expression inside it', () => {
     const p = practiceFor('src/Row.tsx', [1, 5]);
     expectParses(p);
@@ -562,6 +572,31 @@ describe('T-30 AC4 — the stub stays a stub: main\'s output where main already 
       const out = stubFile(source, [range], 'typescript', Q);
       expect(out.includes(answer), `${name}: the body was not hidden:\n${out}`).toBe(false);
       expect(await parseErrorsOf(out, 'typescript', 'ts'), `${name}: does not parse:\n${out}`).toBe(0);
+    }
+  });
+
+  it('guard: a regex holding `<` or `>`, and a non-null assertion before a division, do not stop the body being hidden', async () => {
+    const cases: Array<[string, string, string]> = [
+      ['escape', "export function escape(s: string): string {\n  return s.replace(/</g, '&lt;').replace(/>/g, '&gt;');\n}\n", 's.replace'],
+      ['centre', 'export function centre(s: number[], n: number): number[] {\n  const out = [Math.round(s[0]! / n), Math.round(s[1]! / n), Math.round(s[2]! / n)];\n  return out;\n}\n', 'Math.round'],
+    ];
+    for (const [name, source, answer] of cases) {
+      const range = await rangeOf(source, 'typescript', 'ts', name);
+      const out = stubFile(source, [range], 'typescript', Q);
+      expect(out.includes(answer), `${name}: the body was not hidden:\n${out}`).toBe(false);
+      expect(await parseErrorsOf(out, 'typescript', 'ts'), `${name}: does not parse:\n${out}`).toBe(0);
+    }
+  });
+
+  it('guard: an arrow whose own body is a conditional, or that is a conditional\'s second branch, is still hidden', async () => {
+    const cases: Array<[string, string]> = [
+      ["export const pick = (n: number) => n > 0 ? 'up' : 'down';\n", "'up'"],
+      ['export const tock = hasTimer ? fallbackTock : () => timer.read();\n', 'timer.read'],
+    ];
+    for (const [source, answer] of cases) {
+      const out = stubFile(source, [{ startLine: 1, endLine: 1 }], 'typescript', Q);
+      expect(out.includes(answer), `the body was not hidden:\n${out}`).toBe(false);
+      expect(await parseErrorsOf(out, 'typescript', 'ts'), `does not parse:\n${out}`).toBe(0);
     }
   });
 
