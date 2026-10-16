@@ -375,15 +375,15 @@ describe('AC4: the live reload is the page\'s own request', () => {
         new Function('fetch', 'location', 'setInterval', live[0]!)(fakeFetch, location, fakeSetInterval);
 
         await sleep(20);
-        expect(calls, 'the first answer only sets the baseline').toEqual([]);
+        expect(calls.join(' | '), 'the first answer only sets the baseline').toBe('');
         expect(ticks.length, 'and it keeps polling').toBe(1);
         ticks[0]!();
         await sleep(20);
-        expect(calls, 'the same server: nothing happens').toEqual([]);
+        expect(calls.join(' | '), 'the same server: nothing happens').toBe('');
         bootId = 'a new server';
         ticks[0]!();
         await sleep(20);
-        expect(calls, 'a new server: the page loads itself again, as its own request').toEqual([`replace(${address})`]);
+        expect(calls.join(' | '), 'a new server: the page loads itself again, as its own request').toBe(`replace(${address})`);
       });
     } finally {
       fs.rmSync(under, { recursive: true, force: true });
