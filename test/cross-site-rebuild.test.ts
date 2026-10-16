@@ -132,6 +132,22 @@ function makeStaleInMemory(server: RepoTourServer, repo: string): void {
   held.presentation = 'from-before';
 }
 
+/**
+ * The job a server holds for a repository, or for `<path>#pr-<n>`. A request that starts a build registers a new
+ * one before its page is sent. `running` is no sign of it: a small fixture's build can be over before the page
+ * has been read, and `running` is false again by then.
+ */
+function jobOf(server: RepoTourServer, key: string): unknown {
+  return (server as unknown as { jobs: Map<string, unknown> }).jobs.get(key);
+}
+
+/** Send one request, and say whether it started a build under `key`. */
+async function sendAndSee(server: RepoTourServer, key: string, send: () => Promise<Answer>): Promise<Answer & { started: boolean }> {
+  const before = jobOf(server, key);
+  const answer = await send();
+  return { ...answer, started: jobOf(server, key) !== before };
+}
+
 // ------------------------------------------------------------------- what browsers send
 
 /**
@@ -186,10 +202,10 @@ describe('AC1: what another site embeds, or makes the tab do on its own, starts 
         makeStale(repo);
         await withServer(under, async (port, server) => {
           server.addRepo(repo);
-          const a = await get(port, tourOf(repo), c.headers);
+          const a = await sendAndSee(server, repo, () => get(port, tourOf(repo), c.headers));
           expect.soft(a.status, `${c.label}: still gets the page`).toBe(200);
           expect.soft(a.body, `${c.label}: still gets the page`).toContain('id="startbig"');
-          expect.soft(server.listRepos()[0]!.running, `${c.label} must not start the rebuild`).toBe(false);
+          expect.soft(a.started, `${c.label} must not start the rebuild`).toBe(false);
         });
       }
       expect.soft(fs.existsSync(path.join(repo, '.repo-tour', 'building.json')), 'no build marker').toBe(false);
@@ -199,8 +215,8 @@ describe('AC1: what another site embeds, or makes the tab do on its own, starts 
       makeStale(repo);
       await withServer(under, async (port, server) => {
         server.addRepo(repo);
-        await get(port, tourOf(repo), navigation('none', true));
-        expect(server.listRepos()[0]!.running, 'the reader\'s own visit to the same page starts the rebuild').toBe(true);
+        const own = await sendAndSee(server, repo, () => get(port, tourOf(repo), navigation('none', true)));
+        expect(own.started, 'the reader\'s own visit to the same page starts the rebuild').toBe(true);
         await settle(server);
         expect(presentationOnDisk(repo)).not.toBe('from-before');
       });
@@ -225,12 +241,11 @@ describe('AC1: what another site embeds, or makes the tab do on its own, starts 
         await sleep(PAST_THE_WINDOW_MS);
 
         for (const c of NOT_THE_READER) {
-          const a = await get(port, tourOf(repo), c.headers);
+          const a = await sendAndSee(server, repo, () => get(port, tourOf(repo), c.headers));
           expect.soft(a.status, `${c.label}: still gets the page`).toBe(200);
           expect.soft(a.body, `${c.label}: still gets the page`).toContain('id="startbig"');
-          const started = server.listRepos()[0]!.running;
-          expect.soft(started, `${c.label} must not start the rebuild`).toBe(false);
-          if (started) {
+          expect.soft(a.started, `${c.label} must not start the rebuild`).toBe(false);
+          if (a.started) {
             // Let it finish and mark the page stale again, so the next request is a fair test.
             await settle(server);
             makeStaleInMemory(server, repo);
@@ -238,8 +253,8 @@ describe('AC1: what another site embeds, or makes the tab do on its own, starts 
         }
 
         // The control: the page in memory really was stale, and the reader's own visit rebuilds it.
-        await get(port, tourOf(repo), navigation('same-origin', true));
-        expect(server.listRepos()[0]!.running, 'the reader\'s own visit to the same page starts the rebuild').toBe(true);
+        const own = await sendAndSee(server, repo, () => get(port, tourOf(repo), navigation('same-origin', true)));
+        expect(own.started, 'the reader\'s own visit to the same page starts the rebuild').toBe(true);
         await settle(server);
         expect((await get(port, tourOf(repo), navigation('same-origin', true))).body, 'and the next open has the new skin').toContain(marker);
       });
@@ -289,10 +304,10 @@ describe('AC2: the reader\'s own visits still start it', () => {
         const repo = await staleOnDisk(under);
         await withServer(under, async (port, server) => {
           server.addRepo(repo);
-          const a = await get(port, tourOf(repo), visit.headers);
+          const a = await sendAndSee(server, repo, () => get(port, tourOf(repo), visit.headers));
           expect(a.status).toBe(200);
           expect(a.body, 'the page, while the rebuild runs behind it').toContain('id="startbig"');
-          expect(server.listRepos()[0]!.running, `${visit.name} must start the rebuild`).toBe(true);
+          expect(a.started, `${visit.name} must start the rebuild`).toBe(true);
           await settle(server);
           expect(presentationOnDisk(repo), 'and the rebuild ran').not.toBe('from-before');
         });
