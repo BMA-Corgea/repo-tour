@@ -10,6 +10,16 @@ One entry per lesson, newest first, each citing the ticket or incident it came f
 
 ---
 
+## A test file saved as evidence still runs (T-45, 2026-10-16)
+
+A reviewer saved its variant of a test under the gitignored `.autodev/evidence/` folder, still named `*.test.ts`.
+Vitest's default search covers the whole checkout, ignored folders included, so the next `npm test` in the main
+checkout found 19 test files instead of 18 and one failed to load. A clean clone never sees it, so the landing check
+stayed green while the checkout the seats use went red.
+
+**The rule:** an evidence copy of a test ends in `.test.ts.txt`. The lasting fix is to scope Vitest to `test/`, which
+is a code change for a later ticket.
+
 ## A seat can move to another model mid-ticket without saying so (T-36, 2026-10-16)
 
 A safety classifier stopped one of the T-36 seat's responses while it wrote about the hostile file name it was
