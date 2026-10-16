@@ -377,6 +377,22 @@ function hasHero(): boolean {
 }
 
 /**
+ * A request that may start a build behind the page it gets (T-34).
+ *
+ * A build spends model calls, so only a visit the reader made starts one: from repo-tour's own pages, the address
+ * bar or a bookmark (what fromAnotherSite() below lets through, a caller that is not a browser included), or a
+ * click on another site's page that opens this one, as a GONS link from another port would. Measured in Chromium
+ * and Firefox, a navigation the reader clicked is the only request from another site that carries
+ * `Sec-Fetch-User: ?1`. An image, a script, a fetch or a frame never does, and neither does a navigation another
+ * page's script makes on its own. Those still get their page; they start nothing.
+ */
+function mayStartABuild(req: http.IncomingMessage): boolean {
+  if (!fromAnotherSite(req)) return true;
+  const h = req.headers;
+  return h['sec-fetch-mode'] === 'navigate' && h['sec-fetch-dest'] === 'document' && h['sec-fetch-user'] === '?1';
+}
+
+/**
  * A request a page on another site made.
  *
  * Such a page can POST here without a preflight, with a `text/plain` body. A browser labels its
@@ -832,6 +848,10 @@ export class RepoTourServer {
       // The whole point is that a refresh re-reads the repo, so never let a proxy or the
       // browser hand back a stale copy of a page that is meant to be live.
       'cache-control': 'no-store, must-revalidate',
+      // No other site may put a repo-tour page in a frame. Under a decoy, a click inside the frame is a request
+      // from repo-tour's own page, which every guard here accepts (T-46). X-Frame-Options for an older browser.
+      'content-security-policy': 'frame-ancestors \'none\'',
+      'x-frame-options': 'DENY',
     });
     res.end(body);
   }
@@ -1255,6 +1275,10 @@ export class RepoTourServer {
         }
         if (job?.state === 'failed') return this.html(res, 200, prFailed(p, n, job.lines));
 
+        // A PR tour spends model calls, so another site's image, script or frame does not start one (T-34). It
+        // gets a page that offers the build, and a click there is repo-tour's own request.
+        if (!mayStartABuild(req)) return this.html(res, 200, prNotBuilt(p, n));
+
         this.startPrJob(p, n);
         return this.html(res, 200, building(
           `PR #${n}`, [`reading PR #${n}`], key,
@@ -1277,8 +1301,9 @@ export class RepoTourServer {
           //
           // Re-render behind them on a presentation change and serve the current copy now.
           // It costs no tokens — interpretation is cached by content — and the freshness
-          // chip already offers the result when it lands.
-          if (cached.presentation !== presentationVersion() && job?.state !== 'running') {
+          // chip already offers the result when it lands. Only for a visit the reader made:
+          // another site's image or frame gets the page and starts nothing (T-34).
+          if (cached.presentation !== presentationVersion() && job?.state !== 'running' && mayStartABuild(req)) {
             this.startJob(p, false, res);
           }
           return this.html(res, 200, cached.html);
@@ -1295,8 +1320,11 @@ export class RepoTourServer {
           // the tree has moved too, that is the build the chip's Rebuild would have offered.
           // Every stop the same model has already explained is cached by content, so tokens go
           // only on what has no explanation from it yet: what moved, every stop after the model
-          // is changed, and any whose explanation failed before.
-          if (older.presentation !== presentationVersion() && job?.state !== 'running') this.startJob(p, false, res);
+          // is changed, and any whose explanation failed before. So, as above, only for a visit
+          // the reader made (T-34).
+          if (older.presentation !== presentationVersion() && job?.state !== 'running' && mayStartABuild(req)) {
+            this.startJob(p, false, res);
+          }
           return this.html(res, 200, older.html);
         }
 
@@ -1933,6 +1961,34 @@ function prFailed(repoPath: string, n: number, lines: string[]): string {
 <body>${navBar('building')}<div class="buildwrap">
 <h1>PR #${n} could not be toured</h1>
 <div class="log">${esc(why)}</div>
+<footer style="margin-top:24px">
+  <a href="/prs?path=${encodeURIComponent(repoPath)}">← pull requests</a> ·
+  <a href="/r?path=${encodeURIComponent(repoPath)}">${esc(path.basename(repoPath))}</a>
+</footer>
+</div></body></html>`;
+}
+
+/**
+ * A PR tour that is not built, for a request that may not start one (T-34): another site's image, script or frame,
+ * or another page's script moving the tab. It offers the build instead. The button is a plain link to the same
+ * address, so a click on it is repo-tour's own request, and that starts the build.
+ */
+function prNotBuilt(repoPath: string, n: number): string {
+  const esc = (x: string): string => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PR #${n} — not built yet</title><style>${SHELL_STYLE}</style>
+<script>${skinScript()}</script></head>
+<body>${navBar('building')}<div class="buildwrap">
+<h1>PR #${n} has no tour yet</h1>
+<div class="sub">
+  Building it reads both sides of the change and works out what actually moved in meaning. It takes a few
+  minutes and spends tokens the first time. You can leave the page while it runs.
+</div>
+<div class="row" style="margin-top:18px">
+  <a class="btn primary" href="/pr?path=${encodeURIComponent(repoPath)}&amp;n=${n}">Build the tour</a>
+</div>
 <footer style="margin-top:24px">
   <a href="/prs?path=${encodeURIComponent(repoPath)}">← pull requests</a> ·
   <a href="/r?path=${encodeURIComponent(repoPath)}">${esc(path.basename(repoPath))}</a>
