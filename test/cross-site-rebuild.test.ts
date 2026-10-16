@@ -151,8 +151,8 @@ async function sendAndSee(server: RepoTourServer, key: string, send: () => Promi
 // ------------------------------------------------------------------- what browsers send
 
 /**
- * What another site's page embeds, or makes the tab do without a click: none of these carries
- * `Sec-Fetch-User`, in either browser.
+ * What another site's page embeds, or makes the tab do without a click. None of these carries `Sec-Fetch-User` in
+ * either browser, except a click inside another site's frame: that one navigates the frame, not the tab.
  */
 const EMBEDDED = [
   { name: 'an image', mode: 'no-cors', dest: 'image' },
@@ -161,6 +161,7 @@ const EMBEDDED = [
   { name: 'a fetch', mode: 'cors', dest: 'empty' },
   { name: 'a no-cors fetch', mode: 'no-cors', dest: 'empty' },
   { name: 'a frame', mode: 'navigate', dest: 'iframe' },
+  { name: 'a link clicked inside a frame', mode: 'navigate', dest: 'iframe', user: '?1' },
   { name: 'an object', mode: 'navigate', dest: 'object' },
   { name: 'an embed', mode: 'navigate', dest: 'embed' },
   { name: 'a navigation of the tab that nobody clicked (a script, a refresh, a form it sends)', mode: 'navigate', dest: 'document' },
@@ -170,8 +171,11 @@ const EMBEDDED = [
 const OTHER_SITES = ['cross-site', 'same-site'];
 
 const NOT_THE_READER = OTHER_SITES.flatMap((site) => EMBEDDED.map((e) => ({
-  label: `${e.name} from ${site === 'cross-site' ? 'another site' : 'another local app'} (${site}, ${e.mode}, ${e.dest})`,
-  headers: { 'sec-fetch-site': site, 'sec-fetch-mode': e.mode, 'sec-fetch-dest': e.dest },
+  label: `${e.name} from ${site === 'cross-site' ? 'another site' : 'another local app'} (${site}, ${e.mode}, ${e.dest}${e.user ? `, ${e.user}` : ''})`,
+  headers: {
+    'sec-fetch-site': site, 'sec-fetch-mode': e.mode, 'sec-fetch-dest': e.dest,
+    ...(e.user ? { 'sec-fetch-user': e.user } : {}),
+  } as Record<string, string>,
 })));
 
 const navigation = (site: string, clicked: boolean): Record<string, string> => ({
