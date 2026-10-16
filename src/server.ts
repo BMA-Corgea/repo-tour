@@ -377,6 +377,22 @@ function hasHero(): boolean {
 }
 
 /**
+ * A request that carries an `Origin` the server does not own.
+ *
+ * A browser sends `Origin` to name the page a request came from. repo-tour's own pages reach `/r` and `/pr` by
+ * navigation, which carries no `Origin` at all (measured in Chromium and Firefox), so an `Origin` here is from
+ * somewhere else. Chromium's WebSocket handshake is the case that matters: it carries an `Origin` but no
+ * `Sec-Fetch-Site`, so the Fetch Metadata rule below would read it as not another site (T-34, O1). The handshake
+ * is a plain GET to this server, which has no WebSocket endpoint. Compared against the request's own `Host`, so
+ * a page of the server's own origin is never caught; a missing or empty `Origin` says nothing either way.
+ */
+function foreignOrigin(req: http.IncomingMessage): boolean {
+  const origin = req.headers?.origin;
+  const host = req.headers?.host;
+  return typeof origin === 'string' && origin !== '' && typeof host === 'string' && origin !== `http://${host}`;
+}
+
+/**
  * A request that may start a build behind the page it gets (T-34).
  *
  * A build spends model calls, so only a visit the reader made starts one: from repo-tour's own pages, the address
@@ -385,8 +401,13 @@ function hasHero(): boolean {
  * and Firefox, a navigation the reader clicked is the only request from another site that carries
  * `Sec-Fetch-User: ?1`. An image, a script, a fetch or a frame never does, and neither does a navigation another
  * page's script makes on its own. Those still get their page; they start nothing.
+ *
+ * A foreign `Origin` refuses first: it names another site even when no `Sec-Fetch-Site` does, which is the
+ * WebSocket handshake Chromium sends (O1). A reader's own navigation carries no `Origin`, so this costs them
+ * nothing.
  */
 function mayStartABuild(req: http.IncomingMessage): boolean {
+  if (foreignOrigin(req)) return false;
   if (!fromAnotherSite(req)) return true;
   const h = req.headers;
   return h['sec-fetch-mode'] === 'navigate' && h['sec-fetch-dest'] === 'document' && h['sec-fetch-user'] === '?1';
