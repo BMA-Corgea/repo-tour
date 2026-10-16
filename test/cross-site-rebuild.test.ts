@@ -349,6 +349,66 @@ describe('AC1 (O1): a WebSocket handshake from another site\'s page starts nothi
   }, 60_000);
 });
 
+// ------------------------------------------------------------------- AC1 (B2): a speculative load
+
+/**
+ * A page on another site can ask the browser to prefetch or prerender the tour. Chromium labels a
+ * speculation-rules prefetch or prerender of our URL `Sec-Fetch-Site: none` — as if the address bar — so the Fetch
+ * Metadata rule read it as the reader's own and started a build. Every speculative load carries a `Sec-Purpose`
+ * header (`prefetch`, or `prefetch;prerender` for a prerender), measured in both browsers (`probe-speculative.json`);
+ * the legacy `Purpose: prefetch` and Firefox's `X-moz: prefetch` are refused too.
+ *
+ * It must be refused with a NON-200, so the browser does not keep the speculative response and serve it to the
+ * reader's later click (then the click would start nothing). A 503 discards it, and the click is a fresh
+ * navigation that builds (proven at the owner's layer, `spec-then-click`).
+ */
+describe('AC1 (B2): a prefetch or prerender from another site starts nothing', () => {
+  const speculative: Array<{ name: string; headers: Record<string, string> }> = [
+    { name: 'a speculation-rules prefetch (Sec-Fetch-Site: none)', headers: { 'sec-purpose': 'prefetch', 'sec-fetch-site': 'none', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' } },
+    { name: 'a speculation-rules prerender (Sec-Fetch-Site: none)', headers: { 'sec-purpose': 'prefetch;prerender', 'sec-fetch-site': 'none', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' } },
+    { name: 'a cross-site link prefetch', headers: { 'sec-purpose': 'prefetch', 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'no-cors', 'sec-fetch-dest': 'empty' } },
+    { name: 'a legacy Purpose: prefetch', headers: { 'purpose': 'prefetch', 'sec-fetch-site': 'none' } },
+    { name: 'a Firefox X-moz: prefetch', headers: { 'x-moz': 'prefetch', 'sec-fetch-site': 'none' } },
+  ];
+
+  it('GET /r on a stale page: a 503, and no rebuild', async () => {
+    const under = scratch('spec-r');
+    try {
+      const repo = await staleOnDisk(under);
+      for (const s of speculative) {
+        makeStale(repo);
+        await withServer(under, async (port, server) => {
+          server.addRepo(repo);
+          const a = await sendAndSee(server, repo, () => get(port, tourOf(repo), s.headers));
+          expect.soft(a.status, `${s.name}: refused with 503, so the browser does not keep it`).toBe(503);
+          expect.soft(a.started, `${s.name} must not start the rebuild`).toBe(false);
+        });
+      }
+    } finally {
+      fs.rmSync(under, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it('GET /pr with no tour built: a 503, and no job', async () => {
+    const under = scratch('spec-pr');
+    try {
+      const repo = fixtureRepo(under);
+      await withServer(under, async (port, server) => {
+        server.addRepo(repo);
+        for (const [i, s] of speculative.entries()) {
+          const n = 60 + i;
+          const a = await get(port, prOf(repo, n), s.headers);
+          expect.soft(a.status, `${s.name}: refused with 503`).toBe(503);
+          expect.soft((await prJob(port, repo, n)).state, `${s.name} must not start the PR tour`).toBe('idle');
+          await settlePr(port, repo, n);
+        }
+      });
+    } finally {
+      fs.rmSync(under, { recursive: true, force: true });
+    }
+  }, 60_000);
+});
+
 // ------------------------------------------------------------------- AC2
 
 describe('AC2: the reader\'s own visits still start it', () => {
