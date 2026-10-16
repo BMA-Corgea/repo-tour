@@ -388,6 +388,24 @@ function fromAnotherSite(req: http.IncomingMessage): boolean {
   return typeof site === 'string' && site !== 'same-origin' && site !== 'none';
 }
 
+/**
+ * Was a request sent to this server, by a name this machine keeps for itself?
+ *
+ * `fromAnotherSite` cannot see a page whose own name has been pointed at this machine: to the
+ * browser that page's requests are same-origin, so every guard passes them, and the page can read
+ * every answer. What it cannot change is the name its requests carry in `Host`. So the server
+ * answers only `127.0.0.1`, `localhost` and `[::1]`, with the port it is serving on (80 when `Host`
+ * names none, as HTTP reads it). A request with no `Host` at all passes, as before. A browser always
+ * sends one, and Node answers HTTP/1.1 without one with its own 400, so only a hand-written request
+ * line labelled otherwise (1.0, or one Node reads as 0.9 or 2.0) gets here without one; whoever can
+ * write that can as well write a correct `Host`.
+ */
+function addressedHere(host: string | undefined, port: number): boolean {
+  if (host === undefined) return true;
+  const named = /^(?:127\.0\.0\.1|localhost|\[::1\])(?::(\d+))?$/i.exec(host);
+  return named !== null && Number(named[1] ?? 80) === port;
+}
+
 function git(repoPath: string, args: string[]): string | null {
   try {
     return execFileSync('git', ['-C', repoPath, ...args], {
@@ -1329,7 +1347,19 @@ export class RepoTourServer {
    */
   listen(): Promise<{ port: number; close: () => Promise<void> }> {
     const port = this.opts.port ?? 7788;
-    const server = http.createServer((req, res) => { void this.handler(req, res); });
+    let bound = port;   // the port actually bound, set once listening
+    const server = http.createServer((req, res) => {
+      // Before any route runs: a request sent to another name is not for this server. The check is
+      // here rather than in `handler`, which the tests call with stand-in requests, so any other way
+      // in (another server mounting `handler`, or an `upgrade` or `connect` listener on this one) must
+      // make it too.
+      if (!addressedHere(req.headers.host, bound)) {
+        res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });
+        res.end(`repo-tour answers only at its own address: http://127.0.0.1:${bound}/\n`);
+        return;
+      }
+      void this.handler(req, res);
+    });
     const sockets = new Set<import('node:net').Socket>();
     server.on('connection', (s) => {
       sockets.add(s);
@@ -1353,7 +1383,8 @@ export class RepoTourServer {
       // free", and answering 0 tells the caller nothing it can connect to.
       server.listen(port, '127.0.0.1', () => {
         const addr = server.address();
-        resolve({ port: typeof addr === 'object' && addr ? addr.port : port, close });
+        bound = typeof addr === 'object' && addr ? addr.port : port;
+        resolve({ port: bound, close });
       });
     });
   }
