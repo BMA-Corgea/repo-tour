@@ -325,7 +325,11 @@ const APP = `
   var rangeEl = document.getElementById('range');
   var current = null;
 
-  function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  // Attributes are double-quoted and built from file names the reader does not control, so a
+  // double quote must not survive into one (T-36). A single quote cannot break a double-quoted
+  // attribute, but AC1 asks for it too, and escaping is invisible to readers: the browser decodes
+  // the entity, so getAttribute('data-p') still returns the real path the tree keys files by.
+  function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 
   // ---- tree
   var dirs = {};
