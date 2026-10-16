@@ -279,7 +279,7 @@ describe('AC1: what another site embeds, or makes the tab do on its own, starts 
           const n = 100 + i;
           const a = await get(port, prOf(repo, n), c.headers);
           expect.soft(a.status, `${c.label}: still gets a page`).toBe(200);
-          expect.soft(a.body, `${c.label}: a page that says the tour is not built`).toContain('has no tour yet');
+          expect.soft(a.body, `${c.label}: a page that says the tour is not built`).toContain('is not open here yet');
           expect.soft(a.body, `${c.label}: and links to the same address, so a click builds it`)
             .toContain(`href="/pr?path=${encodeURIComponent(repo)}&amp;n=${n}"`);
           expect.soft((await prJob(port, repo, n)).state, `${c.label} must not start the PR tour`).toBe('idle');
@@ -339,7 +339,7 @@ describe('AC1 (O1): a WebSocket handshake from another site\'s page starts nothi
         server.addRepo(repo);
         const a = await get(port, prOf(repo, 11), wsHandshake(`127.0.0.1:${port}`));
         expect(a.status, 'still gets a page').toBe(200);
-        expect(a.body, 'a page that says the tour is not built').toContain('has no tour yet');
+        expect(a.body, 'a page that says the tour is not built').toContain('is not open here yet');
         expect((await prJob(port, repo, 11)).state, 'a WebSocket handshake from another site must not start the PR tour').toBe('idle');
         await settlePr(port, repo, 11);
       });

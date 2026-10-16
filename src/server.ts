@@ -393,14 +393,37 @@ function foreignOrigin(req: http.IncomingMessage): boolean {
 }
 
 /**
+ * A speculative load: the browser fetching a page it guesses the reader might go to next, not one they asked for.
+ *
+ * Another site can ask for one with a `<link rel="prefetch">` or a speculation rule aimed at the tour. Chromium
+ * labels a speculation-rules prefetch or prerender of our URL `Sec-Fetch-Site: none` — the same as the address bar
+ * — so the rule below would read it as the reader's own (O1/B2). Every speculative load carries a `Sec-Purpose`
+ * header (`prefetch`, or `prefetch;prerender`); the older `Purpose: prefetch` and Firefox's `X-moz: prefetch` are
+ * here for completeness. The route refuses these with a 503, not a page: a kept 2xx would be handed to the
+ * reader's later click, which would then start nothing.
+ */
+function isSpeculativeLoad(req: http.IncomingMessage): boolean {
+  const h = req.headers;
+  const has = (v: string | string[] | undefined, needle: string): boolean =>
+    typeof v === 'string' && v.toLowerCase().includes(needle);
+  return h['sec-purpose'] !== undefined || has(h['purpose'], 'prefetch') || has(h['x-moz'], 'prefetch');
+}
+
+/**
  * A request that may start a build behind the page it gets (T-34).
  *
  * A build spends model calls, so only a visit the reader made starts one: from repo-tour's own pages, the address
  * bar or a bookmark (what fromAnotherSite() below lets through, a caller that is not a browser included), or a
- * click on another site's page that opens this one, as a GONS link from another port would. Measured in Chromium
- * and Firefox, a navigation the reader clicked is the only request from another site that carries
- * `Sec-Fetch-User: ?1`. An image, a script, a fetch or a frame never does, and neither does a navigation another
- * page's script makes on its own. Those still get their page; they start nothing.
+ * click on another site's page that opens this one, as a GONS link from another port would. The one request from
+ * another site that may start a build is a top-level document navigation the browser marks as user-activated
+ * (`Sec-Fetch-Mode: navigate`, `Sec-Fetch-Dest: document`, `Sec-Fetch-User: ?1`). An image, a script, a fetch or a
+ * frame carries no `?1`; a click INSIDE another site's frame carries `?1` but its destination is `iframe`, not
+ * `document`, so the destination check refuses it (measured in Chromium and Firefox, `probe-headers.json`). Those
+ * still get their page; they start nothing. A speculative load is refused earlier, by the route, with a 503.
+ *
+ * `Sec-Fetch-User: ?1` means only that a gesture was in effect, not that the reader chose THIS page: a script can
+ * navigate during the few seconds a click or keystroke anywhere on the other site grants. No header tells the two
+ * apart; that gap is recorded in the spec and is the foreman's ruling.
  *
  * A foreign `Origin` refuses first: it names another site even when no `Sec-Fetch-Site` does, which is the
  * WebSocket handshake Chromium sends (O1). A reader's own navigation carries no `Origin`, so this costs them
@@ -863,6 +886,12 @@ export class RepoTourServer {
     res.end(s);
   }
 
+  /** A short plain-text reply, never cached — for a refusal (a speculative load, T-34 B2). */
+  private text(res: http.ServerResponse, code: number, body: string): void {
+    res.writeHead(code, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+    res.end(body);
+  }
+
   private html(res: http.ServerResponse, code: number, body: string): void {
     res.writeHead(code, {
       'content-type': 'text/html; charset=utf-8',
@@ -1278,6 +1307,10 @@ export class RepoTourServer {
       }
 
       if (route === '/pr') {
+        // A prefetch or prerender is not the reader asking to see the PR tour, and starting its model calls on a
+        // guess is the wrong default. Refused with a 503 so the browser does not keep it and serve it to a later
+        // click, which would then start nothing (T-34, B2).
+        if (isSpeculativeLoad(req)) return this.text(res, 503, 'repo-tour does not prebuild a tour; open it to build it.\n');
         const p = url.searchParams.get('path') ?? '';
         const n = Number(url.searchParams.get('n') ?? NaN);
         if (!this.repos.some((r) => r.path === p)) return this.html(res, 404, notFound(p));
@@ -1308,6 +1341,9 @@ export class RepoTourServer {
       }
 
       if (route === '/r') {
+        // As /pr: a speculative load does not start a rebuild, and a 503 keeps the browser from serving its kept
+        // copy to the reader's later click (T-34, B2).
+        if (isSpeculativeLoad(req)) return this.text(res, 503, 'repo-tour does not prebuild a tour; open it to build it.\n');
         const p = url.searchParams.get('path') ?? '';
         if (!this.repos.some((r) => r.path === p)) return this.html(res, 404, notFound(p));
         const job = this.jobs.get(p);
@@ -1999,16 +2035,17 @@ function prNotBuilt(repoPath: string, n: number): string {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>PR #${n} — not built yet</title><style>${SHELL_STYLE}</style>
+<title>PR #${n} — open to build</title><style>${SHELL_STYLE}</style>
 <script>${skinScript()}</script></head>
 <body>${navBar('building')}<div class="buildwrap">
-<h1>PR #${n} has no tour yet</h1>
+<h1>PR #${n}'s tour is not open here yet</h1>
 <div class="sub">
-  Building it reads both sides of the change and works out what actually moved in meaning. It takes a few
-  minutes and spends tokens the first time. You can leave the page while it runs.
+  Opening it reads both sides of the change and works out what actually moved in meaning — a few minutes, and
+  tokens for anything not already explained (what it has worked out before is cached, so a tour you have seen
+  before opens again for little or nothing). You can leave the page while it runs.
 </div>
 <div class="row" style="margin-top:18px">
-  <a class="btn primary" href="/pr?path=${encodeURIComponent(repoPath)}&amp;n=${n}">Build the tour</a>
+  <a class="btn primary" href="/pr?path=${encodeURIComponent(repoPath)}&amp;n=${n}">Open the tour</a>
 </div>
 <footer style="margin-top:24px">
   <a href="/prs?path=${encodeURIComponent(repoPath)}">← pull requests</a> ·
