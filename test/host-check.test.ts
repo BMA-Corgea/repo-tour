@@ -52,8 +52,11 @@ async function settle(server: RepoTourServer, ms = 30_000): Promise<void> {
 
 interface Answer { status: number; type: string; body: string }
 
+/** How long a request may go unanswered: a server that never answers fails the test, it does not hang it. */
+const ANSWER_MS = 5_000;
+
 /** One request over its own connection. `host` replaces the `Host` node:http would send. */
-function send(port: number, route: string, opts: { host?: string; method?: string; body?: string; site?: string } = {}): Promise<Answer> {
+function send(port: number, route: string, opts: { host?: string; method?: string; body?: string; site?: string; headers?: Record<string, string> } = {}): Promise<Answer> {
   return new Promise((resolve, reject) => {
     const req = http.request({
       host: '127.0.0.1', port, path: route, method: opts.method ?? 'GET', agent: false,
@@ -61,6 +64,7 @@ function send(port: number, route: string, opts: { host?: string; method?: strin
         ...(opts.host !== undefined ? { host: opts.host } : {}),
         ...(opts.site ? { 'sec-fetch-site': opts.site } : {}),
         ...(opts.body !== undefined ? { 'content-type': 'text/plain;charset=UTF-8' } : {}),
+        ...opts.headers,
       },
     }, (res) => {
       let body = '';
@@ -68,17 +72,21 @@ function send(port: number, route: string, opts: { host?: string; method?: strin
       res.on('data', (c: string) => { body += c; });
       res.on('end', () => resolve({ status: res.statusCode ?? 0, type: String(res.headers['content-type'] ?? ''), body }));
     });
+    // A server that took an upgrade up answers 101 and hands over the socket: that is an answer too.
+    req.on('upgrade', (res, socket) => { socket.destroy(); resolve({ status: res.statusCode ?? 0, type: '', body: '' }); });
+    req.setTimeout(ANSWER_MS, () => req.destroy(new Error(`no answer within ${ANSWER_MS} ms to ${opts.method ?? 'GET'} ${route}`)));
     req.on('error', reject);
     req.end(opts.body);
   });
 }
 
-/** A request written by hand, for what node:http will not send: no `Host`, or an empty one. */
+/** A request written by hand, for what node:http will not send: no `Host`, an empty one, a body that never comes. */
 function raw(port: number, request: string): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
     const socket = net.connect(port, '127.0.0.1');
     let data = '';
     socket.setEncoding('utf8');
+    socket.setTimeout(ANSWER_MS, () => socket.destroy(new Error(`no answer within ${ANSWER_MS} ms to ${request.split('\r\n')[0]}`)));
     socket.on('data', (c: string) => { data += c; });
     socket.on('end', () => resolve({
       status: Number(/^HTTP\/1\.[01] (\d{3})/.exec(data)?.[1] ?? 0),
@@ -162,6 +170,7 @@ describe('AC1: a request naming any other host is refused before any route runs'
         `localhost.:${port}`,
         `127.0.0.1.:${port}`,
         `127.1:${port}`,
+        `localhost:${port}.${ELSEWHERE}`,   // its own name and port, then more: the whole value must match
         `${ELSEWHERE}`,
       ];
       for (const host of wrong) {
@@ -169,6 +178,22 @@ describe('AC1: a request naming any other host is refused before any route runs'
       }
       const empty = await raw(port, 'GET /api/repos HTTP/1.1\r\nHost:\r\nConnection: close\r\n\r\n');
       expect.soft(empty.status, 'an empty Host names nothing, so it is refused').toBe(403);
+    });
+  }, 60_000);
+
+  it('the refusal comes before the body is read, and covers an upgrade', async () => {
+    await withServer(async (port) => {
+      // A POST that announces a body and never sends it: a refusal that read the body first would wait.
+      const withheld = await raw(port, `POST /api/add HTTP/1.1\r\nHost: ${ELSEWHERE}:${port}\r\nContent-Type: text/plain\r\nContent-Length: 100000\r\nConnection: close\r\n\r\n`)
+        .catch((e: Error) => ({ status: 0, body: e.message }));
+      expect.soft(withheld.status, `refused without waiting for a body that never comes (${withheld.body.trim()})`).toBe(403);
+      // With no `upgrade` listener, Node hands an upgrade to the request callback like any other request.
+      // A listener added later would take it past the check, and this turns red that day.
+      const upgrade = await send(port, '/api/repos', {
+        host: `${ELSEWHERE}:${port}`,
+        headers: { connection: 'Upgrade', upgrade: 'websocket', 'sec-websocket-version': '13', 'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==' },
+      });
+      expect.soft(upgrade.status, 'an upgrade sent to another name is refused like any other request').toBe(403);
     });
   }, 60_000);
 });
