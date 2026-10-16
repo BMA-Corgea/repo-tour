@@ -298,6 +298,57 @@ describe('AC1: what another site embeds, or makes the tab do on its own, starts 
   }, 60_000);
 });
 
+// ------------------------------------------------------------------- AC1 (O1): the WebSocket handshake
+
+/**
+ * A page on another site can open a WebSocket to the server. In Chromium the handshake carries an `Origin` but no
+ * `Sec-Fetch-Site` at all (measured: `probe-origin.json`, and T-45's `ws-headers.json`), so the guard's reading of
+ * "no Sec-Fetch-Site means not another site" (T-29) let it through, and the server — which has no WebSocket
+ * endpoint, so the handshake is just a GET — started a build. Firefox sends `Sec-Fetch-Site: cross-site` on the
+ * handshake, so it was already refused.
+ *
+ * The decisive headers are an `Origin` that is not the server's own, and no `Sec-Fetch-Site`. The real handshake
+ * also carries `Upgrade: websocket`; node's http client cannot send that header without switching to upgrade mode
+ * and never delivering the response, and the guard reads the `Origin`, not the `Upgrade`, so the shape below is
+ * what the server's decision actually turns on.
+ */
+describe('AC1 (O1): a WebSocket handshake from another site\'s page starts nothing', () => {
+  const wsHandshake = (host: string): Record<string, string> => ({ origin: 'http://another-site.example:5555', host });
+
+  it('GET /r: the page, and no rebuild', async () => {
+    const under = scratch('ws-r');
+    try {
+      const repo = await staleOnDisk(under);
+      await withServer(under, async (port, server) => {
+        server.addRepo(repo);
+        const a = await sendAndSee(server, repo, () => get(port, tourOf(repo), wsHandshake(`127.0.0.1:${port}`)));
+        expect(a.status, 'still gets the page').toBe(200);
+        expect(a.body, 'still gets the page').toContain('id="startbig"');
+        expect(a.started, 'a WebSocket handshake from another site must not start the rebuild').toBe(false);
+      });
+    } finally {
+      fs.rmSync(under, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it('GET /pr: a page that offers the build, and no job', async () => {
+    const under = scratch('ws-pr');
+    try {
+      const repo = fixtureRepo(under);
+      await withServer(under, async (port, server) => {
+        server.addRepo(repo);
+        const a = await get(port, prOf(repo, 11), wsHandshake(`127.0.0.1:${port}`));
+        expect(a.status, 'still gets a page').toBe(200);
+        expect(a.body, 'a page that says the tour is not built').toContain('has no tour yet');
+        expect((await prJob(port, repo, 11)).state, 'a WebSocket handshake from another site must not start the PR tour').toBe('idle');
+        await settlePr(port, repo, 11);
+      });
+    } finally {
+      fs.rmSync(under, { recursive: true, force: true });
+    }
+  }, 60_000);
+});
+
 // ------------------------------------------------------------------- AC2
 
 describe('AC2: the reader\'s own visits still start it', () => {
