@@ -404,6 +404,7 @@ function foreignOrigin(req: http.IncomingMessage): boolean {
  */
 function isSpeculativeLoad(req: http.IncomingMessage): boolean {
   const h = req.headers;
+  if (!h) return false;   // a non-browser caller, or a test's stand-in request: no headers to read
   const has = (v: string | string[] | undefined, needle: string): boolean =>
     typeof v === 'string' && v.toLowerCase().includes(needle);
   return h['sec-purpose'] !== undefined || has(h['purpose'], 'prefetch') || has(h['x-moz'], 'prefetch');
