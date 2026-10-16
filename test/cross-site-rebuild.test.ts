@@ -363,7 +363,8 @@ describe('AC4: the live reload is the page\'s own request', () => {
         const calls: string[] = [];
         const ticks: Array<() => void> = [];
         let bootId = 'the first server';
-        const address = `http://127.0.0.1:7788${tourOf('/home/reader/a repo')}`;
+        // Short, so a failure message shows all of it.
+        const address = 'http://h/r?path=x';
         const location = {
           href: `${address}#notes`,
           reload: () => { calls.push('reload()'); },
