@@ -63,10 +63,9 @@ interface Arrow {
    */
   inConsequent: boolean;
   /**
-   * Where its expression ends: the closer of the bracket around it, else the range's own final
-   * `;`, else the range's end. Never a `,` or `;` beside it: JSX text holds both freely
-   * (`() => <p>Hello, world</p>`), and running on to the closer only drops what the stub drops
-   * anyway.
+   * Where its expression ends: a `;` beside it or the closer of the bracket around it, else the
+   * range's end. Never a `,` beside it: running on to the closer only drops what the stub drops
+   * anyway. JSX text, whose commas and semicolons once ended an arrow early, is read as text.
    */
   end: number | null;
 }
@@ -78,6 +77,8 @@ interface JsScan {
   assignAt: number;
   /** the first conditional `?` at depth 0 (`T extends U ? A : B`), or -1 */
   conditionalAt: number;
+  /** the first `;` at depth 0 after `assignAt`: where that statement ends, when more follow on its line — or -1 */
+  statementEndAt: number;
 }
 
 /** Where a `<` may open a JSX element: where an expression may start. */
@@ -126,6 +127,7 @@ function scanJs(text: string, jsx: boolean, ends?: { inCode: boolean }): JsScan 
   const arrows: Arrow[] = [];
   const openArrows = new Map<number, Arrow[]>(); // expression-bodied arrows still running, by depth
   let assignAt = -1;
+  let statementEndAt = -1;
   let conditionalAt = -1;
   let inTemplate = false;
   let prev = ''; // the last significant character; 'w' after a word or any other value
@@ -324,10 +326,17 @@ function scanJs(text: string, jsx: boolean, ends?: { inCode: boolean }): JsScan 
 
     // A `!` straight after a value is a non-null assertion, not a `not`: the value is still the last thing seen.
     if (ch === '!' && text[i + 1] !== '=' && (prev === ')' || prev === ']' || (prev === 'w' && !REGEX_AFTER_WORD.has(word)))) continue;
-    // A `<` straight after a name opens a generic's `<…>`; its `>` closes it. A `;` or an outer closer ends a comparison taken for one.
-    if (ch === '<' && i > 0 && isWordChar(text[i - 1]!)) angles.push(stack.length);
+    // A `<` straight after a name, or after a `=` where no JSX began (`type F = <T>(x: T) => T`), opens a generic's
+    // `<…>`; its `>` closes it. A `;` or an outer closer ends a comparison taken for one.
+    if (ch === '<' && ((i > 0 && isWordChar(text[i - 1]!)) || prev === '=')) angles.push(stack.length);
     if (ch === '>' && text[i + 1] !== '=' && angles.length > 0 && angles[angles.length - 1] === stack.length) angles.pop();
-    if (ch === ';') dropAngles(stack.length);
+    if (ch === ';') {
+      // A `;` beside an arrow ends its expression, as a closer does. (JSX text is read as text, so its `;` never gets here.)
+      for (const a of openArrows.get(stack.length) ?? []) a.end = i;
+      openArrows.delete(stack.length);
+      dropAngles(stack.length);
+      if (stack.length === 0 && assignAt !== -1 && statementEndAt === -1) statementEndAt = i;
+    }
     // `?.` and `??` are not a conditional's `?`; every conditional `?` is answered by a `:` at its own level.
     if (ch === '?' && text[i + 1] !== '.' && text[i + 1] !== '?' && prev !== '?') {
       ternaries[ternaries.length - 1]!++;
@@ -349,7 +358,7 @@ function scanJs(text: string, jsx: boolean, ends?: { inCode: boolean }): JsScan 
   const trimmed = text.trimEnd();
   const rangeEnd = trimmed.endsWith(';') ? trimmed.length - 1 : text.length;
   for (const a of arrows) if (a.end === null) a.end = rangeEnd;
-  return { groups, arrows, assignAt, conditionalAt };
+  return { groups, arrows, assignAt, conditionalAt, statementEndAt };
 }
 
 /**
@@ -431,7 +440,9 @@ function stubDeclarationBody(text: string, scan: JsScan, todo: string): string |
 
 function stubValue(text: string, scan: JsScan, todo: string): string | null {
   if (scan.assignAt === -1) return null;
-  const inValue = (at: number, inParens: boolean, inAngle: boolean): boolean => at > scan.assignAt && inParens && !inAngle;
+  // Only the variable's own statement: a minified line holds the statements after it too, and they are not its body.
+  const end = scan.statementEndAt === -1 ? Infinity : scan.statementEndAt;
+  const inValue = (at: number, inParens: boolean, inAngle: boolean): boolean => at > scan.assignAt && at < end && inParens && !inAngle;
   type Candidate = { start: number; end: number; depth: number; cut: () => string };
   const candidates: Candidate[] = [
     ...scan.groups
@@ -470,7 +481,10 @@ function stubTypeAlias(text: string, scan: JsScan, todo: string): string | null 
     const semicolon = text.trimEnd().endsWith(';') ? ';' : '';
     return `${text.slice(0, top.open + 1)}\n${indentAt(text, top.open)}  ${todo}\n}${semicolon}`;
   }
-  const fnType = scan.arrows.find((a) => a.at > scan.assignAt && a.depth === 0 && !a.inAngle && !a.blockBody && !a.inConsequent);
+  // A function type's arrow, but never one in a conditional type's check (`T extends (x: infer I) => R ? A : B`):
+  // its return type ends at that `?`, which the arrow rule does not look for.
+  const inCheck = (at: number): boolean => scan.conditionalAt > scan.assignAt && at < scan.conditionalAt;
+  const fnType = scan.arrows.find((a) => a.at > scan.assignAt && a.depth === 0 && !a.inAngle && !a.blockBody && !a.inConsequent && !inCheck(a.at));
   if (fnType) return cutArrow(text, fnType, todo);
   const inner = blocks.slice().sort((a, b) => a.depth - b.depth || a.open - b.open)[0];
   return inner ? cutPair(text, inner, todo) : null;

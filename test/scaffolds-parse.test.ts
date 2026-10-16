@@ -356,6 +356,26 @@ const FILES: Record<string, string> = {
     '',
   ].join('\n'),
 
+  // ---- found by the hide check after the rework (a published sample): a conditional type whose check is a
+  // function type, and a generic function type whose type parameters hold a type literal
+  'src/inputof.ts': [
+    'export type InputOf<T> = T extends (',
+    '  input: infer I,',
+    ') => unknown',
+    '  ? I extends Base',
+    '    ? Omit<I, keyof Base>',
+    '    : Fallback<T>',
+    '  : Empty;',
+    '',
+  ].join('\n'),
+  'src/resolver.ts': [
+    'export type Resolver = <T extends { [key: string]: unknown }>(',
+    '  values: T,',
+    '  options: Options,',
+    ') => Promise<Result<T>>;',
+    '',
+  ].join('\n'),
+
   // ---- a conditional type: its `? … : …` must survive the cut (found by the hide probe after slice 1)
   'src/unwrap.ts': [
     'export type Unwrap<T> = T extends Promise<infer U>',
@@ -682,6 +702,24 @@ describe('T-30 AC2 — the same defect in other shapes: each practice file parse
     expectHidden(p, 'n * 2');
   });
 
+  // Found by the nine-sample hide check: a minified file is one line of statements, so a variable's range
+  // holds the statements after it too. Its value is its own; the rest of the line is not its body.
+  it('a variable on a line of minified statements hides its own value, not a later statement\'s', async () => {
+    const source = 'var labels={a:`A`,b:`B`};function pick(x){return labels[x]}var later=function(){return{deep:1}};\n';
+    const range = await rangeOf(source, 'javascript', 'js', 'labels');
+    const out = stubFile(source, [range], 'javascript', Q);
+    expect(out.includes('a:`A`'), `the variable's own value was not hidden:\n${out}`).toBe(false);
+    expect(out.includes('function pick(x){return labels[x]}var later=function(){return{deep:1}};'), `a later statement was cut:\n${out}`).toBe(true);
+    expect(await parseErrorsOf(out, 'javascript', 'js')).toBe(0);
+
+    // An arrow's expression ends at its own statement's `;`, not at the line's last one.
+    const arrows = 'var inc=n=>n+1;function pick(x){return x}var later=1;\n';
+    const cut = stubFile(arrows, [await rangeOf(arrows, 'javascript', 'js', 'inc')], 'javascript', Q);
+    expect(cut.includes('n+1'), `the arrow's body was not hidden:\n${cut}`).toBe(false);
+    expect(cut.includes('function pick(x){return x}var later=1;'), `the statements after the arrow were cut:\n${cut}`).toBe(true);
+    expect(await parseErrorsOf(cut, 'javascript', 'js')).toBe(0);
+  });
+
   it('guard: an index is never a list to hide', () => {
     const source = 'export const first = rows[0] ?? fallback;\n';
     expect(stubFile(source, [{ startLine: 1, endLine: 1 }], 'typescript', Q)).toBe(source);
@@ -692,6 +730,19 @@ describe('T-30 AC2 — the same defect in other shapes: each practice file parse
     expectParses(p);
     expectHidden(p, 'settled: true');
     expectKept(p, ': { value: T; settled: false };');
+  });
+
+  it('a conditional type whose check is a function type is never cut at that arrow', () => {
+    const p = practiceFor('src/inputof.ts', [1, 7]);
+    expectParses(p);
+    expectKept(p, '  ? I extends Base\n    ? Omit<I, keyof Base>\n    : Fallback<T>\n  : Empty;');
+  });
+
+  it('a generic function type: its type parameters are a generic\'s, and its return type is hidden', () => {
+    const p = practiceFor('src/resolver.ts', [1, 4]);
+    expectParses(p);
+    expectKept(p, 'export type Resolver = <T extends { [key: string]: unknown }>(');
+    expectHidden(p, 'Promise<Result<T>>');
   });
 
   it('a conditional type whose check is a type literal keeps its branches', () => {
