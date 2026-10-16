@@ -10,6 +10,18 @@ One entry per lesson, newest first, each citing the ticket or incident it came f
 
 ---
 
+## A seat can move to another model mid-ticket without saying so (T-36, 2026-10-16)
+
+A safety classifier stopped one of the T-36 seat's responses while it wrote about the hostile file name it was
+testing for. The seat carried on, and Claude Code ran it on a fallback model (`claude-opus-4-8`) for the rest of the
+ticket: build, review, landing. Nothing on its screen said so. The passport stamps and the commit trailer did,
+because the seat stamped the model it actually ran on.
+
+**The rule:** read the model from the seat's transcript at every report, not once at launch. When a ticket's
+evidence has to carry an attack string, keep the string in fixtures and files, not in the seat's prose. If a seat
+has moved, decide whether the work needs a second look on the intended model: for T-36 the foreman read the
+three-line diff and re-ran the browser check itself, on main's build and on the build before the fix.
+
 ## A crash that kills a shared runtime is not a per-file failure (T-31, 2026-10-15)
 
 The parser runs in one WebAssembly runtime per process. A file too big for it aborted the runtime, and
