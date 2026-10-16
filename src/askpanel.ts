@@ -60,8 +60,10 @@ export function askPanelScript(opts: AskPanelOptions): string {
   var busy = false;
   var live = null;
 
+  // A citation link builds data-file="..." from a path the model named, so a double quote in a
+  // cited file name must not survive into it (T-36); the single quote is AC1's belt-and-braces.
   function esc(s) {
-    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
   // ---- the transcript -----------------------------------------------------
