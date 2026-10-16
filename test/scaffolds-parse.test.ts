@@ -973,6 +973,146 @@ describe('T-30 AC4 — the stub stays a stub: main\'s output where main already 
 });
 
 // ================================================================================
+// Review attempt 2: each shape below is a regression against main (main's practice file parsed or hid
+// the body; the branch's did not), or a rule the rework added that no test pinned. The shapes are the
+// review's, restated with this file's own names.
+// ================================================================================
+
+const L = (...lines: string[]): string => `${lines.join('\n')}\n`;
+const PANEL = ['export function Panel(props: PanelProps) {', '  const title = props.title.trim();', '  return <section><h2>{title}</h2></section>;', '}'];
+
+interface Shape {
+  what: string;
+  language: string;
+  source: string;
+  symbol: string;
+  hidden?: string[];
+  kept?: string[];
+  untouched?: boolean;
+}
+
+const ATTEMPT_2: Shape[] = [
+  // F1: a chain of conditional types whose later check is a function type (main parsed it, untouched)
+  { what: 'F1: a conditional chain whose second check is a function type', language: 'typescript', symbol: 'ArgOf',
+    source: L('export type ArgOf<T> = T extends string', '  ? never', '  : T extends (x: infer I) => unknown', '    ? I', '    : never;') },
+  { what: 'F1: the same chain on one line', language: 'typescript', symbol: 'ArgOf',
+    source: L('export type ArgOf<T> = T extends string ? never : T extends (x: infer I) => unknown ? I : never;') },
+  { what: 'F1: two function-type checks in a row', language: 'typescript', symbol: 'Made',
+    source: L('export type Made<T> = T extends (...args: never[]) => infer R', '  ? R', '  : T extends new (...args: never[]) => infer I', '    ? I', '    : never;') },
+  { what: 'F1: a function type whose return type is a conditional is still a function type', language: 'typescript', symbol: 'Label',
+    source: L('export type Label<T> = (value: T) => T extends string', "  ? 'text'", "  : 'other';"), hidden: ["'text'"] },
+  { what: 'F1 control: a plain function type in the false branch is still stubbed', language: 'typescript', symbol: 'Handler',
+    source: L('export type Handler<T> = T extends string', '  ? never', '  : (x: T) => void;'), hidden: ['void'] },
+  // F2: a container's first token was judged by a stale previous token
+  { what: 'F2: an element first in a container, after another container', language: 'tsx', symbol: 'Feed',
+    source: L('export function Feed(props: FeedProps) {', '  const count = props.items.length;', '  return (', '    <div>', '      <span>{count}</span>',
+      "      <Suspense fallback={<p>Loading, it's slow</p>}>", '        <List items={props.items} />', '      </Suspense>', '    </div>', '  );', '}'),
+    hidden: ['props.items.length'] },
+  { what: 'F2: an element in an attribute after another attribute', language: 'tsx', symbol: 'Pages',
+    source: L('export function Pages(props: PagesProps) {', '  const paths = props.paths;', "  return <Route path={paths.about} element={<About>Who we're for</About>} />;", '}'),
+    hidden: ['props.paths'] },
+  { what: 'F2: a URL in an element in an attribute, in a .js file', language: 'javascript', symbol: 'Hint',
+    source: L('function Hint(props) {', '  const tip = props.tip;', '  return <Tooltip title={tip} content={<span>See https://example.com</span>} />;', '}'),
+    hidden: ['props.tip'] },
+  { what: 'F2: a regex first in a container, after another container', language: 'tsx', symbol: 'Check',
+    source: L('export function Check(props: CheckProps) {', '  const v = props.value;', '  return <Field value={v} valid={/[(]/.test(v)} />;', '}'),
+    hidden: ['props.value'] },
+  // F3: valid TypeScript in .tsx that is not JSX
+  { what: 'F3: a generic function type in an interface (.tsx)', language: 'tsx', symbol: 'ListProps',
+    source: L('export interface ListProps {', '  render: <T>(item: T) => string;', '  label: string;', '}'), hidden: ['label: string'] },
+  { what: 'F3: a call signature in an interface (.tsx)', language: 'tsx', symbol: 'Mapper',
+    source: L('export interface Mapper {', '  <T>(item: T): T;', '  label: string;', '}'), hidden: ['label: string'] },
+  { what: 'F3: a type alias of a generic function type (.tsx)', language: 'tsx', symbol: 'Render',
+    source: L('export type Render = <T>(item: T) => string;'), hidden: ['string'] },
+  { what: 'F3: a generic JSX element <Select<Option> />', language: 'tsx', symbol: 'Picker',
+    source: L('export function Picker(props: Props) {', '  const [value, setValue] = useState<Option | null>(null);',
+      '  return <Select<Option> options={props.options} value={value} onChange={setValue} />;', '}'), hidden: ['useState'] },
+  { what: 'F3: a generic arrow with a default type, <T = unknown> (.tsx)', language: 'tsx', symbol: 'same',
+    source: L('export const same = <T = unknown>(value: T): T => {', '  console.log(value);', '  return value;', '};'), hidden: ['console.log'] },
+  { what: 'F3: a const type parameter, <const T extends …> (.tsx)', language: 'tsx', symbol: 'tuple',
+    source: L('export const tuple = <const T extends readonly unknown[]>(...items: T): T => {', '  return items;', '};'), hidden: ['return items'] },
+  { what: 'F3: a generic arrow <T,> (.tsx)', language: 'tsx', symbol: 'first',
+    source: L('export const first = <T,>(items: T[]): T | undefined => {', '  return items[0];', '};'), hidden: ['items[0]'] },
+  { what: 'F3: a generic arrow <T extends U> (.tsx)', language: 'tsx', symbol: 'keyOf',
+    source: L('export const keyOf = <T extends object>(value: T): string => {', '  return Object.keys(value)[0] ?? "";', '};'), hidden: ['Object.keys'] },
+  { what: 'F3: a generic function type above a component no longer hides what follows', language: 'tsx', symbol: 'Panel',
+    source: L('type PanelProps = {', '  title: string;', '  render?: <T>(item: T) => string;', '};', '', ...PANEL), hidden: ['props.title.trim()'] },
+  { what: 'F3: a generic JSX element in an earlier component no longer hides what follows', language: 'tsx', symbol: 'Panel',
+    source: L('export function Picker(props: PickerProps) {', '  return <Select<Option> options={props.options} />;', '}', '', ...PANEL), hidden: ['props.title.trim()'] },
+  { what: 'F3: a generic arrow with a default type earlier in the file no longer hides what follows', language: 'tsx', symbol: 'Panel',
+    source: L('export const head = <T = string>(xs: T[]): T | undefined => xs[0];', '', ...PANEL), hidden: ['props.title.trim()'] },
+  // F6: a declarator list
+  { what: 'F6: an arrow in a declarator list keeps the declarators after it', language: 'javascript', symbol: 'inc',
+    source: L('export const inc = (x) => x + 1, dbl = (y) => {', '  return y * 2;', '};'), hidden: ['x + 1'], kept: ['dbl = (y) => {'] },
+  { what: 'F6: two function declarators: the first one\'s body is the one hidden', language: 'javascript', symbol: 'isList',
+    source: L('var isList = function (obj) {', "  return toString.call(obj) === '[object Array]';", '}, isFlat = function (obj) {',
+      '  if (!obj) return false;', '  var proto = Object.getPrototypeOf(obj);', '  return proto === null || proto === Object.prototype;', '};'),
+    hidden: ['[object Array]'] },
+  { what: 'F6: a later destructuring declarator is not the body', language: 'javascript', symbol: 'Lib',
+    source: L('const Lib = window.Lib, { useState, useEffect } = Lib;'), untouched: true },
+  // F4: several declarations on one line
+  { what: 'F4: a function first on a minified line hides its own body', language: 'javascript', symbol: 'f',
+    source: L('function f(a){return a+1}function g(){return 2}'), hidden: ['a+1'], kept: ['function g(){return 2}'] },
+  { what: 'F4: a class first on a minified line hides its own body', language: 'javascript', symbol: 'A',
+    source: L('class A{m(){return 1}}function g(){return 2}'), hidden: ['return 1'], kept: ['function g(){return 2}'] },
+  { what: 'F4: a union member in a return type is not the body', language: 'typescript', symbol: 'pick',
+    source: L('export function pick(): Base | { extra: true } {', '  return choose();', '}'), hidden: ['choose()'], kept: ['Base | { extra: true } {'] },
+  // NIT 2: rarer misreads (each left the range untouched where main hid it)
+  { what: 'NIT 2: a postfix i-- before a division', language: 'javascript', symbol: 'half',
+    source: L('function half(n) {', '  let i = n;', '  return (i-- / 2) | 0;', '}'), hidden: ['let i = n'] },
+  { what: 'NIT 2: a comparison a<b before an object', language: 'javascript', symbol: 'style',
+    source: L('const style = width<600 && {', '  padding: 4,', '  margin: 2,', '};'), hidden: ['padding: 4'] },
+  { what: 'NIT 2: a regex right after an if (…)', language: 'javascript', symbol: 'opens',
+    source: L('function opens(s) {', '  if (s) /\\{/.test(s);', '  return s;', '}'), hidden: ['return s'] },
+  { what: 'NIT 2: a postfix n++ / 2 before a template no longer hides what follows', language: 'javascript', symbol: 'after',
+    source: L('let n = 3;', 'const half = n++ / 2, label = `', '  multi-line', '`;', 'function after(x) {', '  return x * half;', '}'), hidden: ['x * half'] },
+  // Found by the every-symbol check after slice 5: a regression against main, or a shape main hid
+  { what: 'every-symbol: a function type returning a generic function type (the , inside its <…>)', language: 'typescript', symbol: 'Builder',
+    source: L('export type Builder = (', '  schema: Schema,', ') => <V extends Values, C>(', '  values: V,', '  context: C | undefined,', ') => Promise<Result<V>>;'),
+    hidden: ['Promise<Result<V>>'] },
+  { what: 'every-symbol: a generic function type whose constraint holds a nested generic', language: 'typescript', symbol: 'Make',
+    source: L('export type Make = <T extends ReturnType<typeof make>>(', '  values: T,', ') => Promise<T>;'), hidden: ['Promise<T>'] },
+  { what: 'every-symbol: a typed variable with nothing to hide in its value hides its type literal', language: 'typescript', symbol: 'memo',
+    source: L('let memo: { code: number; text: string } | null = null;'), hidden: ['code: number'], kept: ['} | null = null;'] },
+  { what: 'every-symbol: an empty value is not the body when the annotation holds the content', language: 'typescript', symbol: 'images',
+    source: L('const images: {', '  [name: string]: ImageBitmap;', '} = {};'), hidden: ['ImageBitmap'], kept: ['} = {};'] },
+  { what: 'every-symbol: an empty function value still gets its TODO, as an empty function declaration does', language: 'typescript', symbol: 'noop',
+    source: L('export const noop = () => {};'), kept: ['export const noop = () => {', 'TODO(step 1)'] },
+  { what: 'every-symbol: a styled template is the body (.tsx)', language: 'tsx', symbol: 'Wrapper',
+    source: L('const Wrapper = styled.div<{ wide: boolean }>`', '  display: flex;', '  width: ${(p) => (p.wide ? "100%" : "50%")};', '`;'),
+    hidden: ['display: flex'], kept: ['const Wrapper = styled.div<{ wide: boolean }>`', '`;'] },
+  // F5: rules the rework added that no test pinned
+  { what: 'F5: a type literal after `satisfies` is a type, the value is the body', language: 'typescript', symbol: 'limits',
+    source: L('export const limits = { max: 10, min: 1 } satisfies { max: number; min: number; step?: number; label?: string };'),
+    hidden: ['max: 10'], kept: ['satisfies { max: number; min: number; step?: number; label?: string };'] },
+  { what: 'F3: a generic function type in an annotation is a type, the value is the body (.tsx)', language: 'tsx', symbol: 'show',
+    source: L('export const show: <T>(item: T) => string = (item) => String(item);'),
+    hidden: ['String(item)'], kept: ['export const show: <T>(item: T) => string = (item) => {'] },
+  { what: 'F5: an optional property in a union member is not a conditional', language: 'typescript', symbol: 'Opt',
+    source: L('export type Opt = { a?: string } | { b: number };'), hidden: ['a?: string', 'b: number'] },
+  { what: 'F5: JSX after a conditional\'s `:`', language: 'tsx', symbol: 'Toggle',
+    source: L('export function Toggle(props: ToggleProps) {', '  const on = props.on;', "  return on ? <b>On</b> : <i>It's off</i>;", '}'), hidden: ['props.on'] },
+  { what: 'F5: an attribute string holding `>`, `{` and `//`', language: 'tsx', symbol: 'Link',
+    source: L('export function Link(props: LinkProps) {', '  const label = props.label;', '  return <a title="a > b {c}" href="https://example.com/x">{label}</a>;', '}'),
+    hidden: ['props.label'] },
+];
+
+describe('T-30 review attempt 2 — the regressions it found, and the rules it found unpinned', () => {
+  for (const shape of ATTEMPT_2) {
+    it(shape.what, async () => {
+      const ext = shape.language === 'typescript' ? 'ts' : shape.language === 'tsx' ? 'tsx' : 'js';
+      expect(await parseErrorsOf(shape.source, shape.language, ext), 'the reference itself does not parse').toBe(0);
+      const range = await rangeOf(shape.source, shape.language, ext, shape.symbol);
+      const out = stubFile(shape.source, [range], shape.language, Q);
+      expect(await parseErrorsOf(out, shape.language, ext), `the practice file does not parse:\n${out}`).toBe(0);
+      if (shape.untouched) expect(out, 'should come back untouched').toBe(shape.source);
+      for (const answer of shape.hidden ?? []) expect(out.includes(answer), `hands over the answer (${answer}):\n${out}`).toBe(false);
+      for (const text of shape.kept ?? []) expect(out.includes(text), `lost ${JSON.stringify(text)}:\n${out}`).toBe(true);
+    });
+  }
+});
+
+// ================================================================================
 // AC5 — a range the stubber cannot read is left alone
 // ================================================================================
 
@@ -1021,6 +1161,12 @@ describe('T-30 AC5 — a range the scan cannot read comes back byte for byte', (
 
   // Review attempt 1, M7: this test once passed with its rule deleted, because nothing in the range
   // was a candidate. The object before the template is one, so only the rule keeps it whole.
+  it('a range that starts inside a block comment opened earlier in the file is left alone', async () => {
+    const source = '/* an old version:\nfunction legacy(a) {\n  return a;\n}\n*/\nconst x = 1;\n';
+    const out = stubFile(source, [{ startLine: 2, endLine: 4 }], 'javascript', Q);
+    expect(out, `a range that starts inside a comment was cut:\n${out}`).toBe(source);
+  });
+
   it('a range that ends inside a template literal', () => {
     const source = "const settings = { theme: 'dark' }; const page = `\n<main>{body}</main>\n`;\n";
     const out = stubFile(source, [{ startLine: 1, endLine: 2 }], 'javascript', Q);
