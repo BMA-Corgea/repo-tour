@@ -10,6 +10,17 @@ One entry per lesson, newest first, each citing the ticket or incident it came f
 
 ---
 
+## A check that scores one row per range cannot see the second declaration (T-30, 2026-10-17)
+
+T-30's builder wrote an every-symbol check to prove "zero regressions against main" and reported 0. Review 3 found 46:
+when one range held several declarations (a declarator list, a one-line script), only the first one's body was
+hidden, and the check kept one row per range and scored only its first symbol. With the check fixed, the true count was
+63, and the next round brought it to 0. The same review warned about the other half of such a table: a class that
+excuses rows (empty bodies, vendored files) needs the same scrutiny as the rule that flags them.
+
+**The rule:** a measurement that proves "nothing got worse" must enumerate the things that can get worse one by one,
+never one row per container. Ask the reviewer to re-derive the table, not to read it.
+
 ## A test file saved as evidence still runs (T-45, 2026-10-16)
 
 A reviewer saved its variant of a test under the gitignored `.autodev/evidence/` folder, still named `*.test.ts`.
