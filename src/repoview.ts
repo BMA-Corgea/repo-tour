@@ -88,7 +88,13 @@ function liveReloadScript(): string {
       .then(function (v) {
         if (!v || !v.bootId) return;
         if (mine === null) { mine = v.bootId; return; }  // first answer sets the baseline
-        if (v.bootId !== mine) location.reload();
+        // A navigation of its own, not location.reload(): Firefox sends a reload with the label of the
+        // link that first opened the tab, so a tour opened from another site's link would reload as
+        // that site's request, and the server would not start its rebuild (T-34). A navigation the
+        // page makes is its own request (same-origin), measured in Chromium and Firefox. replace()
+        // overwrites the current history entry rather than pushing a new one, so it adds no Back-trap.
+        // Without the fragment, or it would only jump to it on this page.
+        if (v.bootId !== mine) location.replace(location.href.split('#')[0]);
       })
       .catch(function () { /* restarting; try again next tick */ });
   }
