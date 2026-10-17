@@ -198,7 +198,9 @@ const SCRIPT = `
     return '<span class="meter"><i style="width:' + pct + '%"></i></span>';
   }
   function esc(s) {
-    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    // The file row builds data-tour-path="..." from a name the reader does not control, so a
+    // double quote must not survive into it (T-36); the single quote is AC1's belt-and-braces.
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
   function detailHtml(r) {

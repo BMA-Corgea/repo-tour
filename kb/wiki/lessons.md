@@ -10,6 +10,34 @@ One entry per lesson, newest first, each citing the ticket or incident it came f
 
 ---
 
+## A test file saved as evidence still runs (T-45, 2026-10-16)
+
+A reviewer saved its variant of a test under the gitignored `.autodev/evidence/` folder, still named `*.test.ts`.
+Vitest's default search covers the whole checkout, ignored folders included, so the next `npm test` in the main
+checkout found 19 test files instead of 18 and one failed to load. A clean clone never sees it, so the landing check
+stayed green while the checkout the seats use went red.
+
+**The rule:** an evidence copy of a test ends in `.test.ts.txt`. The lasting fix is to scope Vitest to `test/`, which
+is a code change for a later ticket.
+
+## A seat can move to another model mid-ticket without saying so (T-36, 2026-10-16)
+
+A safety classifier stopped one of the T-36 seat's responses while it wrote about the hostile file name it was
+testing for. The seat carried on, and Claude Code ran it on a fallback model (`claude-opus-4-8`) for the rest of the
+ticket: build, review, landing. Nothing on its screen said so. The passport stamps and the commit trailer did,
+because the seat stamped the model it actually ran on.
+
+**The rule:** read the model from the seat's transcript at every report, not once at launch. When a ticket's
+evidence has to carry an attack string, keep the string in fixtures and files, not in the seat's prose. If a seat
+has moved, decide whether the work needs a second look on the intended model: for T-36 the foreman read the
+three-line diff and re-ran the browser check itself, on main's build and on the build before the fix.
+
+**It happened three more times in the same run, all on T-34**, whose evidence had to be hostile pages: the builder, the
+reviewer it dispatched, and a fresh reviewer seat opened to get the intended model back. The fallback covers the whole
+session, subagents included, and a restart tends to trip again. So for security work, plan for the fallback model:
+make every claim rest on a script anyone can re-run, record the model mix in the review, and have someone outside the
+seat re-run the key scripts before sign-off.
+
 ## A crash that kills a shared runtime is not a per-file failure (T-31, 2026-10-15)
 
 The parser runs in one WebAssembly runtime per process. A file too big for it aborted the runtime, and

@@ -88,7 +88,13 @@ function liveReloadScript(): string {
       .then(function (v) {
         if (!v || !v.bootId) return;
         if (mine === null) { mine = v.bootId; return; }  // first answer sets the baseline
-        if (v.bootId !== mine) location.reload();
+        // A navigation of its own, not location.reload(): Firefox sends a reload with the label of the
+        // link that first opened the tab, so a tour opened from another site's link would reload as
+        // that site's request, and the server would not start its rebuild (T-34). A navigation the
+        // page makes is its own request (same-origin), measured in Chromium and Firefox. replace()
+        // overwrites the current history entry rather than pushing a new one, so it adds no Back-trap.
+        // Without the fragment, or it would only jump to it on this page.
+        if (v.bootId !== mine) location.replace(location.href.split('#')[0]);
       })
       .catch(function () { /* restarting; try again next tick */ });
   }
@@ -325,7 +331,11 @@ const APP = `
   var rangeEl = document.getElementById('range');
   var current = null;
 
-  function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  // Attributes are double-quoted and built from file names the reader does not control, so a
+  // double quote must not survive into one (T-36). A single quote cannot break a double-quoted
+  // attribute, but AC1 asks for it too, and escaping is invisible to readers: the browser decodes
+  // the entity, so getAttribute('data-p') still returns the real path the tree keys files by.
+  function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 
   // ---- tree
   var dirs = {};
