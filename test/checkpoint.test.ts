@@ -281,6 +281,17 @@ process.stdin.on('end', () => setTimeout(() => {
   return { fix, sha1, sha2, fakeDir, fake };
 }
 
+/**
+ * T-44 — how long one signal mid-call may take to end the run. Not 3 s: the first model call of a process starts
+ * with a one-time pause, V8's TurboFan compiling the parser's WebAssembly while the main thread waits on it, and no
+ * signal handler runs until it ends (T-20's review; T-21 holds the pause, parked by the owner). Measured
+ * (`.autodev/evidence/T-44/`): 908 to 994 ms at rest; 1,150 to 2,725 ms, and once past 3 s, on four cores carrying
+ * eight busy loops. Removing the pause (`--liftoff-only`) made every digest 65% slower, so the product keeps it and
+ * this window allows for it. A swallowed signal still fails here: that run carries on through the fake's 20 s call
+ * and the next one, so it is still running when the window ends.
+ */
+const SIGNAL_EXIT_MS = 15_000;
+
 describe('T-20 AC10: `repo-tour pr` as GONS runs it, and stopped by a signal mid-call', () => {
   let fix: string;
   let sha1: string;
@@ -370,8 +381,8 @@ describe('T-20 AC10: `repo-tour pr` as GONS runs it, and stopped by a signal mid
           .toHaveLength(2);
 
         child.proc.kill(signal);
-        const exit = await within(child.exited, 3000);
-        expect.soft(exit, `still running 3 s after one ${signal}: the signal was swallowed and the tour carried on`)
+        const exit = await within(child.exited, SIGNAL_EXIT_MS);
+        expect.soft(exit, `still running ${SIGNAL_EXIT_MS / 1000} s after one ${signal}: the signal was swallowed and the tour carried on`)
           .not.toBeNull();
         if (exit) expect.soft(exit, `it ended, but not by ${signal} as it would with no handler`).toEqual({ code: null, signal });
         const stopped = await until(() => !running(pid!), 2000);
