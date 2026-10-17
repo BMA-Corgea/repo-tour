@@ -32,9 +32,11 @@ const TSX = pathToFileURL(path.join(REPO_ROOT, 'node_modules', 'tsx', 'dist', 'l
 /**
  * How long the signal may wait. Measured with this check (`.autodev/evidence/T-44/rework/`), on four
  * cores carrying no, eight and twelve busy loops: without the held loop, 966 to 1,047 ms, 2.5 to
- * 2.9 s and 3.2 to 4.7 s; with it, 0 to 5 ms at all three.
+ * 2.9 s and 3.2 to 4.7 s; with it, 0 to 5 ms at all three (T-44's second review: up to 8 ms). 200 ms
+ * is 25 times the slowest correct wait and under a quarter of the shortest pause, so a machine that
+ * compiles the grammar sooner still shows one.
  */
-const HANDLED_WITHIN_MS = 500;
+const HANDLED_WITHIN_MS = 200;
 
 let base: string;
 
