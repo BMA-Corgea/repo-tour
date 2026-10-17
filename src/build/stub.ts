@@ -6,10 +6,10 @@
  * which decision belongs where. Everything outside `loadBearing` is copied byte-for-byte.
  *
  * This never tries to be clever about a shape it does not recognize. TS/JS pairs every
- * bracket in the range and hides the inside of one matched pair, keeping everything before it
- * and everything from its own closer on, or turns an arrow's expression into a block; a type
- * alias's union goes whole, as main cut it. Which pair is the body depends on what the range
- * declares (`stubJsLikeRange`). Python
+ * bracket in the range and, for each declaration on it, hides the inside of one matched pair,
+ * keeping everything before it and everything from its own closer on, or turns an arrow's
+ * expression into a block; a type alias's union goes whole, as main cut it. Which pair is a
+ * declaration's body depends on what it declares (`stubJsLikeRange`). Python
  * finds the colon that ends the header and then writes whichever body shape that header
  * already has — a same-line `raise` for an inline body, an indented one (measured, never
  * assumed) for a block. Anything neither pattern fits — a bare exported constant with no
@@ -90,6 +90,17 @@ interface JsScan {
   statementEndAt: number;
   /** the first `,` at depth 0 after `assignAt`, outside a generic: where the first declarator ends — or -1 */
   declaratorEndAt: number;
+  /** every `=` at depth 0 outside a generic (`assignAt` is the first), every such `,`, and every `;` at depth 0, in text order */
+  assigns: number[];
+  commas: number[];
+  semis: number[];
+}
+
+/** One change to a range's text: `[from, to)` becomes `insert`. */
+interface Edit {
+  from: number;
+  to: number;
+  insert: string;
 }
 
 /** Where a `<` may open a JSX element: where an expression may start. */
@@ -105,8 +116,8 @@ const JSX_AFTER_WORD = new Set(['return', 'yield', 'default']);
  */
 const REGEX_AFTER = new Set(['(', ',', '=', ':', '[', '!', '&', '|', '?', '{', '}', ';', '+', '-', '*', '%', '~', '^', '>']);
 const REGEX_AFTER_WORD = new Set(['return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void', 'throw', 'case', 'do', 'else', 'yield', 'await']);
-/** After one of these words, a `{` or `[` is a type: `x as { … }`, `class A extends B<…>`. */
-const TYPE_AFTER_WORD = new Set(['as', 'satisfies', 'extends', 'implements']);
+/** After one of these words, a `{` or `[` is a type: `x as { … }`, `class A extends B<…>`, `v is { … }`. */
+const TYPE_AFTER_WORD = new Set(['as', 'satisfies', 'extends', 'implements', 'is']);
 const CLOSER_OF: Record<string, string> = { '(': ')', '[': ']', '{': '}' };
 
 function isWordChar(ch: string): boolean {
@@ -120,10 +131,11 @@ function isWordChar(ch: string): boolean {
  * wrong kind, a bracket or a template is still open at the end of the range, or a block comment
  * never ends. Removing the inside of a pair this scan matched cannot unbalance the range.
  *
- * Two readings are approximate, and both only ever narrow what may be cut: a `<` straight after
- * a name, or after a `=`, opens a generic's `<…>` (dropped again at a `;`, a conditional's `?`,
- * a `&&` or `||`, or an outer closer, so a comparison like `i<n` costs little), and a quote that
- * reaches the end of its line ends there (JavaScript has no multi-line quotes).
+ * Two readings are approximate: a `<` straight after a name, or after a `=`, opens a generic's
+ * `<…>` (dropped again at a `;`, a conditional's `?`, a `&&` or `||`, or an outer closer, so a
+ * comparison like `i<n` costs little; but inside one a `,` ends neither an arrow nor a declarator,
+ * so `=> a<b, gt = …` is cut through to its `;`, as main cut it), and a quote that reaches the end
+ * of its line ends there (JavaScript has no multi-line quotes).
  *
  * With `jsx` (a `.tsx` or `.js` file), a `<` where an expression may start, followed by a tag
  * name, opens a JSX element. Its tag holds attributes (whose strings may span lines), its children
@@ -146,6 +158,9 @@ function scanJs(text: string, jsx: boolean, checkpoints?: { at: number[]; inCode
   let assignAt = -1;
   let statementEndAt = -1;
   let declaratorEndAt = -1;
+  const assigns: number[] = [];
+  const commas: number[] = [];
+  const semis: number[] = [];
   let conditionalAt = -1;
   let inCheck = false; // a depth-0 `extends` came after the last conditional `?` or `:` (a conditional type's check)
   let singleTypeOp = false; // the last `|` or `&` was a type's union or intersection, not `||` or `&&`
@@ -378,9 +393,11 @@ function scanJs(text: string, jsx: boolean, checkpoints?: { at: number[]; inCode
       continue;
     }
 
-    // A JSX element, where an expression may start. `<T,>(` and `<T extends U>(` are a generic arrow's type parameters.
-    // After an annotation's `:` a `<` is a generic function type; `<T = U>(` and `<const T …>(` are type parameters too.
-    if (ch === '<' && jsx && (JSX_AFTER.has(prev) || (prev === 'w' && JSX_AFTER_WORD.has(word))) && !(prev === ':' && typeColon)
+    // A JSX element, where an expression may start. `<T,>(` and `<T extends U>(` are a generic arrow's type parameters,
+    // and so are `<T = U>(` and `<const T …>(`. After a colon that answers no `?`, `<T>(` is a generic function type
+    // (`render: <T>(x: T) => string`); anything else there is JSX, an object property's value (`label: <b>Hi</b>`).
+    if (ch === '<' && jsx && (JSX_AFTER.has(prev) || (prev === 'w' && JSX_AFTER_WORD.has(word)))
+      && !(prev === ':' && typeColon && /^<[A-Za-z_$][\w$]*>\s*\(/.test(text.slice(i, i + 64)))
       && /[A-Za-z_$>]/.test(text[i + 1] ?? '') && !/^<(?:const\s+)?[A-Za-z_$][\w$]*\s*(?:,|extends\b|=(?!>))/.test(text.slice(i, i + 64))) {
       push('<jsx', i);
       stack[stack.length - 1]!.inTag = true;
@@ -406,6 +423,7 @@ function scanJs(text: string, jsx: boolean, checkpoints?: { at: number[]; inCode
       for (const a of openArrows.get(stack.length) ?? []) a.end = i;
       openArrows.delete(stack.length);
       if (stack.length === 0 && assignAt !== -1 && statementEndAt === -1 && declaratorEndAt === -1) declaratorEndAt = i;
+      if (stack.length === 0) commas.push(i);
     }
     if (ch === ';') {
       // A `;` beside an arrow ends its expression, as a closer does. (JSX text is read as text, so its `;` never gets here.)
@@ -413,9 +431,11 @@ function scanJs(text: string, jsx: boolean, checkpoints?: { at: number[]; inCode
       openArrows.delete(stack.length);
       dropAngles(stack.length);
       if (stack.length === 0 && assignAt !== -1 && statementEndAt === -1) statementEndAt = i;
+      if (stack.length === 0) semis.push(i);
     }
-    // `?.` and `??` are not a conditional's `?`; every conditional `?` is answered by a `:` at its own level.
-    if (ch === '?' && text[i + 1] !== '.' && text[i + 1] !== '?' && prev !== '?') {
+    // `?.` and `??` are not a conditional's `?`, and neither is an optional mark (`render?:`, `(x?)`, `[a?, b?]`);
+    // every conditional `?` is answered by a `:` at its own level.
+    if (ch === '?' && text[i + 1] !== '.' && text[i + 1] !== '?' && prev !== '?' && !/^\?\s*[:),]/.test(text.slice(i, i + 16))) {
       ternaries[ternaries.length - 1]!++;
       dropAngles(stack.length);
       if (stack.length === 0) {
@@ -428,26 +448,40 @@ function scanJs(text: string, jsx: boolean, checkpoints?: { at: number[]; inCode
       if (!typeColon) ternaries[ternaries.length - 1]!--;
       if (!typeColon && stack.length === 0) inCheck = false;
     }
-    if (ch === '=' && assignAt === -1 && stack.length === 0 && angles.length === 0
-      && text[i + 1] !== '=' && !'=!<>+-*/%&|^?'.includes(text[i - 1] ?? '')) assignAt = i;
+    if (ch === '=' && stack.length === 0 && angles.length === 0 && text[i + 1] !== '=' && !'=!<>+-*/%&|^?'.includes(text[i - 1] ?? '')) {
+      if (assignAt === -1) assignAt = i;
+      assigns.push(i);
+    }
     prev = ch;
     word = '';
   }
 
   if (inTemplate || stack.length > 0) return null;
-  const trimmed = text.trimEnd();
-  const rangeEnd = trimmed.endsWith(';') ? trimmed.length - 1 : text.length;
-  for (const a of arrows) if (a.end === null) a.end = rangeEnd;
-  return { groups, arrows, templates, assignAt, conditionalAt, statementEndAt, declaratorEndAt };
+  for (const a of arrows) if (a.end === null) a.end = text.length;
+  return { groups, arrows, templates, assignAt, conditionalAt, statementEndAt, declaratorEndAt, assigns, commas, semis };
 }
 
-/** The index of the `>` that closes the type arguments opening at `at` (`<Option>`, `<A<B>, C>`), or -1. */
+/**
+ * The index of the `>` that closes the type arguments opening at `at`, or -1: `<Option>`, `<A<B>, C>`,
+ * `<{ id: number }>`, `<'on' | 'off'>`, `<() => void>`, over several lines. Brackets inside pair up, quotes
+ * are skipped, and a `;` outside every bracket or a backtick gives up.
+ */
 function typeArgumentsEnd(text: string, at: number): number {
-  let depth = 0;
-  for (let i = at; i < text.length; i++) {
-    if (text[i] === '<') depth++;
-    else if (text[i] === '>' && text[i - 1] !== '=' && --depth === 0) return i;
-    else if (text[i] === '\n' || text[i] === '{' || text[i] === ';') return -1;
+  let angles = 0;
+  const closers: string[] = [];
+  const limit = Math.min(text.length, at + 4096);
+  for (let i = at; i < limit; i++) {
+    const c = text[i]!;
+    if (c === '"' || c === "'") {
+      let j = i + 1;
+      while (j < limit && text[j] !== c && text[j] !== '\n') j += text[j] === '\\' ? 2 : 1;
+      if (text[j] !== c) return -1;
+      i = j;
+    } else if (c === '`' || (c === ';' && closers.length === 0)) return -1;
+    else if (c === '(' || c === '[' || c === '{') closers.push(CLOSER_OF[c]!);
+    else if (c === ')' || c === ']' || c === '}') { if (closers.pop() !== c) return -1; }
+    else if (closers.length === 0 && c === '<') angles++;
+    else if (closers.length === 0 && c === '>' && text[i - 1] !== '=' && --angles === 0) return i;
   }
   return -1;
 }
@@ -458,8 +492,9 @@ function typeArgumentsEnd(text: string, at: number): number {
  * declaration right after a template's closing backtick) would be read with code and template
  * swapped. So the file is scanned once, from line 1, and each range's first line is answered as
  * the scan reaches it. A line the scan never reaches (it misread something earlier) counts as
- * code, as it did before this check; JSX never counts against a line, so a misread element cannot
- * take the rest of the file with it.
+ * code, as it did before this check, and JSX never counts against a line. A misread that opens a
+ * template or a block comment where there is none still hides the lines up to where it closes:
+ * those ranges are left untouched, never cut.
  */
 function linesInCode(lines: string[], startLines: number[], jsx: boolean): Map<number, boolean> {
   const offsetOf = new Map<number, number>();
@@ -473,23 +508,56 @@ function linesInCode(lines: string[], startLines: number[], jsx: boolean): Map<n
   return new Map(startLines.map((n) => [n, inCode.get(offsetOf.get(n) ?? -1) ?? true]));
 }
 
+/**
+ * The start of the line that holds offset `at`. A range can be one long line holding thousands of
+ * declarations, each cut on it, so the text's line starts are found once and then searched.
+ */
+let lineIndex: { text: string; starts: number[] } = { text: '', starts: [0] };
+function lineStartOf(text: string, at: number): number {
+  if (lineIndex.text !== text) {
+    const starts = [0];
+    for (let i = text.indexOf('\n'); i !== -1; i = text.indexOf('\n', i + 1)) starts.push(i + 1);
+    lineIndex = { text, starts };
+  }
+  const { starts } = lineIndex;
+  let lo = 0;
+  let hi = starts.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (starts[mid]! <= at) lo = mid;
+    else hi = mid - 1;
+  }
+  return starts[lo]!;
+}
+
 /** The leading whitespace of the line that holds offset `at`. */
 function indentAt(text: string, at: number): string {
-  const lineStart = text.lastIndexOf('\n', at) + 1;
-  return /^[ \t]*/.exec(text.slice(lineStart))![0];
+  return /^[ \t]*/.exec(text.slice(lineStartOf(text, at)))![0];
 }
 
 /** Hide the inside of one matched pair: everything through its opener, the TODO line, everything from its own closer on. */
-function cutPair(text: string, g: Group, todo: string): string {
-  const closeLineStart = text.lastIndexOf('\n', g.close) + 1;
-  const tail = text.slice(closeLineStart, g.close).trim() === '' ? text.slice(closeLineStart) : text.slice(g.close);
-  return `${text.slice(0, g.open + 1)}\n${indentAt(text, g.open)}  ${todo}\n${tail}`;
+function cutPair(text: string, g: { open: number; close: number }, todo: string): Edit {
+  const closeLineStart = lineStartOf(text, g.close);
+  const to = text.slice(closeLineStart, g.close).trim() === '' ? closeLineStart : g.close;
+  return { from: g.open + 1, to, insert: `\n${indentAt(text, g.open)}  ${todo}\n` };
 }
 
 /** Turn an arrow's expression body into a block, keeping whatever followed the expression. */
-function cutArrow(text: string, a: Arrow, todo: string): string {
+function cutArrow(text: string, a: Arrow, todo: string): Edit {
   const indent = indentAt(text, a.at);
-  return `${text.slice(0, a.at + 2)} {\n${indent}  ${todo}\n${indent}}${text.slice(a.end!)}`;
+  return { from: a.at + 2, to: a.end!, insert: ` {\n${indent}  ${todo}\n${indent}}` };
+}
+
+/** Apply edits that do not overlap, in one pass. */
+function applyEdits(text: string, edits: Edit[]): string {
+  const parts: string[] = [];
+  let at = 0;
+  for (const e of [...edits].sort((a, b) => a.from - b.from)) {
+    parts.push(text.slice(at, e.from), e.insert);
+    at = e.to;
+  }
+  parts.push(text.slice(at));
+  return parts.join('');
 }
 
 /** `type X = …`, `export declare type X<T> = …`. */
@@ -499,29 +567,46 @@ const INTERFACE = /^\s*(?:export\s+)?(?:declare\s+)?interface\s/;
 /** `const x = …`, `export let x: T = …`; not `const enum`. */
 const VARIABLE = /^\s*(?:export\s+)?(?:declare\s+)?(?:const|let|var)\s+(?!enum\b)/;
 
+/** `function f`, `export default class A`, `async function* g`, `interface I`, `enum E`, `namespace N`. */
+const DECLARATION = /^(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?(?:async\s+)?(?:function\b|class\b|(?:interface|enum|namespace|module)\s+[A-Za-z_$'"])/;
+/** A method's head, as in a class body written on one line: `name(`, `static async *name(`, `get name(`, `#name<T>(`. */
+const METHOD = /^(?:(?:static|async|get|set|public|private|protected|override|readonly)\s+)*\*?\s*#?([A-Za-z_$][\w$]*)\s*[<(]/;
+/** Words that start a statement, not a method, when a `(` follows them. */
+const STATEMENT_WORDS = new Set(['if', 'for', 'while', 'switch', 'catch', 'with', 'function', 'return', 'throw', 'typeof',
+  'await', 'yield', 'new', 'delete', 'void', 'do', 'else', 'super', 'import']);
+/** After a block at depth 0, these words carry on its statement; any other word starts a new one. */
+const CONTINUES = new Set(['else', 'catch', 'finally', 'while', 'as', 'satisfies', 'instanceof', 'in', 'of', 'from', 'extends', 'implements']);
+
 /**
- * Replace one range of a TS/JS/TSX file. Which pair holds the body depends on what the range
- * declares, and only pairs inside nothing but parentheses are ever candidates (a `[ … ]` element,
- * a `{ … }` member and a template's `${ … }` are all part of something bigger):
+ * Replace one range of a TS/JS/TSX file. A range is the range of every declaration on it:
+ * `extract()` gives each declarator of a statement, and each declaration on a line of statements,
+ * the whole statement's or line's range, and main's cut (everything after the first `{`) hid them
+ * all. So each declaration on the range hides its own body, and which pair that is depends on
+ * what it declares. Only pairs inside nothing but parentheses are ever candidates (a `[ … ]`
+ * element, a `{ … }` member and a template's `${ … }` are all part of something bigger):
  *
- *   - A function, class, interface, enum or method: its FIRST top-level `{ … }` that is not a
- *     type — never a type argument (`<…>`), a return-type literal or a union member (`A | { … }`).
- *     On a minified line, the declarations after it keep their bodies.
- *   - A variable: only what follows its top-level `=` and comes before the end of its first
- *     declarator (a `,`) or its statement (a `;`), never its type annotation, a type argument or
- *     a return-type literal. The shallowest candidate, the biggest on a tie: an arrow's
- *     expression body (on any line), or a block — the module pattern's function, a callback, an
- *     `extend({ … })` object. A list of records is hidden whole, and only when nothing else is
- *     there (`[1, 2].map((n) => …)` hides the callback).
+ *   - A function, class, interface, enum or method: the LAST top-level `{ … }` of its own
+ *     statement that is not a type — never a type argument (`<…>`), a return-type literal (after
+ *     `:` or `is`, or a return type's `() => { … }`), or a union member (`A | { … }`).
+ *   - A variable: each declarator's own value, from its `=` to its `,` or its statement's `;`,
+ *     never a type annotation, a type argument or a return-type literal. The shallowest candidate,
+ *     the biggest on a tie: an arrow's expression body (on any line), or a block — the module
+ *     pattern's function, a callback, an `extend({ … })` object. A list of records is hidden
+ *     whole, and a template's text goes, each only when nothing else is there (`[1, 2].map((n) =>
+ *     …)` hides the callback). When the range's first value holds nothing to hide, its annotation's
+ *     type literal is the content (`let memo: { … } | null = null`).
  *   - A type alias: main's own cut from its first top-level `{` (every union member goes with
  *     it, and a range-final `;` stays) unless the type is conditional, where only that pair is
  *     cut; a function type's return type, but never an arrow inside a conditional type's check
  *     (`T extends (x: infer I) => R ? A : B`, at any link of a chain); or, inside a generic, the
  *     pair itself, so `Readonly<{ … }>` keeps its `}>;`. A type alias and an interface hold no JSX.
  *
- * An arrow that is a conditional's first branch is never cut, and a range the scan cannot read,
- * or one whose first line starts inside a template or a block comment, is left exactly as it was. The TODO line sits two spaces inside the line it opens, and a closing
- * line keeps its own indentation, so a function inside a wrapper still reads as one.
+ * A statement on the range that declares nothing (`if (…) { … }`, a call, an assignment) is left
+ * as it is. An arrow that is a conditional's first branch is never cut, and a range the scan cannot
+ * read, or one whose first line starts inside a template or a block comment, is left exactly as it
+ * was. Each cut is inside one matched pair of its own declaration, so none overlaps another and the
+ * range stays balanced. The TODO line sits two spaces inside the line it opens, and a closing line
+ * keeps its own indentation, so a function inside a wrapper still reads as one.
  */
 function stubJsLikeRange(lines: string[], start: number, end: number, language: string, questions: StubQuestion[], index: number): string[] {
   const untouched = lines.slice(start - 1, end);
@@ -530,55 +615,172 @@ function stubJsLikeRange(lines: string[], start: number, end: number, language: 
   const scan = scanJs(text, language !== 'typescript' && !TYPE_ALIAS.test(text) && !INTERFACE.test(text));
   if (scan === null) return untouched;
   const todo = todoLine('//', questions, index);
-  const out = VARIABLE.test(text) ? stubValue(text, scan, todo)
-    : TYPE_ALIAS.test(text) ? stubTypeAlias(text, scan, todo)
-    : stubDeclarationBody(text, scan, todo);
-  return out === null ? untouched : out.split('\n');
+  if (TYPE_ALIAS.test(text)) {
+    const cut = stubTypeAlias(text, scan, todo);
+    return cut === null ? untouched : applyEdits(text, [cut]).split('\n');
+  }
+  const starts = statementStarts(text, scan);
+  const pool = poolOf(text, scan);
+  const variable = VARIABLE.test(text);
+  const first = variable ? stubValue(text, scan, pool, todo) : stubDeclarationBody(text, scan, todo, starts[0] ?? text.length);
+  // The range's first value is `stubValue`'s, so the later declarations skip it.
+  const later = laterDeclarations(text, scan, pool, todo, starts, variable ? scan.assignAt : -1)
+    .filter((e) => !first || e.to <= first.from || e.from >= first.to);
+  const edits = first ? [first, ...later] : later;
+  return edits.length === 0 ? untouched : applyEdits(text, edits).split('\n');
 }
 
-function stubDeclarationBody(text: string, scan: JsScan, todo: string): string | null {
-  const tops = scan.groups.filter((g) => g.kind === '{' && g.depth === 0 && !g.inAngle && !g.typeLiteral);
-  return tops.length > 0 ? cutPair(text, tops[0]!, todo) : null;
+/** The body of the declaration the range starts with: the last top-level block of its own statement, which ends at `end`. */
+function stubDeclarationBody(text: string, scan: JsScan, todo: string, end: number): Edit | null {
+  const tops = scan.groups.filter((g) => g.kind === '{' && g.depth === 0 && !g.inAngle && !g.typeLiteral && g.close < end);
+  return tops.length > 0 ? cutPair(text, tops[tops.length - 1]!, todo) : null;
 }
 
-function stubValue(text: string, scan: JsScan, todo: string): string | null {
+/** The value of the range's first declarator, or failing that its annotation's type literal. */
+function stubValue(text: string, scan: JsScan, pool: Pool, todo: string): Edit | null {
   if (scan.assignAt === -1) return null;
-  // Only the variable's own statement: a minified line holds the statements after it too, and they are not its body.
   const end = Math.min(...[scan.statementEndAt, scan.declaratorEndAt].map((at) => (at === -1 ? Infinity : at)));
-  const inValue = (at: number, inParens: boolean, inAngle: boolean): boolean => at > scan.assignAt && at < end && inParens && !inAngle;
-  type Candidate = { start: number; end: number; depth: number; cut: () => string };
-  // An empty value (`{}`, `[]`) has nothing to hide, so it is never the body. An empty function body still is:
-  // its TODO marks where the learner writes the function.
-  const holdsSomething = (g: Group): boolean => text.slice(g.open + 1, g.close).trim() !== '';
-  const functionBody = (g: Group): boolean => /[)>]\s*$/.test(text.slice(Math.max(0, g.open - 64), g.open));
-  const candidates: Candidate[] = [
-    ...scan.groups
-      .filter((g) => g.kind === '{' && !g.typeLiteral && (holdsSomething(g) || functionBody(g)) && inValue(g.open, g.inParens, g.inAngle))
-      .map((g) => ({ start: g.open, end: g.close, depth: g.depth, cut: () => cutPair(text, g, todo) })),
-    ...scan.arrows
-      .filter((a) => !a.blockBody && !a.inConsequent && inValue(a.at, a.inParens, a.inAngle))
-      .map((a) => ({ start: a.at, end: a.end!, depth: a.depth, cut: () => cutArrow(text, a, todo) })),
-  ];
-  const chosen = pick(candidates)
-    ?? pick(scan.groups
-      .filter((g) => g.kind === '[' && !g.typeLiteral && holdsSomething(g) && inValue(g.open, g.inParens, g.inAngle))
-      .map((g) => ({ start: g.open, end: g.close, depth: g.depth, cut: () => cutPair(text, g, todo) })))
-    // A template is a value's body too (`styled.div` `…` `, a query): its text goes, the backticks stay.
-    ?? pick(scan.templates
-      .filter((t) => text.slice(t.open + 1, t.close).trim() !== '' && inValue(t.open, t.inParens, t.inAngle))
-      .map((t) => ({ start: t.open, end: t.close, depth: t.depth, cut: () => cutTemplate(text, t, todo) })));
-  if (chosen) return chosen.cut();
+  const own = valueEdit(text, pool, todo, scan.assignAt, end);
+  if (own) return own;
   // Nothing in the value to hide (`= null`, `= {}`, `= make()`): the content is the annotation's type literal.
-  const annotation = scan.groups.find((g) => g.kind === '{' && g.depth === 0 && !g.inAngle && g.close < scan.assignAt && holdsSomething(g));
+  const annotation = scan.groups.find((g) => g.kind === '{' && g.depth === 0 && !g.inAngle && g.close < scan.assignAt && holdsSomething(text, g));
   return annotation ? cutPair(text, annotation, todo) : null;
 }
 
+/** An empty value (`{}`, `[]`) has nothing to hide, so it is never the body. */
+function holdsSomething(text: string, g: Group): boolean {
+  return text.slice(g.open + 1, g.close).trim() !== '';
+}
+
+/**
+ * Every pair a value may hide, each list sorted by where it starts, so that each declarator's window
+ * finds its own candidates with one search: only pairs inside nothing but parentheses, never inside a
+ * generic, never a type.
+ */
+interface Pool {
+  blocks: Group[];
+  arrows: Arrow[];
+  lists: Group[];
+  templates: JsScan['templates'];
+}
+
+function poolOf(text: string, scan: JsScan): Pool {
+  // An empty function body is still a body: its TODO marks where the learner writes the function.
+  const functionBody = (g: Group): boolean => /[)>]\s*$/.test(text.slice(Math.max(0, g.open - 64), g.open));
+  const candidate = (x: { inParens: boolean; inAngle: boolean }): boolean => x.inParens && !x.inAngle;
+  const byOpen = <T extends { open: number }>(xs: T[]): T[] => xs.sort((a, b) => a.open - b.open);
+  return {
+    blocks: byOpen(scan.groups.filter((g) => g.kind === '{' && !g.typeLiteral && candidate(g) && (holdsSomething(text, g) || functionBody(g)))),
+    arrows: scan.arrows.filter((a) => !a.blockBody && !a.inConsequent && candidate(a)),
+    lists: byOpen(scan.groups.filter((g) => g.kind === '[' && !g.typeLiteral && candidate(g) && holdsSomething(text, g))),
+    templates: byOpen(scan.templates.filter((t) => candidate(t) && text.slice(t.open + 1, t.close).trim() !== '')),
+  };
+}
+
+/** The items of `xs`, sorted by `at`, whose `at` lies strictly between `after` and `before`. */
+function between<T>(xs: T[], at: (x: T) => number, after: number, before: number): T[] {
+  let lo = 0;
+  let hi = xs.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (at(xs[mid]!) <= after) lo = mid + 1;
+    else hi = mid;
+  }
+  const out: T[] = [];
+  for (let i = lo; i < xs.length && at(xs[i]!) < before; i++) out.push(xs[i]!);
+  return out;
+}
+
+/** The cut for the value that starts after the `=` at `assignAt` and ends before `end`. */
+function valueEdit(text: string, pool: Pool, todo: string, assignAt: number, end: number): Edit | null {
+  const pairs = (gs: Group[]) => gs.map((g) => ({ start: g.open, end: g.close, depth: g.depth, cut: () => cutPair(text, g, todo) }));
+  const chosen = pick([
+    ...pairs(between(pool.blocks, (g) => g.open, assignAt, end)),
+    ...between(pool.arrows, (a) => a.at, assignAt, end).map((a) => ({ start: a.at, end: a.end!, depth: a.depth, cut: () => cutArrow(text, a, todo) })),
+  ])
+    ?? pick(pairs(between(pool.lists, (g) => g.open, assignAt, end)))
+    // A template is a value's body too (`styled.div` `…` `, a query): its text goes, the backticks stay.
+    ?? pick(between(pool.templates, (t) => t.open, assignAt, end)
+      .map((t) => ({ start: t.open, end: t.close, depth: t.depth, cut: () => cutTemplate(text, t, todo) })));
+  return chosen ? chosen.cut() : null;
+}
+
+/** Where each statement after the range's first begins: after a `;` at depth 0, or after a block at depth 0 that a new statement follows. */
+function statementStarts(text: string, scan: JsScan): number[] {
+  const starts = new Set(scan.semis.map((at) => at + 1));
+  for (const g of scan.groups) {
+    if (g.depth !== 0 || g.inAngle) continue;
+    const at = codeAt(text, g.close + 1);
+    const next = /^[A-Za-z_$#][\w$]*/.exec(text.slice(at, at + 64));
+    if (next && !CONTINUES.has(next[0])) starts.add(g.close + 1);
+  }
+  return [...starts].filter((at) => at < text.length).sort((a, b) => a - b);
+}
+
+/** The first offset at or after `from` that is not a blank or a comment. */
+function codeAt(text: string, from: number): number {
+  let i = from;
+  for (;;) {
+    while (i < text.length && /\s/.test(text[i]!)) i++;
+    if (text.startsWith('//', i)) {
+      const eol = text.indexOf('\n', i);
+      if (eol === -1) return text.length;
+      i = eol + 1;
+    } else if (text.startsWith('/*', i)) {
+      const close = text.indexOf('*/', i + 2);
+      if (close === -1) return text.length;
+      i = close + 2;
+    } else return i;
+  }
+}
+
+/**
+ * Every declaration on the range after its first: each later declarator of a variable statement,
+ * and each later statement that declares a variable, a function, a class, an interface, an enum or
+ * a method (a class body written on one line). Each hides its own body by the rules for the first.
+ */
+function laterDeclarations(text: string, scan: JsScan, pool: Pool, todo: string, starts: number[], firstValueAt: number): Edit[] {
+  const edits: Edit[] = [];
+  const bounds = [0, ...starts, text.length];
+  const tops = scan.groups.filter((g) => g.kind === '{' && g.depth === 0 && !g.inAngle && !g.typeLiteral); // in text order
+  let c = 0;
+  let a = 0;
+  let t = 0; // cursors into `scan.commas`, `scan.assigns` and `tops`, all in text order
+  for (let k = 0; k + 1 < bounds.length; k++) {
+    const from = bounds[k]!;
+    const to = bounds[k + 1]!;
+    const head = text.slice(codeAt(text, from), to);
+    if (VARIABLE.test(head)) {
+      // Each declarator runs from its statement's start or a `,` at depth 0 to the next; its value starts at its first `=`.
+      while (c < scan.commas.length && scan.commas[c]! <= from) c++;
+      let declStart = from;
+      for (;;) {
+        const declEnd = c < scan.commas.length && scan.commas[c]! < to ? scan.commas[c++]! : to;
+        while (a < scan.assigns.length && scan.assigns[a]! <= declStart) a++;
+        const at = a < scan.assigns.length && scan.assigns[a]! < declEnd ? scan.assigns[a]! : -1;
+        if (at !== -1 && at !== firstValueAt) {
+          const cut = valueEdit(text, pool, todo, at, declEnd);
+          if (cut) edits.push(cut);
+        }
+        if (declEnd === to) break;
+        declStart = declEnd;
+      }
+    } else if (k > 0) {
+      const method = METHOD.exec(head);
+      if (!DECLARATION.test(head) && !(method && !STATEMENT_WORDS.has(method[1]!))) continue;
+      // its own statement's last top-level block
+      while (t < tops.length && tops[t]!.open < from) t++;
+      let body: Group | null = null;
+      while (t < tops.length && tops[t]!.close < to) body = tops[t++]!;
+      if (body) edits.push(cutPair(text, body, todo));
+    }
+  }
+  return edits;
+}
+
 /** Hide a template's text, keeping its backticks. The TODO line is template text, so nothing in it may end the template. */
-function cutTemplate(text: string, t: { open: number; close: number }, todo: string): string {
-  const safe = todo.replace(/[`\\]/g, "'").replace(/\$\{/g, '$ {');
-  const closeLineStart = text.lastIndexOf('\n', t.close) + 1;
-  const tail = text.slice(closeLineStart, t.close).trim() === '' ? text.slice(closeLineStart) : text.slice(t.close);
-  return `${text.slice(0, t.open + 1)}\n${indentAt(text, t.open)}  ${safe}\n${tail}`;
+function cutTemplate(text: string, t: { open: number; close: number }, todo: string): Edit {
+  return cutPair(text, t, todo.replace(/[`\\]/g, "'").replace(/\$\{/g, '$ {'));
 }
 
 /**
@@ -593,7 +795,7 @@ function pick<C extends { start: number; end: number; depth: number }>(candidate
   return best;
 }
 
-function stubTypeAlias(text: string, scan: JsScan, todo: string): string | null {
+function stubTypeAlias(text: string, scan: JsScan, todo: string): Edit | null {
   if (scan.assignAt === -1) return null;
   const blocks = scan.groups.filter((g) => g.kind === '{' && g.open > scan.assignAt && g.inParens);
   const top = blocks.find((g) => g.depth === 0 && !g.inAngle);
@@ -602,7 +804,7 @@ function stubTypeAlias(text: string, scan: JsScan, todo: string): string | null 
     // Main's cut, which hid a whole union: what follows this `{` at the top level is complete
     // groups (`| { … }`, `& Reason`, `[]`), so dropping it with the inside keeps the range balanced.
     const semicolon = text.trimEnd().endsWith(';') ? ';' : '';
-    return `${text.slice(0, top.open + 1)}\n${indentAt(text, top.open)}  ${todo}\n}${semicolon}`;
+    return { from: top.open + 1, to: text.length, insert: `\n${indentAt(text, top.open)}  ${todo}\n}${semicolon}` };
   }
   // A function type's arrow, but never one in a conditional type's check (`T extends (x: infer I) => R ? A : B`):
   // its return type ends at the next `?`, which the arrow rule does not look for.

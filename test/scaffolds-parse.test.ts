@@ -475,13 +475,11 @@ beforeAll(async () => {
     const file = step.target.file;
     const language = languageOf(file);
     const reference = fs.readFileSync(path.join(root, file), 'utf8');
-    // The tutorial's `stubQuestionsFor`: a range is named after the symbol step that starts on its
-    // first line, else after the file step itself.
-    const questions = step.scaffold.loadBearing.map((r) => {
-      const owner = symbolSteps.find((s) => s.target.file === file && s.target.startLine === r.startLine);
-      return owner
-        ? { ordinal: owner.ordinal, question: owner.decision.question }
-        : { ordinal: step.ordinal, question: step.decision.question };
+    // As the tutorial labels a range's TODO: with the symbol step that begins on the range's first
+    // line, and with this file step when none does.
+    const questions = step.scaffold.loadBearing.map((r): StubQuestion => {
+      const named = symbolSteps.find((s) => s.target.file === file && s.target.startLine === r.startLine) ?? step;
+      return { ordinal: named.ordinal, question: named.decision.question };
     });
     const scaffold = stubFile(reference, step.scaffold.loadBearing, language, questions);
     const ext = path.extname(file).slice(1);
@@ -703,20 +701,29 @@ describe('T-30 AC2 — the same defect in other shapes: each practice file parse
   });
 
   // Found by the nine-sample hide check: a minified file is one line of statements, so a variable's range
-  // holds the statements after it too. Its value is its own; the rest of the line is not its body.
-  it('a variable on a line of minified statements hides its own value, not a later statement\'s', async () => {
+  // holds the statements after it too. Review attempt 3: `extract()` gives every declaration on that line
+  // the same range, so each one hides its own body, as main's cut hid them all; each cut ends where its
+  // own value or body does.
+  it('a line of minified statements: each declaration on it hides its own body, and only that', async () => {
     const source = 'var labels={a:`A`,b:`B`};function pick(x){return labels[x]}var later=function(){return{deep:1}};\n';
     const range = await rangeOf(source, 'javascript', 'js', 'labels');
     const out = stubFile(source, [range], 'javascript', Q);
-    expect(out.includes('a:`A`'), `the variable's own value was not hidden:\n${out}`).toBe(false);
-    expect(out.includes('function pick(x){return labels[x]}var later=function(){return{deep:1}};'), `a later statement was cut:\n${out}`).toBe(true);
+    for (const answer of ['a:`A`', 'return labels[x]', 'return{deep:1}']) {
+      expect(out.includes(answer), `a declaration on the line hands over its body (${answer}):\n${out}`).toBe(false);
+    }
+    for (const head of ['var labels={', '};function pick(x){', '}var later=function(){', '};']) {
+      expect(out.includes(head), `lost ${JSON.stringify(head)}:\n${out}`).toBe(true);
+    }
     expect(await parseErrorsOf(out, 'javascript', 'js')).toBe(0);
 
-    // An arrow's expression ends at its own statement's `;`, not at the line's last one.
+    // An arrow's expression ends at its own statement's `;`, not at the line's last one; a declaration
+    // with nothing to hide is copied as it is.
     const arrows = 'var inc=n=>n+1;function pick(x){return x}var later=1;\n';
     const cut = stubFile(arrows, [await rangeOf(arrows, 'javascript', 'js', 'inc')], 'javascript', Q);
     expect(cut.includes('n+1'), `the arrow's body was not hidden:\n${cut}`).toBe(false);
-    expect(cut.includes('function pick(x){return x}var later=1;'), `the statements after the arrow were cut:\n${cut}`).toBe(true);
+    expect(cut.includes('return x'), `the later function's body was not hidden:\n${cut}`).toBe(false);
+    expect(cut.includes('};function pick(x){'), `the later function lost its head:\n${cut}`).toBe(true);
+    expect(cut.includes('}var later=1;'), `the statement after the function was cut:\n${cut}`).toBe(true);
     expect(await parseErrorsOf(cut, 'javascript', 'js')).toBe(0);
   });
 
@@ -1043,18 +1050,19 @@ const ATTEMPT_2: Shape[] = [
     source: L('export const head = <T = string>(xs: T[]): T | undefined => xs[0];', '', ...PANEL), hidden: ['props.title.trim()'] },
   // F6: a declarator list
   { what: 'F6: an arrow in a declarator list keeps the declarators after it', language: 'javascript', symbol: 'inc',
-    source: L('export const inc = (x) => x + 1, dbl = (y) => {', '  return y * 2;', '};'), hidden: ['x + 1'], kept: ['dbl = (y) => {'] },
-  { what: 'F6: two function declarators: the first one\'s body is the one hidden', language: 'javascript', symbol: 'isList',
+    source: L('export const inc = (x) => x + 1, dbl = (y) => {', '  return y * 2;', '};'), hidden: ['x + 1', 'return y * 2'], kept: ['dbl = (y) => {'] },
+  { what: 'F6: two function declarators: each body is hidden', language: 'javascript', symbol: 'isList',
     source: L('var isList = function (obj) {', "  return toString.call(obj) === '[object Array]';", '}, isFlat = function (obj) {',
       '  if (!obj) return false;', '  var proto = Object.getPrototypeOf(obj);', '  return proto === null || proto === Object.prototype;', '};'),
-    hidden: ['[object Array]'] },
+    hidden: ['[object Array]', 'Object.getPrototypeOf'] },
   { what: 'F6: a later destructuring declarator is not the body', language: 'javascript', symbol: 'Lib',
     source: L('const Lib = window.Lib, { useState, useEffect } = Lib;'), untouched: true },
   // F4: several declarations on one line
-  { what: 'F4: a function first on a minified line hides its own body', language: 'javascript', symbol: 'f',
-    source: L('function f(a){return a+1}function g(){return 2}'), hidden: ['a+1'], kept: ['function g(){return 2}'] },
-  { what: 'F4: a class first on a minified line hides its own body', language: 'javascript', symbol: 'A',
-    source: L('class A{m(){return 1}}function g(){return 2}'), hidden: ['return 1'], kept: ['function g(){return 2}'] },
+  // (review attempt 3: the declaration after it shares the range, so it hides its own body too)
+  { what: 'F4: on a minified line, a function first hides its own body, and the one after it hides its own', language: 'javascript', symbol: 'f',
+    source: L('function f(a){return a+1}function g(){return 2}'), hidden: ['a+1', 'return 2'], kept: ['function f(a){', '}function g(){'] },
+  { what: 'F4: on a minified line, a class first hides its own body, and the function after it hides its own', language: 'javascript', symbol: 'A',
+    source: L('class A{m(){return 1}}function g(){return 2}'), hidden: ['return 1', 'return 2'], kept: ['class A{', '}function g(){'] },
   { what: 'F4: a union member in a return type is not the body', language: 'typescript', symbol: 'pick',
     source: L('export function pick(): Base | { extra: true } {', '  return choose();', '}'), hidden: ['choose()'], kept: ['Base | { extra: true } {'] },
   // NIT 2: rarer misreads (each left the range untouched where main hid it)
@@ -1091,14 +1099,122 @@ const ATTEMPT_2: Shape[] = [
   { what: 'F5: an optional property in a union member is not a conditional', language: 'typescript', symbol: 'Opt',
     source: L('export type Opt = { a?: string } | { b: number };'), hidden: ['a?: string', 'b: number'] },
   { what: 'F5: JSX after a conditional\'s `:`', language: 'tsx', symbol: 'Toggle',
-    source: L('export function Toggle(props: ToggleProps) {', '  const on = props.on;', "  return on ? <b>On</b> : <i>It's off</i>;", '}'), hidden: ['props.on'] },
+    source: L('export function Toggle(props: ToggleProps) {', '  const on = props.on;', "  return <p>{on ? <b>On</b> : <i>It's off</i>}</p>;", '}'), hidden: ['props.on'] },
   { what: 'F5: an attribute string holding `>`, `{` and `//`', language: 'tsx', symbol: 'Link',
-    source: L('export function Link(props: LinkProps) {', '  const label = props.label;', '  return <a title="a > b {c}" href="https://example.com/x">{label}</a>;', '}'),
+    source: L('export function Link(props: LinkProps) {', '  const label = props.label;', '  return <a href="https://example.com/x" title="a > b {c}">{label}</a>;', '}'),
     hidden: ['props.label'] },
 ];
 
 describe('T-30 review attempt 2 — the regressions it found, and the rules it found unpinned', () => {
   for (const shape of ATTEMPT_2) {
+    it(shape.what, async () => {
+      const ext = shape.language === 'typescript' ? 'ts' : shape.language === 'tsx' ? 'tsx' : 'js';
+      expect(await parseErrorsOf(shape.source, shape.language, ext), 'the reference itself does not parse').toBe(0);
+      const range = await rangeOf(shape.source, shape.language, ext, shape.symbol);
+      const out = stubFile(shape.source, [range], shape.language, Q);
+      expect(await parseErrorsOf(out, shape.language, ext), `the practice file does not parse:\n${out}`).toBe(0);
+      if (shape.untouched) expect(out, 'should come back untouched').toBe(shape.source);
+      for (const answer of shape.hidden ?? []) expect(out.includes(answer), `hands over the answer (${answer}):\n${out}`).toBe(false);
+      for (const text of shape.kept ?? []) expect(out.includes(text), `lost ${JSON.stringify(text)}:\n${out}`).toBe(true);
+    });
+  }
+});
+
+// ================================================================================
+// Review attempt 3. BLOCKER 1: `extract()` gives every declarator of a statement, and every declaration on a
+// line of statements, the same range, and the stubber sees ranges, not symbols. Main's cut (everything after
+// the first `{`) hid every one of them, so each declaration on a range hides its own body. The other shapes
+// are the review's suggestions and nits, restated with this file's own names.
+// ================================================================================
+
+const ATTEMPT_3: Shape[] = [
+  // BLOCKER 1: a declarator list
+  { what: 'B1: a later declarator\'s function is hidden, after one with nothing to hide', language: 'javascript', symbol: 'onClick',
+    source: L('var that = this, onClick = function (event) {', '  event.stopPropagation();', "  that.emit('pick', event);", '};'),
+    hidden: ['event.stopPropagation()', "that.emit('pick', event)"], kept: ['var that = this, onClick = function (event) {', '};'] },
+  { what: 'B1: a later declarator on its own line, after a require', language: 'javascript', symbol: 'build',
+    source: L("var path = require('path'),", '  build = function (src) {', "    return path.join(src, 'dist');", '  };'),
+    hidden: ['path.join'], kept: ["var path = require('path'),", '  build = function (src) {'] },
+  { what: 'B1: a later declarator whose value falls back to a function', language: 'javascript', symbol: 'home',
+    source: L("var os = require('os'),", '  home = os.homedir || function () {', '    return process.env.HOME;', '  };'),
+    hidden: ['process.env.HOME'], kept: ['home = os.homedir || function () {'] },
+  { what: 'B1: a later arrow declarator in TypeScript', language: 'typescript', symbol: 'trace',
+    source: L('const VERBOSE = false, trace = (msg: string) => {', '  if (VERBOSE) console.log(msg);', '};'), hidden: ['console.log(msg)'] },
+  { what: 'B1: a later expression arrow', language: 'typescript', symbol: 'nextId',
+    source: L('let seq = 0, nextId = () => ++seq;'), hidden: ['++seq'], kept: ['let seq = 0, nextId = () => {'] },
+  { what: 'B1: a later declarator\'s object', language: 'javascript', symbol: 'LIMITS',
+    source: L('const RETRIES = 3, LIMITS = { soft: 10, hard: 20 };'), hidden: ['soft: 10'], kept: ['const RETRIES = 3, LIMITS = {'] },
+  { what: 'B1: every function in a declarator list is hidden, not only the first', language: 'javascript', symbol: 'sub',
+    source: L('var base = 10, add = function (n) { return n + base; }, sub = function (n) { return n - base; };'),
+    hidden: ['n + base', 'n - base'], kept: ['var base = 10, add = function (n) {', '}, sub = function (n) {'] },
+  // BLOCKER 1: a line of statements
+  { what: 'B1: a one-line script: the later statement\'s function is hidden', language: 'javascript', symbol: 'expect',
+    source: L("let misses = 0; const expect = (cond, label) => { if (!cond) { misses++; console.error('miss', label); } };"),
+    hidden: ["console.error('miss', label)"], kept: ['let misses = 0; const expect = (cond, label) => {'] },
+  { what: 'B1: a function declaration after a first statement on its line', language: 'javascript', symbol: 'f',
+    source: L('var x=1;function f(a){return a+1}'), hidden: ['a+1'], kept: ['var x=1;function f(a){'] },
+  { what: 'B1: methods that share one line each hide their body', language: 'javascript', symbol: 'set',
+    source: L('class Store {', '  get(k) { return this.map[k]; } set(k, v) { this.map[k] = v; } drop(k) { delete this.map[k]; }', '}'),
+    hidden: ['return this.map[k]', 'this.map[k] = v', 'delete this.map[k]'], kept: ['  get(k) {', '} set(k, v) {', '} drop(k) {'] },
+  { what: 'B1: a later declarator after a value that ends in `as`, which carries its statement on', language: 'typescript', symbol: 'area',
+    source: L('const base = { w: 1, h: 2 } as Box, area = (b: Box) => b.w * b.h;'), hidden: ['b.w * b.h', 'w: 1'], kept: ['} as Box, area = (b: Box) => {'] },
+  { what: 'B1: a variable after a function on its line hides its value too', language: 'javascript', symbol: 'f',
+    source: L('function f(a){return a+1}var g=function(){return 2};'), hidden: ['a+1', 'return 2'], kept: ['function f(a){', '}var g=function(){'] },
+  { what: 'B1: a comment between two declarations on one line', language: 'javascript', symbol: 'f',
+    source: L('function f(a){return a+1} /* next */ function g(){return 2}'), hidden: ['a+1', 'return 2'], kept: ['function f(a){', '} /* next */ function g(){'] },
+  { what: 'B1: a later declaration after a comment', language: 'javascript', symbol: 'twice',
+    source: L('var ready = false; /* the doubler */ function twice(x) { return x * 2; }'), hidden: ['x * 2'], kept: ['/* the doubler */ function twice(x) {'] },
+  { what: 'B1 guard: a later statement that declares nothing is left as it is', language: 'javascript', symbol: 'count',
+    source: L('let count = 0; if (ready) { count++; }'), untouched: true },
+  { what: 'B1 guard: a later expression statement is left as it is', language: 'javascript', symbol: 'total',
+    source: L('const total = 0; module.exports = { total };'), untouched: true },
+  // SUGGESTION 1 (F2): JSX that is an object property's value
+  { what: 'F2: JSX as an object property\'s value, with an apostrophe in its text (.tsx)', language: 'tsx', symbol: 'Tabs',
+    source: L('export function Tabs(props: TabsProps) {', "  const tabs = [{ id: 'home', title: <b>Who we're for</b> }];",
+      '  return <nav>{tabs.map((t) => <a key={t.id}>{t.title}</a>)}</nav>;', '}'), hidden: ['tabs.map'] },
+  { what: 'F2: two JSX properties on one line (.tsx)', language: 'tsx', symbol: 'Labels',
+    source: L('export function Labels(props: LabelsProps) {', "  const labels = { yes: <b>Don't stop</b>, no: <i>stop</i> };",
+      '  return props.on ? labels.yes : labels.no;', '}'), hidden: ['props.on ? labels.yes'] },
+  { what: 'F2: JSX as an object property\'s value in a .js file', language: 'javascript', symbol: 'Menu',
+    source: L('function Menu() {', "  const items = [{ key: 'a', label: <span>It's here</span> }];", '  return items.length;', '}'), hidden: ['items.length'] },
+  { what: 'F2: a `/*` in a JSX property no longer hides the functions after it', language: 'tsx', symbol: 'later',
+    source: L('export const hints = { glob: <code>src/*.js</code> };', '', 'export function later(n: number) {', '  return n * 3;', '}'),
+    hidden: ['n * 3'] },
+  // SUGGESTION 2 (F3): a return type's literal is a type, never the body
+  { what: 'F3: a type predicate\'s literal is the return type, and the body is hidden', language: 'typescript', symbol: 'isPoint',
+    source: L('export function isPoint(v: unknown): v is { x: number } {', "  return typeof v === 'object' && v !== null && 'x' in v;", '}'),
+    hidden: ["'x' in v"], kept: ['v is { x: number } {'] },
+  { what: 'F3: an assertion signature\'s literal is the return type', language: 'typescript', symbol: 'assertPoint',
+    source: L('export function assertPoint(v: unknown): asserts v is { x: number } {', "  if (typeof v !== 'object' || v === null) throw new Error('not a point');", '}'),
+    hidden: ['not a point'], kept: ['asserts v is { x: number } {'] },
+  { what: 'F3: an arrow\'s type predicate literal is a type, and its expression is the body', language: 'typescript', symbol: 'isPoint',
+    source: L('export const isPoint = (v: unknown): v is { x: number; y: number; z: number; label: string } => v !== null;'),
+    hidden: ['v !== null'], kept: ['v is { x: number; y: number; z: number; label: string } => {'] },
+  { what: 'F3: a return type that is a function type returning a literal', language: 'typescript', symbol: 'makeCounter',
+    source: L('export function makeCounter(start: number): () => { count: number } {', '  let count = start;', '  return () => ({ count: ++count });', '}'),
+    hidden: ['++count'], kept: ['export function makeCounter(start: number): () => { count: number } {'] },
+  // NIT 4: a tag's type arguments, and an optional property's generic function type
+  { what: 'G1: a tag\'s type argument holding a type literal', language: 'tsx', symbol: 'Grid',
+    source: L('export function Grid(props: GridProps) {', '  const rows = props.rows;', '  return <Table<{ id: number }> rows={rows} />;', '}'), hidden: ['props.rows'] },
+  { what: 'G2: a tag\'s type argument over several lines', language: 'tsx', symbol: 'Pick',
+    source: L('export function Pick(props: PickProps) {', '  const opts = props.options;', '  return (', '    <Select<', '      Option', '    > options={opts} />', '  );', '}'),
+    hidden: ['props.options'] },
+  { what: 'G3: a tag\'s type argument holding a string literal type', language: 'tsx', symbol: 'Mode',
+    source: L('export function Mode(props: ModeProps) {', '  const mode = props.mode;', "  return <Toggle<'on' | 'off'> value={mode} />;", '}'), hidden: ['props.mode'] },
+  { what: 'G4: an arrow inside a tag\'s type argument does not close it', language: 'tsx', symbol: 'Calls',
+    source: L('export function Calls(props: CallsProps) {', '  const fns = props.fns;', '  return <List<() => void> items={fns} />;', '}'), hidden: ['props.fns'] },
+  { what: 'P1: an optional property\'s generic function type in a .tsx annotation is a type', language: 'tsx', symbol: 'hooks',
+    source: L('export const hooks: { render?: <T>(x: T) => string } = {', '  render: (x) => String(x),', '};'),
+    hidden: ['String(x)'], kept: ['render?: <T>(x: T) => string'] },
+  // SUGGESTION 3: the default for a line the file scan never reaches. A name the scan takes for a keyword
+  // (`of`, as in `for (x of /re/)`) before a division is a read it cannot follow, so the scan of the file
+  // stops there; the component after it must still be stubbed.
+  { what: 'a line the file scan never reaches still counts as code', language: 'tsx', symbol: 'Panel',
+    source: L('export function half(of: number) {', '  return (of / 2);', '}', '', ...PANEL), hidden: ['props.title.trim()'] },
+];
+
+describe('T-30 review attempt 3 — every declaration on a shared range, and the shapes it found', () => {
+  for (const shape of ATTEMPT_3) {
     it(shape.what, async () => {
       const ext = shape.language === 'typescript' ? 'ts' : shape.language === 'tsx' ? 'tsx' : 'js';
       expect(await parseErrorsOf(shape.source, shape.language, ext), 'the reference itself does not parse').toBe(0);
@@ -1159,14 +1275,14 @@ describe('T-30 AC5 — a range the scan cannot read comes back byte for byte', (
     expect(await parseErrorsOf(out, 'javascript', 'js')).toBe(0);
   });
 
-  // Review attempt 1, M7: this test once passed with its rule deleted, because nothing in the range
-  // was a candidate. The object before the template is one, so only the rule keeps it whole.
   it('a range that starts inside a block comment opened earlier in the file is left alone', async () => {
     const source = '/* an old version:\nfunction legacy(a) {\n  return a;\n}\n*/\nconst x = 1;\n';
     const out = stubFile(source, [{ startLine: 2, endLine: 4 }], 'javascript', Q);
     expect(out, `a range that starts inside a comment was cut:\n${out}`).toBe(source);
   });
 
+  // Review attempt 1, M7: this test once passed with its rule deleted, because nothing in the range
+  // was a candidate. The object before the template is one, so only the rule keeps it whole.
   it('a range that ends inside a template literal', () => {
     const source = "const settings = { theme: 'dark' }; const page = `\n<main>{body}</main>\n`;\n";
     const out = stubFile(source, [{ startLine: 1, endLine: 2 }], 'javascript', Q);
