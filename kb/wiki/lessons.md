@@ -32,6 +32,12 @@ evidence has to carry an attack string, keep the string in fixtures and files, n
 has moved, decide whether the work needs a second look on the intended model: for T-36 the foreman read the
 three-line diff and re-ran the browser check itself, on main's build and on the build before the fix.
 
+**It happened three more times in the same run, all on T-34**, whose evidence had to be hostile pages: the builder, the
+reviewer it dispatched, and a fresh reviewer seat opened to get the intended model back. The fallback covers the whole
+session, subagents included, and a restart tends to trip again. So for security work, plan for the fallback model:
+make every claim rest on a script anyone can re-run, record the model mix in the review, and have someone outside the
+seat re-run the key scripts before sign-off.
+
 ## A crash that kills a shared runtime is not a per-file failure (T-31, 2026-10-15)
 
 The parser runs in one WebAssembly runtime per process. A file too big for it aborted the runtime, and
