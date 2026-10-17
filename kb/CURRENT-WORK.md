@@ -12,12 +12,14 @@ here and found via the reference table below.
 
 - **Next foreman: read `.autodev/foreman/RESUME.md` first** (local; `.autodev/` is gitignored). It is rewritten
   at each wind-down.
-- **Foreman run 2026-10-16 (the owner away; GA-16, the away form):** **T-36 is complete** (`cf46d61`; signed off
-  for the owner by the foreman after its own browser check, as GA-16 allows): a file name can no longer run script
-  on the repo page, the digest view or the Ask panel. **T-30** is in auto-review, attempt 2. The owner set this
-  run's meter lines at 30/33/35% of the week, so the run has two seats: T-38 stopped at refine
-  (`.autodev/handoffs/T-38.md` keeps what its seat learned), and T-34, T-37 and T-44 wait for a later run (all
-  approved, GA-15). Non-security finds are kept for ONE combined ticket (the owner's note on GA-16), not fixed.
+- **Foreman run 2026-10-16 (the owner away; GA-16, the away form):** **T-36 is complete** (`cf46d61`): a file name
+  can no longer run script on the repo page, the digest view or the Ask panel. **T-45 is complete** (`7d30c3b`; filed by
+  the T-34 seat, started at once under the owner's "security holes only", GA-17): repo-tour answers only requests sent
+  to its own address. Both were signed off for the owner by the foreman after its own check (GA-16, GA-18). **T-34**
+  (another site's page must not start a rebuild; it took in T-46, the frame guard) is in auto-review. **T-30** is in
+  rework after its second review. The owner set this run's meter lines at 30/33/35% of the week: T-38 stopped at refine
+  (`.autodev/handoffs/T-38.md` keeps what its seat learned), and T-37 and T-44 wait for a later run (approved, GA-15).
+  Non-security finds are kept for ONE combined ticket (the owner's note on GA-16), not fixed.
 - **Foreman run 2026-10-14 (GA-14: the owner's sign-off form, then "go ahead and get started on a
   foreman loop"):** the owner accepted **T-14, T-20 and T-16**, now complete. **T-29 is complete**
   (`7d36f02`; the owner accepted it, GA-15): a cached tour page is reused only while the code that made it runs, and
@@ -43,9 +45,10 @@ here and found via the reference table below.
 - **T-30** (bug) — Build scaffolds that do not parse: a step whose first brace opens inside an unc… — auto-review
 - **T-44** (techdebt) — T-20's signal tests fail under heavy load: a 3 s exit budget against a startup … — intake
 - **T-33** (bug) — After an update every open tour reloads at once, and each waits behind the rebu… — intake
-- **T-34** (bug) — Another site's page can start a tour's rebuild with a plain GET of /r (an image… — intake
 - **T-37** (bug) — PR tours: a file not read on one side reads as its whole public surface added o… — intake
 - **T-38** (techdebt) — Parser memory: a file near the parser's limit still peaks at about 4 GB, and wo… — refine
+- **T-46** (bug) — Another site can frame repo-tour's pages: no frame guard, so a disguised click … — intake
+- **T-34** (bug) — Another site's page can start a tour's rebuild with a plain GET of /r (an image… — auto-review
 
 ## Waiting on
 
@@ -61,6 +64,9 @@ here and found via the reference table below.
 <!-- One line per completed item, WITH the why. Newest first. Prune from the
      bottom; the permanent record lives in tickets, events.jsonl, and wiki. -->
 
+- 2026-10-16 **T-45 COMPLETE** (signed off for the owner by the foreman, GA-18; landed `7d30c3b`) — the server
+  answered any `Host`, so a page whose name pointed at this machine passed every guard; now it answers only
+  `127.0.0.1`, `localhost` and `[::1]` on its own port.
 - 2026-10-16 **T-36 COMPLETE** (signed off for the owner by the foreman, GA-16; landed `cf46d61`) — the page
   scripts that build an attribute from a file name now escape quotes, so a repo the owner does not control cannot
   run script on the repo page, the digest view or the Ask panel.
