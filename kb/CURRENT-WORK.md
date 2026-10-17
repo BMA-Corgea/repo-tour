@@ -12,16 +12,17 @@ here and found via the reference table below.
 
 - **Next foreman: read `.autodev/foreman/RESUME.md` first** (local; `.autodev/` is gitignored). It is rewritten
   at each wind-down.
-- **Foreman run 2026-10-16 (the owner away; GA-16, the away form):** four tickets complete, each signed off for the
+- **Foreman run 2026-10-16 (the owner away; GA-16, the away form):** five tickets complete, each signed off for the
   owner by the foreman after its own check (GA-16, GA-18). **T-36** (`cf46d61`): a file name can no longer run script
   on the repo page, the digest view or the Ask panel. **T-45** (`7d30c3b`; filed by the T-34 seat and started at once
   under the owner's "security holes only", GA-17): repo-tour answers only requests sent to its own address. **T-34**
   (`7586769`): only a visit the reader made starts a tour's rebuild, and no page can be framed by another site (it
   took in T-46, now closed). **T-30** (`2dbb759`): the build tutorial's practice files parse; on the owner's
-  sql-gauntlet `tools/validate.js` and `server.js` the checker goes from 2 parse errors to 0. **T-38** (the parser's
-  memory peak, cheap fix: 4.2 GB to 1.8 GB on the worst input) is in review; the worker idea is parked as **T-55**
-  until its trigger (GA-16 Q4). The owner set this run's meter lines at 30/33/35% of the week; T-37 and T-44 wait for a
-  later run (approved, GA-15). Non-security finds are kept for ONE combined ticket (the owner's note on GA-16), not fixed.
+  sql-gauntlet `tools/validate.js` and `server.js` the checker goes from 2 parse errors to 0. **T-38** (`2b9d38f`): a
+  file near the parser's limit peaks at 1.7 GB instead of 4.2 GB, and a 29 MiB Python file no longer kills the server;
+  the worker idea is parked as **T-55** until its trigger (GA-16 Q4). **T-44** (the signal tests under load) is in
+  progress. The owner set this run's meter lines at 30/33/35% of the week; T-37 waits for a later run (approved,
+  GA-15). Non-security finds are kept for ONE combined ticket (the owner's note on GA-16), not fixed.
 - **Foreman run 2026-10-14 (GA-14: the owner's sign-off form, then "go ahead and get started on a
   foreman loop"):** the owner accepted **T-14, T-20 and T-16**, now complete. **T-29 is complete**
   (`7d36f02`; the owner accepted it, GA-15): a cached tour page is reused only while the code that made it runs, and
@@ -47,7 +48,6 @@ here and found via the reference table below.
 - **T-44** (techdebt) — T-20's signal tests fail under heavy load: a 3 s exit budget against a startup … — intake
 - **T-33** (bug) — After an update every open tour reloads at once, and each waits behind the rebu… — intake
 - **T-37** (bug) — PR tours: a file not read on one side reads as its whole public surface added o… — intake
-- **T-38** (techdebt) — Parser memory: a file near the parser's limit still peaks at about 4 GB, and wo… — auto-review
 - **T-55** (techdebt) — Parse in a worker that can be stopped (parked until its trigger): give a huge f… — intake
 
 ## Waiting on
@@ -64,6 +64,9 @@ here and found via the reference table below.
 <!-- One line per completed item, WITH the why. Newest first. Prune from the
      bottom; the permanent record lives in tickets, events.jsonl, and wiki. -->
 
+- 2026-10-17 **T-38 COMPLETE** (signed off for the owner by the foreman, GA-16; landed `2b9d38f`) — reading a node's
+  child list kept one JS object per child, so a file near the parser's limit peaked at 4.2 GB and a 29 MiB Python file
+  killed the server; every walk now reads children from a cursor (8 MiB of `(`: 1.7 GB; the digest's output unchanged).
 - 2026-10-17 **T-30 COMPLETE** (signed off for the owner by the foreman, GA-16; landed `2dbb759`) — the build
   tutorial's practice files could fail to parse, so the checker reported errors the learner never made; now every
   JS/TS practice file parses (0 of 98,334 sampled ranges fail; main failed 9,780) and each declaration hides its own body.
