@@ -133,9 +133,10 @@ function isWordChar(ch: string): boolean {
  *
  * Two readings are approximate: a `<` straight after a name, or after a `=`, opens a generic's
  * `<…>` (dropped again at a `;`, a conditional's `?`, a `&&` or `||`, or an outer closer, so a
- * comparison like `i<n` costs little; but inside one a `,` ends neither an arrow nor a declarator,
- * so `=> a<b, gt = …` is cut through to its `;`, as main cut it), and a quote that reaches the end
- * of its line ends there (JavaScript has no multi-line quotes).
+ * comparison like `i<n` usually costs little; but inside one a `,` ends neither an arrow nor a
+ * declarator, so `=> a<b, gt = …` is cut through to its `;`, as main cut it, and in
+ * `var small = n<10, fmt = function () { … }` the declarators after the `<` are never seen), and a
+ * quote that reaches the end of its line ends there (JavaScript has no multi-line quotes).
  *
  * With `jsx` (a `.tsx` or `.js` file), a `<` where an expression may start, followed by a tag
  * name, opens a JSX element. Its tag holds attributes (whose strings may span lines), its children
@@ -601,12 +602,15 @@ const CONTINUES = new Set(['else', 'catch', 'finally', 'while', 'as', 'satisfies
  *     (`T extends (x: infer I) => R ? A : B`, at any link of a chain); or, inside a generic, the
  *     pair itself, so `Readonly<{ … }>` keeps its `}>;`. A type alias and an interface hold no JSX.
  *
- * A statement on the range that declares nothing (`if (…) { … }`, a call, an assignment) is left
- * as it is. An arrow that is a conditional's first branch is never cut, and a range the scan cannot
- * read, or one whose first line starts inside a template or a block comment, is left exactly as it
- * was. Each cut is inside one matched pair of its own declaration, so none overlaps another and the
- * range stays balanced. The TODO line sits two spaces inside the line it opens, and a closing line
- * keeps its own indentation, so a function inside a wrapper still reads as one.
+ * A later statement on the range that declares nothing (`if (…) { … }`, a call, an assignment) is
+ * left as it is; the range's first statement is cut by the rules above whatever it is. A statement
+ * after a block is found only when a word follows the block (`}function g`), so in
+ * `function a(){…}!function(){…}()` the two read as one statement and its last block, the
+ * wrapper's, is the one cut. An arrow that is a conditional's first branch is never cut, and a
+ * range the scan cannot read, or one whose first line starts inside a template or a block comment,
+ * is left exactly as it was. Each cut is inside one matched pair and no two overlap, so the range
+ * stays balanced. The TODO line sits two spaces inside the line it opens, and a closing line keeps
+ * its own indentation, so a function inside a wrapper still reads as one.
  */
 function stubJsLikeRange(lines: string[], start: number, end: number, language: string, questions: StubQuestion[], index: number): string[] {
   const untouched = lines.slice(start - 1, end);
