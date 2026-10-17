@@ -10,6 +10,19 @@ One entry per lesson, newest first, each citing the ticket or incident it came f
 
 ---
 
+## A test's time budget is an assertion too (T-44, 2026-10-17)
+
+T-20's signal tests gave a run 3 s to end after one Ctrl-C, and under heavy load they flaked. The first fix widened the
+budget to 15 s, and the foreman approved it because the test "still asserts the same two things": the signal is not
+swallowed, and cleanup happens. A fresh review showed the budget was a third assertion: at 3 s the test also proved that
+one signal stops the model call within seconds, and handlers that let the call run 5 to 10 s longer passed at 15 s. It
+also found the real cause: while the grammars compile, the event loop sits empty and Node waits on V8's background jobs,
+so a signal is not heard. One timer held for the length of `pr` took the pause from 1-4 s to a few milliseconds, and the
+3 s test passed under load unchanged.
+
+**The rule:** before widening a test's time limit, say what the limit itself proves, and look for the cause of the
+delay first; a wider window is the fix only when the delay is genuinely out of the product's hands.
+
 ## A getter can be a cache, and an idle process can sit on freed memory (T-38, 2026-10-17)
 
 `node.children` in web-tree-sitter looks like a read, but it builds one JS object per child and keeps them on the node
