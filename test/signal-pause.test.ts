@@ -5,7 +5,7 @@
  * waits, on the main thread, for every background job V8 has started, and nothing held it while
  * `pr` loaded its grammars: they wait on V8's promises, not on anything of Node's. The job it then
  * met was TurboFan compiling the parser code the extraction had just made hot, and it met it at
- * the start of its first model call. A signal there waited about 1 s at rest and up to 4 s on
+ * the start of its first model call. A signal there waited about 1 s at rest and up to 5 s on
  * loaded cores, past the 3 s that T-20's mid-call pair allows. `src/cli.ts` now holds the loop for
  * the whole of `pr`.
  *
@@ -30,9 +30,9 @@ const CLI = path.join(REPO_ROOT, 'src', 'cli.ts');
 const TSX = pathToFileURL(path.join(REPO_ROOT, 'node_modules', 'tsx', 'dist', 'loader.mjs')).href;
 
 /**
- * How long the signal may wait. Measured (`.autodev/evidence/T-44/`): 0.9 to 1 s at rest without the
- * held loop, and 2 to 4 s on four cores carrying eight to twelve busy loops; with it, a few
- * milliseconds at rest and tens of milliseconds on those loaded cores.
+ * How long the signal may wait. Measured with this check (`.autodev/evidence/T-44/rework/`), on four
+ * cores carrying no, eight and twelve busy loops: without the held loop, 966 to 1,047 ms, 2.5 to
+ * 2.9 s and 3.2 to 4.7 s; with it, 0 to 5 ms at all three.
  */
 const HANDLED_WITHIN_MS = 500;
 
