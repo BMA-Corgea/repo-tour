@@ -170,7 +170,9 @@ async function collect(): Promise<void> {
 /**
  * The most live JS heap any collection saw while `run` ran, above what was live before it. A walk that
  * keeps one JS node per child keeps every one of them live until the file is done, so each collection
- * on the way counts them; a cursor's nodes are garbage at once. Also returns how many collections ran:
+ * on the way counts them; a cursor's nodes are garbage at once. Only real collections count: an
+ * incremental-marking step frees nothing, so the heap it reports still holds every garbage node made
+ * so far (review S1: up to 64 MiB of garbage, read as live). Also returns how many collections ran:
  * none would mean nothing was measured.
  */
 async function liveHeapGrowth(run: () => Promise<unknown>): Promise<{ grownMiB: number; collections: number }> {
@@ -179,9 +181,10 @@ async function liveHeapGrowth(run: () => Promise<unknown>): Promise<{ grownMiB: 
   const profiler = new v8.GCProfiler();
   profiler.start();
   await run();
-  const { statistics } = profiler.stop();
-  const peak = Math.max(before, ...statistics.map((s) => s.afterGC.heapStatistics.usedHeapSize));
-  return { grownMiB: Math.round((peak - before) / MIB), collections: statistics.length };
+  const collections = profiler.stop().statistics
+    .filter((s) => s.gcType !== 'IncrementalMarking' && s.gcType !== 'ProcessWeakCallbacks');
+  const peak = Math.max(before, ...collections.map((s) => s.afterGC.heapStatistics.usedHeapSize));
+  return { grownMiB: Math.round((peak - before) / MIB), collections: collections.length };
 }
 
 /** About a million children on one node, each shape reaching a different walk. */
@@ -473,9 +476,12 @@ const brief = (x: FileExtract): string[] =>
   x.symbols.map((s) => `${s.kind} ${s.name}@${s.line}-${s.endLine}${s.exported ? ' exported' : ''}${s.doc ? ` "${s.doc}"` : ''}`);
 
 /**
- * Every child-listing site in one script, each written so that a child dropped, repeated or taken out of
- * order changes a symbol or an import: the first and the last top-level statements are declarations; a
- * class, a declaration and an IIFE body each hold three or more; one `require` holds two strings.
+ * Every child-listing site in one script, each written so that a member, declarator or statement dropped,
+ * repeated or taken out of order changes a symbol or an import: the first and the last top-level
+ * statements are declarations; a class, a declaration and an IIFE body each hold three or more; one
+ * `require` holds two strings. The last declaration has no semicolon, so its last declarator is the
+ * declaration's last child: below the root, a list's ends are otherwise `{` and `}`, `const` and `;`
+ * (review S3).
  */
 const SCRIPT = `function zeroth() { return 0; }
 const lib = require('./lib', './not-this');
@@ -505,6 +511,7 @@ var app = (function () {
 
 export * from './things';
 function omega() { return import('./lazy'); }
+let four = 4, five = 5
 `;
 
 const TYPES = `export interface Shape { area(): number }
@@ -543,6 +550,8 @@ describe('T-38 AC3 guard: each child-listing site gives the symbols and imports 
       'function also@23-23',
       'variable tail@24-24',
       'function omega@28-28',
+      'variable four@29-29',
+      'variable five@29-29',
     ]);
     expect(x.imports.map((i) => `${i.raw}@${i.line}`)).toEqual(['./lib@2', './things@27', './lazy@28']);
     expect(x.parseErrors).toBe(0);
@@ -583,27 +592,65 @@ describe('T-38 AC3 guard: each child-listing site gives the symbols and imports 
   });
 });
 
+/**
+ * Files that reach every child-listing site at run time but one, in all four grammars, two of them with a
+ * parse error so that `countErrors` runs. The one left is `pythonImports`' fallback for an import with no
+ * `module_name` field: the Python grammar gives every `from ... import` one, so no input reaches it, and the
+ * source check (AC1) is what holds it.
+ */
+const SITE_FILES: Array<[string, string, string]> = [
+  ['a.js', 'javascript', SCRIPT], ['b.ts', 'typescript', TYPES], ['c.tsx', 'tsx', TYPES],
+  ['d.py', 'python', PYTHON_SAMPLE], ['e.js', 'javascript', `${SCRIPT}\nfoo(\n`], ['f.py', 'python', `${PYTHON_SAMPLE}\ndef (\n`],
+];
+
+/** extract() over SITE_FILES, in a folder of its own. */
+async function extractSites(): Promise<FileExtract[]> {
+  const dir = tmp('repo-tour-t38-sites-');
+  try {
+    for (const [rel, , text] of SITE_FILES) fs.writeFileSync(path.join(dir, rel), text);
+    const { extracts } = await extract(dir, SITE_FILES.map(([rel, language]) => recordFor(rel, language)));
+    expect(extracts).toHaveLength(SITE_FILES.length);
+    return extracts;
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** extract()'s own copy of the parser: the one in require.cache once its parsers are loaded. */
+async function extractsCopy(): Promise<typeof treeSitter> {
+  await initParsers();
+  return requireHere('web-tree-sitter') as typeof treeSitter;
+}
+
+describe('T-38 AC1, at run time: no walk reads a cached child list, whatever the shape of the read (review S2)', () => {
+  it('extract() over every site never calls the `children` or `namedChildren` getter of its own copy', async () => {
+    const copy = await extractsCopy();
+    // Where each read came from, for the message: the first frame in src/extract.ts.
+    const where = new Set<string>();
+    for (const name of ['children', 'namedChildren'] as const) {
+      const real = Object.getOwnPropertyDescriptor(copy.Node.prototype, name)!.get!;
+      vi.spyOn(copy.Node.prototype, name, 'get').mockImplementation(function (this: SyntaxNode) {
+        const frame = (new Error().stack ?? '').split('\n').find((l) => l.includes('extract.')) ?? 'an unknown frame';
+        where.add(`${name} from ${frame.trim()}`);
+        return real.call(this);
+      });
+    }
+    const opened = vi.spyOn(copy.Node.prototype, 'walk');
+    await extractSites();
+    expect(opened.mock.calls.length, 'no walk opened a cursor: the spies are not on the copy extract() parses with')
+      .toBeGreaterThan(0);
+    expect([...where], `a walk read a node's cached child list at run time: ${[...where].join('; ')}`).toEqual([]);
+  });
+});
+
 describe('T-38 AC3 guard: every cursor a walk opens is deleted', () => {
   it('as many cursors deleted as opened, over files of every shape (a cursor\'s wasm memory is not collected)', async () => {
-    await initParsers();
-    // extract()'s own copy of the parser is the one in require.cache once its parsers are loaded
-    const copy = requireHere('web-tree-sitter') as typeof treeSitter;
+    const copy = await extractsCopy();
     const opened = vi.spyOn(copy.Node.prototype, 'walk');
     const deleted = vi.spyOn(copy.TreeCursor.prototype, 'delete');
-    const dir = tmp('repo-tour-t38-cursors-');
-    try {
-      const files: Array<[string, string, string]> = [
-        ['a.js', 'javascript', SCRIPT], ['b.ts', 'typescript', TYPES], ['c.tsx', 'tsx', TYPES],
-        ['d.py', 'python', PYTHON_SAMPLE], ['e.js', 'javascript', `${SCRIPT}\nfoo(\n`], ['f.py', 'python', `${PYTHON_SAMPLE}\ndef (\n`],
-      ];
-      for (const [rel, , text] of files) fs.writeFileSync(path.join(dir, rel), text);
-      const { extracts } = await extract(dir, files.map(([rel, language]) => recordFor(rel, language)));
-      expect(extracts).toHaveLength(files.length);
-      expect(opened.mock.calls.length, 'no walk opened a cursor').toBeGreaterThan(0);
-      expect(deleted.mock.calls.length, `${opened.mock.calls.length} cursors opened, ${deleted.mock.calls.length} deleted`)
-        .toBe(opened.mock.calls.length);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    await extractSites();
+    expect(opened.mock.calls.length, 'no walk opened a cursor').toBeGreaterThan(0);
+    expect(deleted.mock.calls.length, `${opened.mock.calls.length} cursors opened, ${deleted.mock.calls.length} deleted`)
+      .toBe(opened.mock.calls.length);
   });
 });
