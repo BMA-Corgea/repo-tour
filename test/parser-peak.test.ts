@@ -18,10 +18,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import v8 from 'node:v8';
-import vm from 'node:vm';
+import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import ts from 'typescript';
 import * as treeSitter from 'web-tree-sitter';
 import type { Node as SyntaxNode } from 'web-tree-sitter';
@@ -152,40 +151,7 @@ describe('T-38 AC1: no walk in src/ reads a cached child list', () => {
   }, 60_000);
 });
 
-// ------------------------------------------------------- AC2: the JS heap stays flat on a wide tree
-
-/**
- * A full collection, asked for from inside the test, as `test/parser-memory.test.ts` does and with the
- * same note: vitest does not start this process with --expose-gc, and changing a V8 flag after
- * start-up is documented as unpredictable; this one only makes `gc` available to new contexts.
- */
-async function collect(): Promise<void> {
-  v8.setFlagsFromString('--expose-gc');
-  const gc = vm.runInNewContext('gc') as () => void;
-  gc();
-  await new Promise((r) => setTimeout(r, 50));
-  gc();
-}
-
-/**
- * The most live JS heap any collection saw while `run` ran, above what was live before it. A walk that
- * keeps one JS node per child keeps every one of them live until the file is done, so each collection
- * on the way counts them; a cursor's nodes are garbage at once. Only real collections count: an
- * incremental-marking step frees nothing, so the heap it reports still holds every garbage node made
- * so far (review S1: up to 64 MiB of garbage, read as live). Also returns how many collections ran:
- * none would mean nothing was measured.
- */
-async function liveHeapGrowth(run: () => Promise<unknown>): Promise<{ grownMiB: number; collections: number }> {
-  await collect();
-  const before = v8.getHeapStatistics().used_heap_size;
-  const profiler = new v8.GCProfiler();
-  profiler.start();
-  await run();
-  const collections = profiler.stop().statistics
-    .filter((s) => s.gcType !== 'IncrementalMarking' && s.gcType !== 'ProcessWeakCallbacks');
-  const peak = Math.max(before, ...collections.map((s) => s.afterGC.heapStatistics.usedHeapSize));
-  return { grownMiB: Math.round((peak - before) / MIB), collections: collections.length };
-}
+// ------------------------------------------------------- AC2: a wide tree is walked without a JS node per child
 
 /** About a million children on one node, each shape reaching a different walk. */
 const WIDE: Array<{ label: string; language: string; file: string; source: () => string }> = [
@@ -200,24 +166,42 @@ const WIDE: Array<{ label: string; language: string; file: string; source: () =>
   },
 ];
 
-describe('T-38 AC2: a wide tree does not grow the JS heap while it is walked', () => {
+const TSX = pathToFileURL(path.join(REPO, 'node_modules', 'tsx', 'dist', 'loader.mjs')).href;
+/** V8's old space for the walk below. Keeping a JS node per child costs about 270 MiB per million children. */
+const CAP_MIB = 96;
+
+/**
+ * One `extract()` of one file, in a child process whose V8 old space is capped at CAP_MIB, running this
+ * checkout's src/ under tsx. A walk that keeps one JS node per child cannot finish there: the heap fills and
+ * V8 ends the process, which no `catch` sees. A cursor's nodes are garbage at once, so it finishes. (Review
+ * S1: a measure of the live heap inside this process read V8's own timing too; this one does not depend on
+ * when V8 collects. Measured: main ran out of heap under the cap on all three shapes, the branch used 9-12 MiB.)
+ */
+function extractUnderCap(file: string, language: string, source: string): { status: number | null; stdout: string; stderr: string } {
+  const root = tmp('repo-tour-t38-wide-');
+  try {
+    write(path.join(root, file), source);
+    const script = [
+      `const { extract } = await import(${JSON.stringify(pathToFileURL(path.join(REPO, 'src', 'extract.ts')).href)});`,
+      `const r = await extract(${JSON.stringify(root)}, [${JSON.stringify(recordFor(file, language))}]);`,
+      'process.stdout.write(JSON.stringify({ parsed: r.extracts.length, unparsed: r.unparsed }));',
+    ].join('\n');
+    const run = spawnSync(process.execPath, [`--max-old-space-size=${CAP_MIB}`, '--import', TSX, '--input-type=module', '-e', script],
+      { encoding: 'utf8', timeout: 120_000 });
+    return { status: run.status, stdout: run.stdout, stderr: run.stderr };
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+describe(`T-38 AC2: a wide tree is walked within a ${CAP_MIB} MB JS heap`, () => {
   for (const wide of WIDE) {
-    it(wide.label, async () => {
-      const root = tmp('repo-tour-t38-wide-');
-      try {
-        write(path.join(root, wide.file), wide.source());
-        let result: Awaited<ReturnType<typeof extract>> | undefined;
-        const { grownMiB, collections } = await liveHeapGrowth(async () => {
-          result = await extract(root, [recordFor(wide.file, wide.language)]);
-        });
-        expect(result!.unparsed, 'the wide file should parse').toEqual([]);
-        expect(result!.extracts).toHaveLength(1);
-        expect(collections, 'no collection ran while the file was walked, so nothing was measured').toBeGreaterThan(0);
-        expect(grownMiB, `walking ${wide.label} kept ${grownMiB} MiB more JS heap live than before it: ` +
-          'a node\'s cached child list holds one JS object per child until the file is done').toBeLessThan(100);
-      } finally {
-        fs.rmSync(root, { recursive: true, force: true });
-      }
+    it(wide.label, () => {
+      const run = extractUnderCap(wide.file, wide.language, wide.source());
+      const fatal = run.stderr.split('\n').find((l) => l.includes('FATAL ERROR')) ?? run.stderr.trim().split('\n').pop() ?? '';
+      expect(run.status, `walking ${wide.label} did not finish in a ${CAP_MIB} MB JS heap: a walk kept one JS ` +
+        `object per child until the file was done (a node's cached child list, T-38). ${fatal}`).toBe(0);
+      expect(JSON.parse(run.stdout), 'the wide file should parse').toEqual({ parsed: 1, unparsed: [] });
     }, 120_000);
   }
 });
