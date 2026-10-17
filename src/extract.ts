@@ -128,6 +128,32 @@ function endLineOf(node: SyntaxNode): number {
   return node.endPosition.row + 1;
 }
 
+/**
+ * T-38: the children of `node`, in order, from a cursor. `node.children` builds the whole list at
+ * once and keeps it on `node` until `node` is dropped, one JS object per child (about 270 bytes). An
+ * ERROR node holds one child per token, and a root, an IIFE body or a class body one per statement
+ * or member, so a wide node held gigabytes of JS heap until its file was done. A cursor builds one
+ * node per step and keeps none. web-tree-sitter builds `children` with the same cursor steps, so the
+ * nodes and their order are the same.
+ */
+function* childrenOf(node: SyntaxNode): Generator<SyntaxNode> {
+  const cursor = node.walk();
+  try {
+    if (!cursor.gotoFirstChild()) return;
+    do {
+      yield cursor.currentNode;
+    } while (cursor.gotoNextSibling());
+  } finally {
+    cursor.delete();
+  }
+}
+
+/** T-38: the first child of `node` that passes `test`, or null; from a cursor, as `childrenOf`. */
+function findChild(node: SyntaxNode, test: (child: SyntaxNode) => boolean): SyntaxNode | null {
+  for (const child of childrenOf(node)) if (test(child)) return child;
+  return null;
+}
+
 const QUOTE_RUN = /^("""|'''|"|')|("""|'''|"|')$/g;
 const DOC_LEAD = /^\s*(\*|\/\/+|#+)\s?/;
 const SECTION_HEAD = /^(@param|@returns?|@throws|@example|Args:|Returns:|Raises:|Yields:|:param|:return)/i;
@@ -154,9 +180,9 @@ function cleanDoc(raw: string): string | null {
 function pythonDoc(node: SyntaxNode): string | null {
   const body = node.childForFieldName('body');
   if (!body) return null;
-  const first = body.children.find((c) => c && c.type !== 'comment');
+  const first = findChild(body, (c) => c.type !== 'comment');
   if (!first || first.type !== 'expression_statement') return null;
-  const str = first.children.find((c) => c?.type === 'string');
+  const str = findChild(first, (c) => c.type === 'string');
   return str ? cleanDoc(str.text) : null;
 }
 
@@ -177,15 +203,26 @@ function jsDoc(node: SyntaxNode): string | null {
   return cleanDoc(parts.join('\n'));
 }
 
+/**
+ * ERROR and MISSING nodes, counted where the tree holds an error. T-38: a cursor, which goes down only
+ * into a node that holds an error, as the stack it replaces did; error recovery gives an ERROR node
+ * one child per token, and the child lists that stack read held 1.1 GB on 4 MiB of `(`.
+ */
 function countErrors(node: SyntaxNode): number {
   let n = 0;
-  const stack: SyntaxNode[] = [node];
-  while (stack.length) {
-    const cur = stack.pop()!;
-    if (cur.type === 'ERROR' || cur.isMissing) n++;
-    if (cur.hasError) for (const c of cur.children) if (c) stack.push(c);
+  const cursor = node.walk();
+  try {
+    for (;;) {
+      const cur = cursor.currentNode;
+      if (cur.type === 'ERROR' || cur.isMissing) n++;
+      if (cur.hasError && cursor.gotoFirstChild()) continue;
+      while (!cursor.gotoNextSibling()) {
+        if (!cursor.gotoParent()) return n;
+      }
+    }
+  } finally {
+    cursor.delete();
   }
-  return n;
 }
 
 // ---------------------------------------------------------------- python
@@ -206,8 +243,7 @@ function pythonSymbols(root: SyntaxNode): SymbolRecord[] {
     });
   };
 
-  for (const raw of root.children) {
-    if (!raw) continue;
+  for (const raw of childrenOf(root)) {
     const node = unwrap(raw);
     if (node.type === 'function_definition') {
       record(node, 'function');
@@ -215,15 +251,14 @@ function pythonSymbols(root: SyntaxNode): SymbolRecord[] {
       record(node, 'class');
       const body = node.childForFieldName('body');
       if (body) {
-        for (const memberRaw of body.children) {
-          if (!memberRaw) continue;
+        for (const memberRaw of childrenOf(body)) {
           const member = unwrap(memberRaw);
           if (member.type === 'function_definition') record(member, 'method');
         }
       }
     } else if (node.type === 'expression_statement') {
       // module-level constants: NAME = ...
-      const assign = node.children.find((c) => c?.type === 'assignment');
+      const assign = findChild(node, (c) => c.type === 'assignment');
       const target = assign?.childForFieldName('left');
       if (target && target.type === 'identifier' && /^[A-Z][A-Z0-9_]*$/.test(target.text)) {
         out.push({
@@ -246,42 +281,48 @@ function pythonImports(root: SyntaxNode): ImportRecord[] {
     if (raw) out.push({ raw, resolved: null, line: lineOf(node) });
   };
 
-  // T-31: an explicit stack, not recursion — no syntax-tree walk in src/ recurses. Children go
-  // on in reverse so they come off in source order: the order the recursive walk reported.
-  const stack: Array<{ node: SyntaxNode; depth: number }> = [];
-  const pushChildren = (node: SyntaxNode, depth: number): void => {
-    const children = node.children;
-    for (let i = children.length - 1; i >= 0; i--) {
-      const child = children[i];
-      if (child) stack.push({ node: child, depth });
-    }
-  };
-
-  pushChildren(root, 0);
-  while (stack.length) {
-    const { node, depth } = stack.pop()!;
-    if (node.type === 'import_statement') {
-      for (const child of node.children) {
-        if (!child) continue;
-        if (child.type === 'dotted_name') push(child.text, node);
-        else if (child.type === 'aliased_import') {
-          const inner = child.children.find((c) => c?.type === 'dotted_name');
-          if (inner) push(inner.text, node);
+  // T-31: no recursion — no syntax-tree walk in src/ recurses. T-38: a cursor, as `jsImports`
+  // walks, so no node's child list is built. Same nodes, same order (pre-order, children left to
+  // right) as the stack this replaces: the root's children are depth 0, and the walk goes no deeper
+  // than depth 4.
+  const cursor = root.walk();
+  try {
+    if (!cursor.gotoFirstChild()) return out;
+    let depth = 0;
+    for (;;) {
+      const type = cursor.nodeType;
+      let descend = false;
+      if (type === 'import_statement') {
+        const node = cursor.currentNode;
+        for (const child of childrenOf(node)) {
+          if (child.type === 'dotted_name') push(child.text, node);
+          else if (child.type === 'aliased_import') {
+            const inner = findChild(child, (c) => c.type === 'dotted_name');
+            if (inner) push(inner.text, node);
+          }
         }
+      } else if (type === 'import_from_statement') {
+        const node = cursor.currentNode;
+        const mod =
+          node.childForFieldName('module_name') ??
+          findChild(node, (c) => c.type === 'relative_import' || c.type === 'dotted_name');
+        if (mod) push(mod.text, node);
+      } else {
+        // imports hide inside `if TYPE_CHECKING:` and `try:` blocks often enough to be worth descending
+        descend = depth < 4;
       }
-      continue;
+      if (descend && cursor.gotoFirstChild()) {
+        depth++;
+        continue;
+      }
+      while (!cursor.gotoNextSibling()) {
+        if (!cursor.gotoParent()) return out;
+        depth--;
+      }
     }
-    if (node.type === 'import_from_statement') {
-      const mod =
-        node.childForFieldName('module_name') ??
-        node.children.find((c) => c?.type === 'relative_import' || c?.type === 'dotted_name');
-      if (mod) push(mod.text, node);
-      continue;
-    }
-    // imports hide inside `if TYPE_CHECKING:` and `try:` blocks often enough to be worth descending
-    if (depth < 4) pushChildren(node, depth + 1);
+  } finally {
+    cursor.delete();
   }
-  return out;
 }
 
 // ------------------------------------------------------ javascript / typescript
@@ -402,8 +443,8 @@ function iifeBody(stmt: SyntaxNode): SyntaxNode | null {
 function declaratorIifeBodies(decl: SyntaxNode): SyntaxNode[] {
   if (decl.type !== 'lexical_declaration' && decl.type !== 'variable_declaration') return [];
   const out: SyntaxNode[] = [];
-  for (const declarator of decl.children) {
-    if (!declarator || declarator.type !== 'variable_declarator') continue;
+  for (const declarator of childrenOf(decl)) {
+    if (declarator.type !== 'variable_declarator') continue;
     const value = declarator.childForFieldName('value');
     const body = value ? blockBody(invokedLiteral(value)) : null;
     if (body) out.push(body);
@@ -427,8 +468,8 @@ function jsSymbols(root: SyntaxNode): SymbolRecord[] {
       if (kind === 'class') {
         const body = node.childForFieldName('body');
         if (body) {
-          for (const member of body.children) {
-            if (!member || member.type !== 'method_definition') continue;
+          for (const member of childrenOf(body)) {
+            if (member.type !== 'method_definition') continue;
             const mName = member.childForFieldName('name');
             if (!mName) continue;
             const isPrivate = mName.text.startsWith('#') || mName.text.startsWith('_');
@@ -447,8 +488,8 @@ function jsSymbols(root: SyntaxNode): SymbolRecord[] {
     }
 
     if (node.type === 'lexical_declaration' || node.type === 'variable_declaration') {
-      for (const declarator of node.children) {
-        if (!declarator || declarator.type !== 'variable_declarator') continue;
+      for (const declarator of childrenOf(node)) {
+        if (declarator.type !== 'variable_declarator') continue;
         const nameNode = declarator.childForFieldName('name');
         if (!nameNode || nameNode.type !== 'identifier') continue;
         const value = declarator.childForFieldName('value');
@@ -474,11 +515,10 @@ function jsSymbols(root: SyntaxNode): SymbolRecord[] {
   // nested IIFE, or a plain function, inside the body is not recursed into again (T-15 AC1,
   // T-16 AC4: recurse one level only).
   const recordBody = (body: SyntaxNode): void => {
-    for (const inner of body.children) if (inner) recordDecl(inner, false);
+    for (const inner of childrenOf(body)) recordDecl(inner, false);
   };
 
-  for (const node of root.children) {
-    if (!node) continue;
+  for (const node of childrenOf(root)) {
     if (node.type === 'export_statement') {
       const decl = node.childForFieldName('declaration');
       if (decl) {
@@ -510,7 +550,7 @@ function jsImportAt(node: SyntaxNode): ImportRecord | null {
   const isRequire = fn?.text === 'require';
   const isDynamic = fn?.type === 'import';
   if (!(isRequire || isDynamic) || !args) return null;
-  const str = args.children.find((c) => c?.type === 'string');
+  const str = findChild(args, (c) => c.type === 'string');
   return str ? { raw: unquote(str.text), resolved: null, line: lineOf(node) } : null;
 }
 
