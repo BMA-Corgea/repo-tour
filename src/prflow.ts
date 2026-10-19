@@ -77,15 +77,21 @@ function skippedFor(f: FileRecord): string {
   return isParseTarget(f) ? 'it was not parsed' : `there is no parser for ${f.language}`;
 }
 
-/** T-37: what one side made of each path: read, failed, skipped for its class (fetched or not), or absent. */
+/**
+ * T-37: what one side made of each path: read, failed, skipped for its class (fetched or not), or absent. T-58: a
+ * symbolic link or a submodule is skipped for what it is.
+ */
 function stateOn(side: Side): (p: string) => SideState {
   const extracted = new Set(side.extracts.map((e) => e.path));
   const failed = new Map(side.unparsed.map((u) => [u.path, u.reason] as const));
+  const links = new Map(side.links.map((l) => [l.path, l.reason] as const));
   const files = new Map([...side.files, ...side.unfetched].map((f) => [f.path, f] as const));
   return (p) => {
     if (extracted.has(p)) return { kind: 'read' };
     const reason = failed.get(p);
     if (reason !== undefined) return { kind: 'failed', reason };
+    const link = links.get(p);
+    if (link !== undefined) return { kind: 'skipped', reason: link };
     const f = files.get(p);
     return f ? { kind: 'skipped', reason: skippedFor(f) } : { kind: 'absent' };
   };

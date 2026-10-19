@@ -294,15 +294,18 @@ function assemble(
  * `-z`, so git prints every path as it is. Without it, git C-quotes a name holding an accent, a `"`, a `\` or a tab
  * (`"src/caf\303\251.ts"`), and every later step read that string as the file's name: it was found on neither side,
  * and the page said its public surface was unchanged (T-58).
+ *
+ * `T` is a type change: a file that became a symbolic link or a submodule, or the reverse. It was dropped, so the file
+ * was missing from the tour (T-58).
  */
 export function diffSet(
   root: string,
   from: string,
   to: string,
-): Array<{ path: string; status: 'A' | 'M' | 'D' | 'R'; from?: string }> {
+): Array<{ path: string; status: 'A' | 'M' | 'D' | 'R' | 'T'; from?: string }> {
   const raw = tryListing(root, 'diff', '--name-status', '-z', '-M', `${from}..${to}`);
   if (!raw) return [];
-  const out: Array<{ path: string; status: 'A' | 'M' | 'D' | 'R'; from?: string }> = [];
+  const out: Array<{ path: string; status: 'A' | 'M' | 'D' | 'R' | 'T'; from?: string }> = [];
   // "<status>\0<path>\0", and for a rename or a copy "<status>\0<old path>\0<new path>\0"
   const parts = raw.split('\0');
   for (let i = 0; i < parts.length;) {
@@ -316,8 +319,8 @@ export function diffSet(
     }
     const file = parts[i++];
     if (file === undefined) break;
-    const status = code[0] as 'A' | 'M' | 'D';
-    if (status === 'A' || status === 'M' || status === 'D') out.push({ status, path: file });
+    const status = code[0] as 'A' | 'M' | 'D' | 'T';
+    if (status === 'A' || status === 'M' || status === 'D' || status === 'T') out.push({ status, path: file });
   }
   return out;
 }

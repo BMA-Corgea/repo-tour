@@ -121,7 +121,7 @@ function around(hunks: Hunk[]): { startLine: number; endLine: number } {
   return { startLine: first ? Math.max(1, first.start - 3) : 1, endLine: last ? last.end + 3 : 40 };
 }
 
-const STATUS_WORD: Record<FileDelta['status'], string> = { A: 'added', M: 'modified', D: 'deleted', R: 'renamed' };
+const STATUS_WORD: Record<FileDelta['status'], string> = { A: 'added', M: 'modified', D: 'deleted', R: 'renamed', T: 'type changed' };
 
 function fileStop(
   d: FileDelta,
@@ -153,7 +153,7 @@ function fileStop(
     sentence(d.reason);
 
   const detail = [
-    `${d.status === 'A' ? 'Added' : d.status === 'D' ? 'Deleted' : d.status === 'R' ? 'Renamed' : 'Modified'}.`,
+    `${d.status === 'A' ? 'Added' : d.status === 'D' ? 'Deleted' : d.status === 'R' ? 'Renamed' : d.status === 'T' ? 'Type changed' : 'Modified'}.`,
     `Meaning delta ${d.meaningDelta.toFixed(2)} (${b}); ${n(d.linesChanged)} ${d.linesChanged === 1 ? 'line' : 'lines'} changed across ${n(hunks.length)} ${hunks.length === 1 ? 'hunk' : 'hunks'}.`,
     sentence(opener(d.reason)),
     // T-37: an added or deleted file with a side not read keeps its stop, and lists no symbols for it.
@@ -262,7 +262,7 @@ export function buildPrTour(input: PrTourInput): PrTourPlan {
         'repo-tour reads each changed file on both sides of the change, to compare what it exports. It could not read these:',
         unread.map((d) => `  · ${d.path} (${STATUS_WORD[d.status]}): not read ${notReadOn(d.unread!)}`).join('\n'),
         notScored.length
-          ? 'A modified or renamed file that was not read is not scored: its public surface is not compared, it is not ranked by meaning, and the files that import it are not followed.'
+          ? `A ${notScored.some((d) => d.status === 'T') ? 'modified, renamed or retyped' : 'modified or renamed'} file that was not read is not scored: its public surface is not compared, it is not ranked by meaning, and the files that import it are not followed.`
           : '',
         notScored.length < unread.length
           ? 'An added or deleted file keeps its place as new or gone, which needs no reading; only its public surface goes unlisted.'

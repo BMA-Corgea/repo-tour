@@ -222,6 +222,12 @@ export interface Side {
    * start of the file, which is all its class needs. They are not in `files`: no stop reads them.
    */
   unfetched: FileRecord[];
+  /**
+   * T-58: the changed paths this side has as something that is not a file repo-tour reads, each with what it is: a
+   * symbolic link (the digest never reads one either) or a submodule. Their content is never written or parsed: a
+   * link's content is a path, and read as source it made a file that became a link look like its whole surface gone.
+   */
+  links: Array<{ path: string; reason: string }>;
   dispose: () => void;
 }
 
@@ -248,27 +254,48 @@ interface Refused {
  */
 const NOT_IN_CLONE = /promisor|could not fetch|Could not read from remote/i;
 
+/** One path in a commit's tree: its mode (`100644`, `120000` for a symbolic link, `160000` for a submodule) and type. */
+interface TreeEntry {
+  mode: string;
+  type: string;
+}
+
 /**
- * Which of `files` are files at `sha`, from the tree alone. Asking git for the object itself cannot tell a
- * file it cannot produce (a blob a partial clone has not fetched, offline) from one that is not there.
- * `--full-tree`: the paths are named from the repository's top, as the diff names them, whichever folder
- * of it the tour runs in (a monorepo's package folder). A listing git refuses leaves those files absent,
- * as before T-37: it reads the same trees the diff that named them did.
+ * What each of `files` is at `sha`, from the tree alone. Asking git for the object itself cannot tell a file it
+ * cannot produce (a blob a partial clone has not fetched, offline) from one that is not there. `--full-tree`: the
+ * paths are named from the repository's top, as the diff names them, whichever folder of it the tour runs in (a
+ * monorepo's package folder). A path the tree does not hold as itself (absent, or under a folder of that name) is not
+ * in `entries`; a batch git refuses to list is in `unlisted`.
  */
-function blobsAt(root: string, sha: string, files: string[]): Set<string> {
-  const blobs = new Set<string>();
+function entriesAt(root: string, sha: string, files: string[]): { entries: Map<string, TreeEntry>; unlisted: Set<string> } {
+  const entries = new Map<string, TreeEntry>();
+  const unlisted = new Set<string>();
   for (let i = 0; i < files.length; i += 500) {
+    const batch = files.slice(i, i + 500);
     let listing = '';
     try {
-      listing = git(root, '--literal-pathspecs', 'ls-tree', '--full-tree', '-z', sha, '--', ...files.slice(i, i + 500));
+      listing = git(root, '--literal-pathspecs', 'ls-tree', '--full-tree', '-z', sha, '--', ...batch);
     } catch {
+      for (const f of batch) unlisted.add(f);
       continue;
     }
     for (const entry of listing.split('\0')) {
       const tab = entry.indexOf('\t');
-      if (tab > 0 && entry.slice(0, tab).split(' ')[1] === 'blob') blobs.add(entry.slice(tab + 1));
+      if (tab <= 0) continue;
+      const [mode = '', type = ''] = entry.slice(0, tab).split(' ');
+      entries.set(entry.slice(tab + 1), { mode, type });
     }
   }
+  return { entries, unlisted };
+}
+
+/**
+ * Which of `files` are files at `sha`, from the tree alone. A listing git refuses leaves those files absent, as before
+ * T-37: it reads the same trees the diff that named them did.
+ */
+function blobsAt(root: string, sha: string, files: string[]): Set<string> {
+  const blobs = new Set<string>();
+  for (const [file, entry] of entriesAt(root, sha, files).entries) if (entry.type === 'blob') blobs.add(file);
   return blobs;
 }
 
@@ -375,13 +402,29 @@ export async function sideAt(
 
   try {
     const refused: Refused[] = [];
-    for (const rel of paths) {
-      // The T-1 self-scan rule: a tool that writes into the tree it reads must exclude its
-      // own output. Nothing should ever put the cache here, and if something does, this is
-      // where it stops — one run would not show us the bug.
-      if (rel === CACHE_DIR || rel.startsWith(`${CACHE_DIR}/`)) continue;
-
+    const links: Side['links'] = [];
+    const unwritten: UnparsedFile[] = [];
+    // The T-1 self-scan rule: a tool that writes into the tree it reads must exclude its
+    // own output. Nothing should ever put the cache here, and if something does, this is
+    // where it stops — one run would not show us the bug.
+    const wanted = paths.filter((rel) => !(rel === CACHE_DIR || rel.startsWith(`${CACHE_DIR}/`)));
+    // T-58: what each path IS at this commit, from the tree, before anything is read. `git show` prints a folder as a
+    // listing, and written as a file it stopped the next path under it (a file that became a folder of the same name
+    // failed the whole PR); it prints a symbolic link as the path it points to, which was then parsed as source. A
+    // batch git will not list is read as before.
+    const { entries, unlisted } = entriesAt(root, sha, wanted.map((rel) => readAs.get(rel) ?? rel));
+    for (const rel of wanted) {
       const source = readAs.get(rel) ?? rel;
+      if (!unlisted.has(source)) {
+        const entry = entries.get(source);
+        // Absent at this commit (the PR added or deleted it), or a folder here: the diff lists that folder's files on
+        // their own, each read on the side that has it.
+        if (!entry || (entry.type !== 'blob' && entry.type !== 'commit')) continue;
+        if (entry.type === 'commit' || entry.mode === '120000') {
+          links.push({ path: rel, reason: entry.type === 'commit' ? 'it is a submodule' : 'it is a symbolic link' });
+          continue;
+        }
+      }
       let content: Buffer;
       try {
         content = execFileSync('git', ['-C', root, 'show', `${sha}:${source}`], {
@@ -401,9 +444,17 @@ export async function sideAt(
         });
         continue;
       }
+      // A rename's base side is written under its new name, so a path can still meet a file where its folder should be
+      // (`x/y.ts` renamed to `x`, beside a deleted `x/z.ts`). That one file is not read, and says why; the rest of the
+      // PR is (T-58).
       const dest = path.join(dir, rel);
-      fs.mkdirSync(path.dirname(dest), { recursive: true });
-      fs.writeFileSync(dest, content);
+      try {
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.writeFileSync(dest, content);
+      } catch (err) {
+        const code = (err as { code?: string }).code;
+        unwritten.push({ path: rel, reason: `it could not be written beside the other changed files${code ? ` (${code})` : ''}` });
+      }
     }
 
     const inv = inventory(dir);
@@ -413,7 +464,8 @@ export async function sideAt(
     const notFetched = lookAtRefused(root, sha, refused);
     const { extracts, unparsed } = await extract(dir, inv.files);
     return {
-      dir, files: inv.files, extracts, unparsed: [...notFetched.unparsed, ...unparsed], unfetched: notFetched.unfetched, dispose,
+      dir, files: inv.files, extracts, unparsed: [...notFetched.unparsed, ...unwritten, ...unparsed], unfetched: notFetched.unfetched,
+      links, dispose,
     };
   } catch (err) {
     dispose(); // never leave a temp tree behind on a throw

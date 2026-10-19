@@ -71,7 +71,7 @@ function embedJson(value: unknown): string {
 }
 
 const KIND_LABEL: Record<string, string> = {
-  A: 'added', M: 'modified', D: 'deleted', R: 'renamed',
+  A: 'added', M: 'modified', D: 'deleted', R: 'renamed', T: 'type changed',
 };
 
 /** The change kind in words, from the model's judgement rather than the number. */
