@@ -680,6 +680,15 @@ function why(err: unknown): string {
   return line.length > 200 ? `${line.slice(0, 199)}…` : line;
 }
 
+/** Whether `extract()` parses a file at all: not binary, vendored or generated, and in a language it has a grammar for. */
+export function isParseTarget(f: FileRecord): boolean {
+  return !f.binary &&
+    f.language !== null &&
+    GRAMMAR_FOR[f.language] !== undefined &&
+    f.classification !== 'vendored' &&
+    f.classification !== 'generated';
+}
+
 /**
  * Parse every parseable, non-floored file and build the intra-repo import graph.
  *
@@ -688,14 +697,7 @@ function why(err: unknown): string {
  * every other file is extracted exactly as it would be without it.
  */
 export async function extract(root: string, files: FileRecord[]): Promise<ExtractResult> {
-  const targets = files.filter(
-    (f) =>
-      !f.binary &&
-      f.language !== null &&
-      GRAMMAR_FOR[f.language] !== undefined &&
-      f.classification !== 'vendored' &&
-      f.classification !== 'generated',
-  );
+  const targets = files.filter(isParseTarget);
   await initParsers([...new Set(targets.map((f) => f.language!))]);
 
   const index = new Set(files.map((f) => f.path));

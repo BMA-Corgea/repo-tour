@@ -20,12 +20,12 @@
 
 import { baseCss, alternateCss, skinPicker, skinScript } from './skins.js';
 import type { CodeStep } from './codetour.js';
-import type { FileDelta } from './delta.js';
+import { notReadOn, type FileDelta } from './delta.js';
 import type { RippleResult } from './delta.js';
 import type { FileDiff, DiffLineKind } from './diff.js';
 import type { PrRefs } from './pr.js';
 import type { Adjudication } from './adjudicate.js';
-import { band } from './prtour.js';
+import { band, sentence } from './prtour.js';
 import { HIGHLIGHTER } from './repoview.js';
 import { askPanelScript, askPanelHtml, ASK_CSS } from './askpanel.js';
 import { notesPanelScript, notesPanelHtml, notesKey, NOTES_CSS } from './notes.js';
@@ -89,13 +89,53 @@ function kindWord(v: Adjudication | undefined, d: FileDelta): string {
 }
 
 function fileRow(d: FileDelta, diff: FileDiff | undefined, v: Adjudication | undefined): string {
+  // T-37: a file with a side not read says so on its row. One that was not scored takes its kind from
+  // git, not from a model's reading of a change repo-tour did not read.
+  const kind = d.basis === 'unread' ? (KIND_LABEL[d.status] ?? 'changed') : kindWord(v, d);
+  const tag = d.unread ? `<span class="nr" title="${esc(`not read ${notReadOn(d.unread)}`)}">not read</span>` : '';
   return `<button class="prfile" data-file="${esc(d.path)}" type="button">
     <span class="pfname">${esc(d.path)}</span>
     <span class="pfmeta">
-      <span class="chip">${esc(kindWord(v, d))}</span>
-      <span class="pfnum"><i class="add">+${diff?.added ?? 0}</i> <i class="del">−${diff?.removed ?? 0}</i></span>
+      <span class="chip">${esc(kind)}</span>
+      <span class="pfnum"><i class="add">+${diff?.added ?? 0}</i> <i class="del">−${diff?.removed ?? 0}</i></span>${tag}
     </span>
   </button>`;
+}
+
+/**
+ * What a stop says first, and what the Ask panel is told the stop says.
+ *
+ * T-37: a file with a side not read opens with that, the side and why; a model's reading of its diff,
+ * when there is one, follows under that name and sets nothing. A modified or renamed one is not scored;
+ * an added or deleted one keeps what its status says, which needs no reading.
+ */
+function stopText(d: FileDelta, v: Adjudication | undefined): string {
+  if (!d.unread) return v?.narrative ?? d.reason;
+  const notRead = `Not read ${notReadOn(d.unread)}.`;
+  const model = v && v.source !== 'unavailable' ? ` The model's reading of the diff: ${v.narrative}` : '';
+  if (d.basis !== 'unread') {
+    const status = sentence(d.reason.charAt(0).toUpperCase() + d.reason.slice(1));
+    return `${notRead} ${status} Its public surface is not listed.${model}`;
+  }
+  return `${notRead} Its public surface is not compared, and it is not ranked by meaning.${model}`;
+}
+
+/**
+ * T-37 — the notice under the top bar when a side of a changed file was not read: how many, which, on
+ * which side, and why. The repo page's bar (T-31), in the same component. Nothing when every file was
+ * read. It is the page's own: the page does not render the tour's steps.
+ */
+function unreadNotice(deltas: FileDelta[]): string {
+  const unread = deltas.filter((d) => d.unread);
+  if (unread.length === 0) return '';
+  const SHOWN = 3;
+  const n = unread.length;
+  const which = unread.slice(0, SHOWN)
+    .map((d) => `<code>${esc(d.path)}</code> ${esc(notReadOn(d.unread!))}`)
+    .join('; ');
+  const more = n > SHOWN ? `; and ${n - SHOWN} more` : '';
+  return `<div class="bar unread"><span class="said"><b>${n} ${n === 1 ? 'file was' : 'files were'} not read</b> on a side `
+    + `of this change, so this page does not say what ${n === 1 ? 'it' : 'they'} did to the public surface — ${which}${more}</span></div>`;
 }
 
 /**
@@ -185,6 +225,10 @@ table.diff tr.hh td { background:var(--chip); color:var(--muted); padding:3px 12
   border-left:2px solid var(--line); padding-left:10px;
 }
 .nodiff { padding:18px 14px; color:var(--muted); font-size:13px; }
+.prfile .nr {
+  margin-left:auto; padding:0 5px; border:1px solid var(--hl-line); border-radius:4px;
+  background:var(--hl); color:var(--ink); font-size:10px; flex:none;
+}
 `;
 
 export function renderPrView(opts: PrViewOptions): string {
@@ -218,7 +262,7 @@ export function renderPrView(opts: PrViewOptions): string {
     files: Object.fromEntries(deltas.map((d, i) => [d.path, {
       index: i,
       title: d.path,
-      narrative: verdicts.get(d.path)?.narrative ?? d.reason,
+      narrative: stopText(d, verdicts.get(d.path)),
       meaning: opts.meanings?.get(d.path) ?? null,
       importers: opts.importers?.get(d.path) ?? [],
     }])),
@@ -232,9 +276,13 @@ export function renderPrView(opts: PrViewOptions): string {
   // A stop leads with the NARRATIVE — what this PR proposes to change about code that
   // already does something. The band is a chip in the corner. It decides the ORDER these
   // appear in and it is not allowed to be the first thing any of them says.
-  const stops = deltas.map((d, i) => {
+  // T-37: a file that was not scored has no band and no rank; the rest are ranked among themselves.
+  const scored = deltas.filter((d) => d.basis !== 'unread');
+  const rank = new Map(scored.map((d, i) => [d.path, i + 1] as const));
+  const stops = deltas.map((d) => {
     const v = verdicts.get(d.path);
     const diff = diffs.get(d.path);
+    const notScored = d.basis === 'unread';
     const surface = [
       d.surface.added.map((x) => `+${x}`).join(' '),
       d.surface.removed.map((x) => `−${x}`).join(' '),
@@ -242,13 +290,17 @@ export function renderPrView(opts: PrViewOptions): string {
     ].filter(Boolean).join('  ');
     const detail = [
       `${KIND_LABEL[d.status] ?? 'changed'} · +${diff?.added ?? 0} −${diff?.removed ?? 0}`,
-      surface ? `Public surface: ${surface}` : 'Public surface unchanged.',
-      `Ranked ${i + 1} of ${deltas.length} by how far the meaning moved (${d.meaningDelta.toFixed(2)}).`,
+      d.unread
+        ? `Public surface ${notScored ? 'not compared' : 'not listed'}: not read ${notReadOn(d.unread)}.`
+        : surface ? `Public surface: ${surface}` : 'Public surface unchanged.',
+      notScored
+        ? 'Not ranked by how far the meaning moved: it was not scored.'
+        : `Ranked ${rank.get(d.path)} of ${scored.length} by how far the meaning moved (${d.meaningDelta.toFixed(2)}).`,
     ].join('\n');
     return `<div class="stop" data-file="${esc(d.path)}">
-      <span class="chip">${esc(band(d.meaningDelta))}</span>
+      <span class="chip">${esc(notScored ? 'not read' : band(d.meaningDelta))}</span>
       <h4>${esc(d.path)}</h4>
-      <div class="body">${esc(v?.narrative ?? d.reason)}</div>
+      <div class="body">${esc(stopText(d, v))}</div>
       <button class="more" type="button">Show the detail</button>
       <div class="detail">${esc(detail)}</div>
     </div>`;
@@ -288,7 +340,7 @@ export function renderPrView(opts: PrViewOptions): string {
     <span class="tab on">Files changed</span>
   </div>
 </div>
-
+${unreadNotice(deltas)}
 <div class="layout">
   <div class="panel">
     <h3>Files <span class="chip">${deltas.length}</span></h3>
