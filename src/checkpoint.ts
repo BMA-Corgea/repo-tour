@@ -19,6 +19,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { CACHE_DIR, SCHEMA_VERSION, type DigestManifest, type DigestResult } from './digest.js';
+import { FROM_THE_TOP } from './diff.js';
 import { extract, isParseTarget } from './extract.js';
 import { inventory } from './inventory.js';
 import type { FileExtract, FileRecord, ImportGraph, RankedFile, UnparsedFile } from './types.js';
@@ -181,11 +182,24 @@ export function staleness(
   if (checkpointSha === baseSha) return { sha: checkpointSha, behind: 0, overlap: [], current: true };
 
   const count = tryGit(root, 'rev-list', '--count', `${checkpointSha}..${baseSha}`);
-  const changed = tryGit(root, 'diff', '--name-only', `${checkpointSha}..${baseSha}`);
-  const moved = new Set((changed ?? '').split('\n').map((l) => l.trim()).filter(Boolean));
+  const behind = count ? Number(count) : 0;
+  // T-58: what the checkpoint has not seen is what the base gained after the two parted, and nothing else. The
+  // two-dot diff compared the two trees, so a checkpoint AHEAD of the base (GONS digests the head it checked out) read
+  // as having missed every file the PR changed: "0 commits behind, and 2 of the files it missed". A checkpoint at the
+  // base or descended from it has missed nothing; one behind it has missed what changed from where the two meet up
+  // to the base (three dots). For a checkpoint behind the base on one line, where they meet IS the checkpoint, and the
+  // files are the ones the two dots gave. `-z`, so a name git would quote is matched as the PR names it.
+  if (behind === 0) return { sha: checkpointSha, behind: 0, overlap: [], current: false };
+  let changed = '';
+  try {
+    changed = git(root, ...FROM_THE_TOP, 'diff', '--name-only', '-z', `${checkpointSha}...${baseSha}`);
+  } catch {
+    /* no listing, no overlap: as before */
+  }
+  const moved = new Set(changed.split('\0').filter(Boolean));
   return {
     sha: checkpointSha,
-    behind: count ? Number(count) : 0,
+    behind,
     overlap: prPaths.filter((p) => moved.has(p)),
     current: false,
   };

@@ -187,7 +187,7 @@ export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFl
 
   try {
     const hunksByFile = new Map<string, Hunk[]>();
-    for (const p of paths) hunksByFile.set(p, hunks(root, diffFrom, refs.headSha, p));
+    for (const p of paths) hunksByFile.set(p, hunks(root, diffFrom, refs.headSha, p, renamedFrom.get(p)));
 
     // Who imports what, from the checkpoint's own graph — the reason a change in one file
     // can be felt in another. Half of the context the narrative is written from, and half
@@ -203,7 +203,7 @@ export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFl
     // from the same text, so what the reader sees is what the narrative was written about.
     const diffs = new Map<string, { raw: string; parsed: FileDiff }>();
     for (const p of paths) {
-      const raw = rawDiff(root, diffFrom, refs.headSha, p);
+      const raw = rawDiff(root, diffFrom, refs.headSha, p, 6, renamedFrom.get(p));
       diffs.set(p, { raw, parsed: parseUnified(p, raw) });
     }
 

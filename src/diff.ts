@@ -41,15 +41,40 @@ export interface FileDiff {
 }
 
 /**
+ * T-58: exactly one file, named to `git diff` from the repository's top.
+ *
+ * Git reads a plain pathspec from the folder it runs in, and the app tours a monorepo package from its folder, so a
+ * path counted from the top named nothing there and every file showed "+0 −0". `top` counts it from the top wherever
+ * git runs; `literal` keeps a `*`, `?` or `[` in a name from matching other files; and the exclusion keeps a path
+ * that is a directory on one side of the change (a file that became a folder of the same name) from bringing in that
+ * folder's files.
+ */
+export function exactly(file: string): string[] {
+  return [`:(top,literal)${file}`, `:(top,literal,exclude)${file}/`];
+}
+
+/**
+ * Git's own setting to count diff paths from the folder it runs in, turned off for every listing the PR flow reads,
+ * so a reader's configuration cannot make one folder's paths stand for the repository's (T-58).
+ */
+export const FROM_THE_TOP = ['-c', 'diff.relative=false'];
+
+/**
  * `-U6` rather than the default 3.
  *
  * A two-line change with three lines of context is legible to someone who already knows the
  * file and useless to someone meeting it for the first time, which is exactly who this
  * product is for.
+ *
+ * `renamedFrom`: a renamed file's old path. Named to git beside the new one, the two pair up as a rename and the diff
+ * is what changed; the new path alone read as a new file, every line of it added (T-58).
  */
-export function rawDiff(root: string, from: string, to: string, file: string, context = 6): string {
+export function rawDiff(root: string, from: string, to: string, file: string, context = 6, renamedFrom?: string): string {
   try {
-    return execFileSync('git', ['-C', root, 'diff', `-U${context}`, '-M', `${from}..${to}`, '--', file], {
+    return execFileSync('git', [
+      '-C', root, ...FROM_THE_TOP, 'diff', `-U${context}`, '-M', `${from}..${to}`,
+      '--', ...(renamedFrom !== undefined ? exactly(renamedFrom) : []), ...exactly(file),
+    ], {
       encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 32 * 1024 * 1024,
     });
   } catch {
@@ -57,8 +82,8 @@ export function rawDiff(root: string, from: string, to: string, file: string, co
   }
 }
 
-export function unifiedDiff(root: string, from: string, to: string, file: string, context = 6): FileDiff {
-  return parseUnified(file, rawDiff(root, from, to, file, context));
+export function unifiedDiff(root: string, from: string, to: string, file: string, context = 6, renamedFrom?: string): FileDiff {
+  return parseUnified(file, rawDiff(root, from, to, file, context, renamedFrom));
 }
 
 export function parseUnified(file: string, raw: string): FileDiff {
