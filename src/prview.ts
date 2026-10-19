@@ -105,16 +105,18 @@ function fileRow(d: FileDelta, diff: FileDiff | undefined, v: Adjudication | und
 /**
  * What a stop says first, and what the Ask panel is told the stop says.
  *
- * T-37: a file that was not scored opens with that, the side and why; a model's reading of its diff,
- * when there is one, follows under that name and sets nothing. An added or deleted file with a side
- * not read keeps its own words, and says it was not read after them.
+ * T-37: a file with a side not read opens with that, the side and why; a model's reading of its diff,
+ * when there is one, follows under that name and sets nothing. A modified or renamed one is not scored;
+ * an added or deleted one keeps what its status says, which needs no reading.
  */
 function stopText(d: FileDelta, v: Adjudication | undefined): string {
-  const said = v?.narrative ?? d.reason;
-  if (!d.unread) return said;
+  if (!d.unread) return v?.narrative ?? d.reason;
   const notRead = `Not read ${notReadOn(d.unread)}.`;
-  if (d.basis !== 'unread') return `${sentence(said)} ${notRead} Its public surface is not compared.`;
   const model = v && v.source !== 'unavailable' ? ` The model's reading of the diff: ${v.narrative}` : '';
+  if (d.basis !== 'unread') {
+    const status = sentence(d.reason.charAt(0).toUpperCase() + d.reason.slice(1));
+    return `${notRead} ${status} Its public surface is not listed.${model}`;
+  }
   return `${notRead} Its public surface is not compared, and it is not ranked by meaning.${model}`;
 }
 
@@ -289,7 +291,7 @@ export function renderPrView(opts: PrViewOptions): string {
     const detail = [
       `${KIND_LABEL[d.status] ?? 'changed'} · +${diff?.added ?? 0} −${diff?.removed ?? 0}`,
       d.unread
-        ? `Public surface not compared: not read ${notReadOn(d.unread)}.`
+        ? `Public surface ${notScored ? 'not compared' : 'not listed'}: not read ${notReadOn(d.unread)}.`
         : surface ? `Public surface: ${surface}` : 'Public surface unchanged.',
       notScored
         ? 'Not ranked by how far the meaning moved: it was not scored.'

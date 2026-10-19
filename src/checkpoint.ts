@@ -19,7 +19,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { CACHE_DIR, SCHEMA_VERSION, type DigestManifest, type DigestResult } from './digest.js';
-import { extract } from './extract.js';
+import { extract, isParseTarget } from './extract.js';
 import { inventory } from './inventory.js';
 import type { FileExtract, FileRecord, ImportGraph, RankedFile, UnparsedFile } from './types.js';
 import type { TierDigest } from './rollup.js';
@@ -198,20 +198,98 @@ export interface Side {
   extracts: FileExtract[];
   /**
    * T-37: the changed files this side has and could not read, each with why: what `extract()` could
-   * not read, parse or walk, and what git could not hand over. None of them has an extract here.
+   * not read, parse or walk, and what git would not hand over that this side would have parsed. None
+   * of them has an extract here.
    */
   unparsed: UnparsedFile[];
+  /**
+   * T-37: the changed files this side has, that git would not hand over, and that it would not have
+   * parsed anyway: a lock file, data, a bundle, a binary, a generated file. Each is recorded from the
+   * start of the file, which is all its class needs. They are not in `files`: no stop reads them.
+   */
+  unfetched: FileRecord[];
   dispose: () => void;
 }
 
+const MIB = 1024 * 1024;
 /** The most of one file a PR side takes from git. Past about 70 MB a file exhausts the parser anyway (T-31). */
-const SHOW_BUFFER = 64 * 1024 * 1024;
+const SHOW_BUFFER = 64 * MIB;
+/** Enough of a file for the inventory to class it: it reads 8 KB to tell binary and 2 KB for a generated header. */
+const CLASS_BYTES = 64 * 1024;
 
-/** The size of `file` at `sha` when it is a file there; null when the commit has no file at that path. */
-function blobSize(root: string, sha: string, file: string): number | null {
-  if (tryGit(root, 'cat-file', '-t', `${sha}:${file}`) !== 'blob') return null;
-  const size = tryGit(root, 'cat-file', '-s', `${sha}:${file}`);
-  return size === null ? null : Number(size);
+/** A file git would not hand over at a side's commit: where it is read from and reported at, and what git said. */
+interface Refused {
+  rel: string;
+  source: string;
+  /** what git did hand over before it stopped: the start of a file over the buffer, or nothing */
+  head?: Buffer;
+  why: string;
+}
+
+/**
+ * Which of `files` are files at `sha`, from the tree alone. Asking git for the object itself cannot tell a
+ * file it cannot produce (a blob a partial clone has not fetched, offline) from one that is not there.
+ */
+function blobsAt(root: string, sha: string, files: string[]): Set<string> {
+  const blobs = new Set<string>();
+  for (let i = 0; i < files.length; i += 500) {
+    let listing = '';
+    try {
+      listing = git(root, '--literal-pathspecs', 'ls-tree', '-z', sha, '--', ...files.slice(i, i + 500));
+    } catch {
+      continue;
+    }
+    for (const entry of listing.split('\0')) {
+      const tab = entry.indexOf('\t');
+      if (tab > 0 && entry.slice(0, tab).split(' ')[1] === 'blob') blobs.add(entry.slice(tab + 1));
+    }
+  }
+  return blobs;
+}
+
+/** `rel` as the inventory records it from `head` alone, or null when the inventory records no such file. */
+function classAlone(rel: string, head: Buffer | undefined): FileRecord | null {
+  const probe = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-tour-class-'));
+  try {
+    const file = path.join(probe, rel);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, head ?? '');
+    return inventory(probe).files.find((f) => f.path === rel) ?? null;
+  } finally {
+    fs.rmSync(probe, { recursive: true, force: true });
+  }
+}
+
+/**
+ * T-37: what to make of the files git would not hand over. Absent on this side (the PR added or deleted
+ * it) is the usual reason, and the diff set already says so. A file that IS here is not absent: dropping
+ * it read as the whole of its surface added or removed. It is classed by the inventory every other file
+ * goes through, from its path and its start. One this side would have parsed is a failure to read, with
+ * why; one it skips for its class anyway is kept as such, which is how it would have shown had git
+ * handed it over.
+ */
+function lookAtRefused(root: string, sha: string, refused: Refused[]): { unparsed: UnparsedFile[]; unfetched: FileRecord[] } {
+  const unparsed: UnparsedFile[] = [];
+  const unfetched: FileRecord[] = [];
+  if (refused.length === 0) return { unparsed, unfetched };
+  const blobs = blobsAt(root, sha, refused.map((r) => r.source));
+  for (const r of refused) {
+    if (!blobs.has(r.source)) continue;
+    const record = classAlone(r.rel, r.head);
+    if (!record) continue; // under a folder the inventory never enters, on either side
+    if (!isParseTarget(record)) {
+      unfetched.push(record);
+      continue;
+    }
+    const size = Number(tryGit(root, 'cat-file', '-s', `${sha}:${r.source}`) ?? NaN);
+    unparsed.push({
+      path: r.rel,
+      reason: size > SHOW_BUFFER
+        ? `it is ${(Math.ceil((size / MIB) * 10) / 10).toFixed(1)} MiB, more than the 64 MiB a PR side reads from git`
+        : `git could not show it${r.why}`,
+    });
+  }
+  return { unparsed, unfetched };
 }
 
 /**
@@ -271,7 +349,7 @@ export async function sideAt(
   process.once('SIGTERM', onSignal);
 
   try {
-    const notFetched: UnparsedFile[] = [];
+    const refused: Refused[] = [];
     for (const rel of paths) {
       // The T-1 self-scan rule: a tool that writes into the tree it reads must exclude its
       // own output. Nothing should ever put the cache here, and if something does, this is
@@ -286,19 +364,15 @@ export async function sideAt(
           maxBuffer: SHOW_BUFFER,
         });
       } catch (err) {
-        // Absent on this side (added or deleted) is the usual reason, and the diff set already says
-        // so. T-37: a file that IS here but that git could not hand over is not absent, and dropping
-        // it read as the whole of its surface added or removed. So it is listed, with why.
-        const size = blobSize(root, sha, source);
-        if (size !== null) {
-          const failed = err as { code?: string; status?: number | null };
-          notFetched.push({
-            path: rel,
-            reason: size > SHOW_BUFFER
-              ? `it is ${(size / (1024 * 1024)).toFixed(1)} MiB, more than the 64 MiB a PR side reads from git`
-              : `git could not show it${failed.code ? ` (${failed.code})` : failed.status != null ? ` (exit ${failed.status})` : ''}`,
-          });
-        }
+        // Absent on this side (added or deleted), usually: T-37 looks again once the loop is done.
+        const failed = err as { code?: string; status?: number | null; stdout?: Buffer };
+        refused.push({
+          rel,
+          source,
+          // a copy, so the rest of what git handed over (up to the 64 MiB buffer) can be let go of
+          head: failed.stdout?.length ? Buffer.from(failed.stdout.subarray(0, CLASS_BYTES)) : undefined,
+          why: failed.code ? ` (${failed.code})` : failed.status != null ? ` (exit ${failed.status})` : '',
+        });
         continue;
       }
       const dest = path.join(dir, rel);
@@ -310,8 +384,11 @@ export async function sideAt(
     if (inv.files.some((f) => f.path === CACHE_DIR || f.path.startsWith(`${CACHE_DIR}/`))) {
       throw new Error('the digest cache reached a PR side directory — see T-1 lessons');
     }
+    const notFetched = lookAtRefused(root, sha, refused);
     const { extracts, unparsed } = await extract(dir, inv.files);
-    return { dir, files: inv.files, extracts, unparsed: [...notFetched, ...unparsed], dispose };
+    return {
+      dir, files: inv.files, extracts, unparsed: [...notFetched.unparsed, ...unparsed], unfetched: notFetched.unfetched, dispose,
+    };
   } catch (err) {
     dispose(); // never leave a temp tree behind on a throw
     throw err;

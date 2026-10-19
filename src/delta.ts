@@ -262,14 +262,17 @@ export type SideState =
 /**
  * T-37: which sides of a change were not read, or undefined when there is nothing to say.
  *
- * A side that failed always counts. A side skipped for its class counts only opposite a side that
- * was read: that pair is the one whose surfaces would compare an extract against nothing, and read
- * as everything added or removed. A file skipped on both sides, or skipped where the other side does
- * not exist (a lock file, an added generated file), makes no such claim and shows as it always has.
+ * A side that failed always counts. A side skipped for its class counts opposite a side that was read
+ * (the pair whose surfaces would compare an extract against nothing, and read as everything added or
+ * removed) or one that failed (or the notice would name one side, and read as though the other was
+ * read). A file skipped on both sides, or skipped where the other side does not exist (a lock file, an
+ * added generated file), makes no claim and shows as it always has.
  */
 export function unreadOf(before: SideState, after: SideState): UnreadSides | undefined {
   const why = (side: SideState, other: SideState): string | undefined =>
-    side.kind === 'failed' || (side.kind === 'skipped' && other.kind === 'read') ? side.reason : undefined;
+    side.kind === 'failed' || (side.kind === 'skipped' && (other.kind === 'read' || other.kind === 'failed'))
+      ? side.reason
+      : undefined;
   const base = why(before, after);
   const head = why(after, before);
   if (base === undefined && head === undefined) return undefined;

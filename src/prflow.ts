@@ -30,7 +30,7 @@ import {
 } from './delta.js';
 import { buildPrTour, band } from './prtour.js';
 import { adjudicate, type Adjudication } from './adjudicate.js';
-import { PARSEABLE } from './inventory.js';
+import { isParseTarget } from './extract.js';
 import type { FileRecord } from './types.js';
 
 export interface PrFlowOptions {
@@ -74,14 +74,14 @@ function skippedFor(f: FileRecord): string {
   }
   if (f.classification === 'vendored') return 'treated as vendored';
   if (!f.language) return 'not in a language repo-tour parses';
-  return PARSEABLE.has(f.language) ? 'it was not parsed' : `there is no parser for ${f.language}`;
+  return isParseTarget(f) ? 'it was not parsed' : `there is no parser for ${f.language}`;
 }
 
-/** T-37: what one side made of each path: read, failed, skipped for its class, or absent. */
+/** T-37: what one side made of each path: read, failed, skipped for its class (fetched or not), or absent. */
 function stateOn(side: Side): (p: string) => SideState {
   const extracted = new Set(side.extracts.map((e) => e.path));
   const failed = new Map(side.unparsed.map((u) => [u.path, u.reason] as const));
-  const files = new Map(side.files.map((f) => [f.path, f] as const));
+  const files = new Map([...side.files, ...side.unfetched].map((f) => [f.path, f] as const));
   return (p) => {
     if (extracted.has(p)) return { kind: 'read' };
     const reason = failed.get(p);

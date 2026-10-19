@@ -158,7 +158,7 @@ function fileStop(
     sentence(opener(d.reason)),
     // T-37: an added or deleted file with a side not read keeps its stop, and lists no symbols for it.
     d.unread
-      ? `Public surface not compared: not read ${notReadOn(d.unread)}.`
+      ? `Public surface not listed: not read ${notReadOn(d.unread)}.`
       : surfaceBits ? `Public surface: ${surfaceBits}` : 'Public surface unchanged.',
     d.interpreted ? '' : 'This file was not interpreted on both sides, so its score rests on structure alone.',
     whySentence(refs, d.path),
@@ -203,7 +203,7 @@ export function buildPrTour(input: PrTourInput): PrTourPlan {
     '. ' +
     (reordered
       ? `The biggest diff is ${path.basename(byLines.path)}; the biggest change of meaning is ${path.basename(biggest.path)}.`
-      : 'Read them in this order.');
+      : scored.length ? 'Read them in this order.' : 'None of them was read on both sides, so none is ranked.');
 
   steps.push({
     file: ordered[0]?.path ?? '',
