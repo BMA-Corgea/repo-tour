@@ -10,6 +10,17 @@ One entry per lesson, newest first, each citing the ticket or incident it came f
 
 ---
 
+## Pinning a load to CPUs confines it only if they are whole cores (T-44, 2026-10-19)
+
+T-44 measured its signal tests under load by pinning 8 or 12 busy loops to CPUs 16-19 with `taskset`, so that "four
+cores" carried the load and the other runs sharing the machine did not. `lscpu -e=CPU,CORE` shows that CPUs 16-19 are
+the second hardware threads of cores 6-9. So the load also slowed whatever ran on CPUs 6-9, and "four busy cores" was
+really four busy threads sharing their cores with other work. The before-and-after numbers still compare, because both
+builds met the same load, but the record overstated how confined the load was.
+
+**The rule:** before pinning a load to confine it, read `lscpu -e=CPU,CORE`, and pin whole cores (both of each core's
+threads) or say in the record which threads share a core with what.
+
 ## A test's time budget is an assertion too (T-44, 2026-10-17)
 
 T-20's signal tests gave a run 3 s to end after one Ctrl-C, and under heavy load they flaked. The first fix widened the

@@ -10,9 +10,12 @@ here and found via the reference table below.
 <!-- What is in motion right now: one line per active ticket/effort —
      what, why, where it stands, what is next. Never pruned while live. -->
 
-- **Next foreman: read `.autodev/foreman/RESUME.md` first** (local; `.autodev/` is gitignored). The run of
-  2026-10-16/17 wound down on the owner's order at 27% of the weekly meter; **landing T-44 is its first unfinished move**
-  (review attempt 2 passed).
+- **Foreman run 2026-10-19 (the owner away, announcement A-20261019-1305-ec16; sign-off under GA-16 Q1):** **T-44 is
+  complete** (`5dece29`, signed off for the owner by the foreman after its own check): `pr` holds its event loop for the
+  whole run, so one signal at its first model call is heard in milliseconds instead of after 1 to 5 s, and T-20's signal
+  tests pass on a busy machine with their 3 s budget unchanged. T-21's startup-pause part closed with it; its launcher
+  part stays parked. **T-37** (a PR tour misreads a file not read on one side) is being built (GA-15). Non-security
+  finds are kept for the owner, not fixed (GA-16 Q2).
 - **Foreman run 2026-10-16 (the owner away; GA-16, the away form):** five tickets complete, each signed off for the
   owner by the foreman after its own check (GA-16, GA-18). **T-36** (`cf46d61`): a file name can no longer run script
   on the repo page, the digest view or the Ask panel. **T-45** (`7d30c3b`; filed by the T-34 seat and started at once
@@ -21,9 +24,9 @@ here and found via the reference table below.
   took in T-46, now closed). **T-30** (`2dbb759`): the build tutorial's practice files parse; on the owner's
   sql-gauntlet `tools/validate.js` and `server.js` the checker goes from 2 parse errors to 0. **T-38** (`2b9d38f`): a
   file near the parser's limit peaks at 1.7 GB instead of 4.2 GB, and a 29 MiB Python file no longer kills the server;
-  the worker idea is parked as **T-55** until its trigger (GA-16 Q4). **T-44** (the signal tests under load: one timer during `pr`
-  removes the startup pause) passed review 2 and waits to land. The owner set this run's meter lines at 30/33/35% of the week; T-37 waits for a later run (approved,
-  GA-15). Non-security finds are kept for ONE combined ticket (the owner's note on GA-16), not fixed.
+  the worker idea is parked as **T-55** until its trigger (GA-16 Q4). **T-44** (the signal tests under load) passed review 2 and landed in
+  the next run. The owner set this run's meter lines at 30/33/35% of the week, so T-37 (approved, GA-15) started in the
+  next run. Non-security finds are kept for ONE combined ticket (the owner's note on GA-16), not fixed.
 - **Foreman run 2026-10-14 (GA-14: the owner's sign-off form, then "go ahead and get started on a
   foreman loop"):** the owner accepted **T-14, T-20 and T-16**, now complete. **T-29 is complete**
   (`7d36f02`; the owner accepted it, GA-15): a cached tour page is reused only while the code that made it runs, and
@@ -45,21 +48,20 @@ here and found via the reference table below.
   Known gap, logged LOW on GUTS's side: the Ask panel in a GONS-served tour needs this repo's
   own server running.
 - **T-19** (bug) — The codex provider still gets a shell: its read-only sandbox is not 'no tools' — intake
-- **T-21** (bug) — A Ctrl-C in the first second of a model call, through the ./repo-tour launcher,… — intake
+- **T-21** (bug) — A Ctrl-C through the ./repo-tour launcher can kill repo-tour before it cleans up (its… — intake
 - **T-33** (bug) — After an update every open tour reloads at once, and each waits behind the rebu… — intake
-- **T-37** (bug) — PR tours: a file not read on one side reads as its whole public surface added o… — intake
 - **T-55** (techdebt) — Parse in a worker that can be stopped (parked until its trigger): give a huge f… — intake
-- **T-44** (techdebt) — T-20's signal tests fail under heavy load: a 3 s exit budget against a startup … — auto-review
 - **T-56** (techdebt) — Follow-ups found in the 2026-10-16 run, kept as one ticket for the owner (parke… — intake
+- **T-37** (bug) — PR tours: a file not read on one side reads as its whole public surface added o… — build
 
 ## Waiting on
 
 <!-- Holds: "waiting at <gate> on <keyholder> since <date>, ping sent to
      <channel>" — no session should discover a hold by archaeology (ruling 24). -->
 
-- **Nothing at a human gate.** GA-16 (2026-10-16) lets the foreman sign off a finished ticket for the owner after
-  checking it at the owner's layer. T-44 (review passed) and T-37 (approved, GA-15) wait for the next run; T-55 and
-  T-56 are parked for the owner.
+- **Nothing at a human gate.** GA-16 Q1 lets the foreman sign off a finished ticket for the owner after checking it
+  at the owner's layer while the owner is away (the 2026-10-19 away counts). T-37 is being built (GA-15); T-55 and T-56
+  are parked for the owner.
 - **T-21** and **T-33** — the owner said "not now" (GA-14, GA-15). **T-19** — parked by the owner (GA-13).
 
 ## Recent past (~15 items / ~30 days)
@@ -67,6 +69,10 @@ here and found via the reference table below.
 <!-- One line per completed item, WITH the why. Newest first. Prune from the
      bottom; the permanent record lives in tickets, events.jsonl, and wiki. -->
 
+- 2026-10-19 **T-44 COMPLETE** (signed off for the owner by the foreman, GA-16; landed `5dece29`) — one signal sent as
+  `pr`'s first model call started waited about 1 s at rest and up to 5 s on busy cores, because nothing held Node's
+  event loop while V8 compiled the parser in the background; one timer held for the length of `pr` makes it a few
+  milliseconds, and T-20's 3 s signal tests pass under load unchanged. T-21's pause part closed with it.
 - 2026-10-17 **T-38 COMPLETE** (signed off for the owner by the foreman, GA-16; landed `2b9d38f`) — reading a node's
   child list kept one JS object per child, so a file near the parser's limit peaked at 4.2 GB and a 29 MiB Python file
   killed the server; every walk now reads children from a cursor (8 MiB of `(`: 1.7 GB; the digest's output unchanged).
