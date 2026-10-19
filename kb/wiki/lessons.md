@@ -10,6 +10,27 @@ One entry per lesson, newest first, each citing the ticket or incident it came f
 
 ---
 
+## A new rule meets every file that reaches it, not only the one it was written for (T-37, 2026-10-19)
+
+T-37 had to stop a PR tour claiming that a file's whole public surface was added or removed when one side of the file
+could not be read. Its first build treated every file git would not hand over (anything over 64 MiB) as "not read".
+That was right for the source file the ticket was about, and wrong for almost every real file that size: lock files,
+CSVs, bundles and `node_modules` files, which repo-tour never parses and which main already showed correctly. With the
+model on they also lost main's score. The adversarial review found it by building the shapes a real PR holds, not the
+one the rule was written for.
+
+**The rule:** before a new path decides something about a file, list the kinds of file that will actually reach it,
+and send it through the same filter as the usual path, so that what the usual path already skips stays as it was.
+
+## An equivalence check between two builds holds everything else equal, caches included (T-37, 2026-10-19)
+
+T-37's builder compared main's build and its own on the same PRs, and one page string differed for a file the change
+never touched. The cause was not the change: repo-tour keeps its interpretation cache in the package folder, and the
+builder's worktree held cached stop meanings from earlier served runs. Copies with empty caches agreed exactly.
+
+**The rule:** compare builds from fresh copies with empty caches (or name the cache each one used), and treat a
+difference outside the change's reach as a fault in the comparison until shown otherwise.
+
 ## Pinning a load to CPUs confines it only if they are whole cores (T-44, 2026-10-19)
 
 T-44 measured its signal tests under load by pinning 8 or 12 busy loops to CPUs 16-19 with `taskset`, so that "four

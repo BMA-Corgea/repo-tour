@@ -14,8 +14,12 @@ here and found via the reference table below.
   complete** (`5dece29`, signed off for the owner by the foreman after its own check): `pr` holds its event loop for the
   whole run, so one signal at its first model call is heard in milliseconds instead of after 1 to 5 s, and T-20's signal
   tests pass on a busy machine with their 3 s budget unchanged. T-21's startup-pause part closed with it; its launcher
-  part stays parked. **T-37** (a PR tour misreads a file not read on one side) is being built (GA-15). Non-security
-  finds are kept for the owner, not fixed (GA-16 Q2).
+  part stays parked. **T-37 is complete** (`3e840c0`, signed off the same way): a file a PR tour could not read on one
+  side no longer reads as its whole public surface added or removed; it is not scored and never ripples, and the PR
+  page, the tour and the CLI say which file, which side and why. The run wound down when its approved work was done:
+  **the run's form asks the owner what runs next** (its link is in `.autodev/foreman/RESUME.md`, on this machine).
+  Non-security finds are kept, not fixed (GA-16 Q2): this run's 13 joined the 2026-10-16 run's 17 in **T-57**, which
+  replaces T-56.
 - **Foreman run 2026-10-16 (the owner away; GA-16, the away form):** five tickets complete, each signed off for the
   owner by the foreman after its own check (GA-16, GA-18). **T-36** (`cf46d61`): a file name can no longer run script
   on the repo page, the digest view or the Ask panel. **T-45** (`7d30c3b`; filed by the T-34 seat and started at once
@@ -51,17 +55,16 @@ here and found via the reference table below.
 - **T-21** (bug) — A Ctrl-C through the ./repo-tour launcher can kill repo-tour before it cleans up (its… — intake
 - **T-33** (bug) — After an update every open tour reloads at once, and each waits behind the rebu… — intake
 - **T-55** (techdebt) — Parse in a worker that can be stopped (parked until its trigger): give a huge f… — intake
-- **T-56** (techdebt) — Follow-ups found in the 2026-10-16 run, kept as one ticket for the owner (parke… — intake
-- **T-37** (bug) — PR tours: a file not read on one side reads as its whole public surface added o… — build
+- **T-57** (techdebt) — Follow-ups found in the 2026-10-16 and 2026-10-19 runs, kept as one ticket for … — intake
 
 ## Waiting on
 
 <!-- Holds: "waiting at <gate> on <keyholder> since <date>, ping sent to
      <channel>" — no session should discover a hold by archaeology (ruling 24). -->
 
-- **Nothing at a human gate.** GA-16 Q1 lets the foreman sign off a finished ticket for the owner after checking it
-  at the owner's layer while the owner is away (the 2026-10-19 away counts). T-37 is being built (GA-15); T-55 and T-56
-  are parked for the owner.
+- **The 2026-10-19 form** (its link is in `.autodev/foreman/RESUME.md`): one question for the owner, what the next
+  run works on (recommended: the ten PR-tour items of T-57). Nothing is at a human gate; T-55 and T-57 are parked for
+  the owner.
 - **T-21** and **T-33** — the owner said "not now" (GA-14, GA-15). **T-19** — parked by the owner (GA-13).
 
 ## Recent past (~15 items / ~30 days)
@@ -69,6 +72,12 @@ here and found via the reference table below.
 <!-- One line per completed item, WITH the why. Newest first. Prune from the
      bottom; the permanent record lives in tickets, events.jsonl, and wiki. -->
 
+- 2026-10-19 **T-56 CLOSED superseded** by T-57, which holds its 17 items plus the 2026-10-19 run's 13, so the
+  owner still has ONE parked ticket of non-security finds (their note on GA-16 Q2).
+- 2026-10-19 **T-37 COMPLETE** (signed off for the owner by the foreman, GA-16; landed `3e840c0`) — a file a PR tour
+  could not read on one side (a parse failure, a class that differs between the sides, a source file over 64 MiB)
+  read as its whole public surface added or removed, ranked first and rippled; now it is not scored, and the page, the
+  tour and the CLI say which side and why. Files read on both sides score exactly as before.
 - 2026-10-19 **T-44 COMPLETE** (signed off for the owner by the foreman, GA-16; landed `5dece29`) — one signal sent as
   `pr`'s first model call started waited about 1 s at rest and up to 5 s on busy cores, because nothing held Node's
   event loop while V8 compiled the parser in the background; one timer held for the length of `pr` makes it a few
