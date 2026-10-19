@@ -203,7 +203,7 @@ export function buildPrTour(input: PrTourInput): PrTourPlan {
     '. ' +
     (reordered
       ? `The biggest diff is ${path.basename(byLines.path)}; the biggest change of meaning is ${path.basename(biggest.path)}.`
-      : scored.length ? 'Read them in this order.' : 'None of them was read on both sides, so none is ranked.');
+      : scored.length || !notScored.length ? 'Read them in this order.' : 'None of them was read on both sides, so none is ranked.');
 
   steps.push({
     file: ordered[0]?.path ?? '',

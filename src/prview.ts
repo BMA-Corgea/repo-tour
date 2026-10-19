@@ -135,7 +135,7 @@ function unreadNotice(deltas: FileDelta[]): string {
     .join('; ');
   const more = n > SHOWN ? `; and ${n - SHOWN} more` : '';
   return `<div class="bar unread"><span class="said"><b>${n} ${n === 1 ? 'file was' : 'files were'} not read</b> on a side `
-    + `of this change, so ${n === 1 ? 'its' : 'their'} public surface is not compared — ${which}${more}</span></div>`;
+    + `of this change, so this page does not say what ${n === 1 ? 'it' : 'they'} did to the public surface — ${which}${more}</span></div>`;
 }
 
 /**

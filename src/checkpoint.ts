@@ -223,19 +223,30 @@ interface Refused {
   source: string;
   /** what git did hand over before it stopped: the start of a file over the buffer, or nothing */
   head?: Buffer;
+  /** the content is not in this clone (a partial one) and git could not fetch it */
+  notInClone: boolean;
   why: string;
 }
 
 /**
+ * What git says when a partial clone lacks the content and cannot fetch it. Matched, never quoted: its own
+ * message can carry the remote's address, credentials and all.
+ */
+const NOT_IN_CLONE = /promisor|could not fetch|Could not read from remote/i;
+
+/**
  * Which of `files` are files at `sha`, from the tree alone. Asking git for the object itself cannot tell a
  * file it cannot produce (a blob a partial clone has not fetched, offline) from one that is not there.
+ * `--full-tree`: the paths are named from the repository's top, as the diff names them, whichever folder
+ * of it the tour runs in (a monorepo's package folder). A listing git refuses leaves those files absent,
+ * as before T-37: it reads the same trees the diff that named them did.
  */
 function blobsAt(root: string, sha: string, files: string[]): Set<string> {
   const blobs = new Set<string>();
   for (let i = 0; i < files.length; i += 500) {
     let listing = '';
     try {
-      listing = git(root, '--literal-pathspecs', 'ls-tree', '-z', sha, '--', ...files.slice(i, i + 500));
+      listing = git(root, '--literal-pathspecs', 'ls-tree', '--full-tree', '-z', sha, '--', ...files.slice(i, i + 500));
     } catch {
       continue;
     }
@@ -286,7 +297,7 @@ function lookAtRefused(root: string, sha: string, refused: Refused[]): { unparse
       path: r.rel,
       reason: size > SHOW_BUFFER
         ? `it is ${(Math.ceil((size / MIB) * 10) / 10).toFixed(1)} MiB, more than the 64 MiB a PR side reads from git`
-        : `git could not show it${r.why}`,
+        : r.notInClone ? 'its content is not in this clone, and git could not fetch it' : `git could not show it${r.why}`,
     });
   }
   return { unparsed, unfetched };
@@ -360,17 +371,18 @@ export async function sideAt(
       let content: Buffer;
       try {
         content = execFileSync('git', ['-C', root, 'show', `${sha}:${source}`], {
-          stdio: ['ignore', 'pipe', 'ignore'],
+          stdio: ['ignore', 'pipe', 'pipe'],
           maxBuffer: SHOW_BUFFER,
         });
       } catch (err) {
         // Absent on this side (added or deleted), usually: T-37 looks again once the loop is done.
-        const failed = err as { code?: string; status?: number | null; stdout?: Buffer };
+        const failed = err as { code?: string; status?: number | null; stdout?: Buffer; stderr?: Buffer };
         refused.push({
           rel,
           source,
           // a copy, so the rest of what git handed over (up to the 64 MiB buffer) can be let go of
           head: failed.stdout?.length ? Buffer.from(failed.stdout.subarray(0, CLASS_BYTES)) : undefined,
+          notInClone: NOT_IN_CLONE.test(failed.stderr?.toString('utf8') ?? ''),
           why: failed.code ? ` (${failed.code})` : failed.status != null ? ` (exit ${failed.status})` : '',
         });
         continue;
