@@ -148,9 +148,12 @@ function unreadNotice(deltas: FileDelta[]): string {
 interface DiffPayload {
   lang: string | null;
   rows: Array<{ k: DiffLineKind | 'hh'; o: number | null; n: number | null; t: string }>;
+  /** T-58: a diff too big to show, with git's counts, so the page says so instead of "no textual change" */
+  big?: { added: number; removed: number };
 }
 
 function diffPayload(diff: FileDiff | undefined, lang: string | null): DiffPayload | null {
+  if (diff?.tooBig) return { lang, rows: [], big: { added: diff.added, removed: diff.removed } };
   if (!diff || diff.empty) return null;
   const rows: DiffPayload['rows'] = [];
   for (const h of diff.hunks) {
@@ -377,6 +380,11 @@ ${unreadNotice(deltas)}
   function render(file) {
     var d = DIFFS[file];
     head.textContent = file;
+    if (d && d.big) {
+      count.textContent = '+' + d.big.added + ' \\u2212' + d.big.removed;
+      body.innerHTML = '<div class="nodiff">This diff is too big to show here: it is over 32 MiB of text.</div>';
+      return;
+    }
     if (!d) {
       count.textContent = '';
       body.innerHTML = '<div class="nodiff">No textual change to show — a rename, a mode change, or a binary file.</div>';
@@ -500,6 +508,7 @@ ${unreadNotice(deltas)}
       if (r.k === 'hh') return r.t;
       return (r.k === 'add' ? '+' : r.k === 'del' ? '-' : ' ') + r.t;
     }).join('\\n') : '';
+    if (d && d.big) diffText = '(This diff is too big to show: it is over 32 MiB of text, so it is left out.)';
     return {
       repo: META.repo,
       repoPath: META.repoPath || null,

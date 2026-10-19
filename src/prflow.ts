@@ -19,7 +19,7 @@ import path from 'node:path';
 
 import { CACHE_DIR } from './digest.js';
 import { renderPrView } from './prview.js';
-import { parseUnified, rawDiff, type FileDiff } from './diff.js';
+import { diffCounts, parseUnified, readDiff, type FileDiff } from './diff.js';
 import { interpretStops, type StopMeaning } from './interpret.js';
 import { resolvePr, diffSet, lineCounts, hunks, type Hunk, type PrRefs } from './pr.js';
 import { loadCheckpoint, sideAt, staleness, type Checkpoint, type Side, type Staleness } from './checkpoint.js';
@@ -209,8 +209,19 @@ export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFl
     // from the same text, so what the reader sees is what the narrative was written about.
     const diffs = new Map<string, { raw: string; parsed: FileDiff }>();
     for (const p of paths) {
-      const raw = rawDiff(root, diffFrom, refs.headSha, p, 6, renamedFrom.get(p));
-      diffs.set(p, { raw, parsed: parseUnified(p, raw) });
+      const read = readDiff(root, diffFrom, refs.headSha, p, 6, renamedFrom.get(p));
+      if (read.tooBig) {
+        // T-58: too big to show is said, with git's counts, on the page and to the model: an empty diff read as "no
+        // textual change" on the page, and as no change at all to the model.
+        const counts = diffCounts(root, diffFrom, refs.headSha, p, renamedFrom.get(p));
+        diffs.set(p, {
+          raw: `(This file's diff is too big to show: it is over 32 MiB of text, with ${counts.added} lines added and `
+            + `${counts.removed} removed. Its text is left out.)`,
+          parsed: { path: p, hunks: [], ...counts, empty: true, tooBig: true },
+        });
+        continue;
+      }
+      diffs.set(p, { raw: read.text, parsed: parseUnified(p, read.text) });
     }
 
     const stopsFor = (side: typeof beforeSide) =>

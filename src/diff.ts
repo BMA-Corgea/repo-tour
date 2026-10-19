@@ -38,6 +38,11 @@ export interface FileDiff {
   removed: number;
   /** true when git gave us no text to show — a binary file, or a pure rename */
   empty: boolean;
+  /**
+   * T-58: git's diff was more than the 32 MiB a page carries. There are no hunks; `added` and `removed` are git's own
+   * counts, so the page can say how big it was rather than "+0 −0" and "no textual change".
+   */
+  tooBig?: true;
 }
 
 /**
@@ -70,20 +75,55 @@ export const FROM_THE_TOP = ['-c', 'diff.relative=false'];
  * is what changed; the new path alone read as a new file, every line of it added (T-58).
  */
 export function rawDiff(root: string, from: string, to: string, file: string, context = 6, renamedFrom?: string): string {
+  return readDiff(root, from, to, file, context, renamedFrom).text;
+}
+
+/** A file's diff as git printed it, or word that it was too big to hold. */
+export interface RawDiff {
+  text: string;
+  /** git printed more than the 32 MiB buffer: `text` is empty, and not because nothing changed (T-58) */
+  tooBig: boolean;
+}
+
+/**
+ * `rawDiff`, telling a diff too big to hold from an empty one. Past the buffer, git's output was swallowed as `''`,
+ * and the page then said "a rename, a mode change, or a binary file" of a 33 MiB change (T-58).
+ */
+export function readDiff(root: string, from: string, to: string, file: string, context = 6, renamedFrom?: string): RawDiff {
   try {
-    return execFileSync('git', [
-      '-C', root, ...FROM_THE_TOP, 'diff', `-U${context}`, '-M', `${from}..${to}`,
+    return {
+      text: execFileSync('git', [
+        '-C', root, ...FROM_THE_TOP, 'diff', `-U${context}`, '-M', `${from}..${to}`,
+        '--', ...(renamedFrom !== undefined ? exactly(renamedFrom) : []), ...exactly(file),
+      ], {
+        encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 32 * 1024 * 1024,
+      }),
+      tooBig: false,
+    };
+  } catch (err) {
+    return { text: '', tooBig: (err as { code?: string }).code === 'ENOBUFS' };
+  }
+}
+
+/** One file's lines added and removed, as git counts them: what a diff too big to show still has to say (T-58). */
+export function diffCounts(root: string, from: string, to: string, file: string, renamedFrom?: string): { added: number; removed: number } {
+  try {
+    const out = execFileSync('git', [
+      '-C', root, ...FROM_THE_TOP, 'diff', '--numstat', '-z', '-M', `${from}..${to}`,
       '--', ...(renamedFrom !== undefined ? exactly(renamedFrom) : []), ...exactly(file),
-    ], {
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 32 * 1024 * 1024,
-    });
+    ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 1024 * 1024 });
+    // "<added>\t<removed>\t<path>\0", or for a rename "<added>\t<removed>\t\0<old>\0<new>\0"; "-" for a binary file
+    const [add = '', del = ''] = (out.split('\0')[0] ?? '').split('\t');
+    return { added: add === '-' ? 0 : Number(add) || 0, removed: del === '-' ? 0 : Number(del) || 0 };
   } catch {
-    return '';
+    return { added: 0, removed: 0 };
   }
 }
 
 export function unifiedDiff(root: string, from: string, to: string, file: string, context = 6, renamedFrom?: string): FileDiff {
-  return parseUnified(file, rawDiff(root, from, to, file, context, renamedFrom));
+  const read = readDiff(root, from, to, file, context, renamedFrom);
+  if (read.tooBig) return { path: file, hunks: [], ...diffCounts(root, from, to, file, renamedFrom), empty: true, tooBig: true };
+  return parseUnified(file, read.text);
 }
 
 export function parseUnified(file: string, raw: string): FileDiff {
