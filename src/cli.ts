@@ -234,7 +234,18 @@ async function main(): Promise<void> {
   }
 
   if (args.command === 'pr') {
-    await runPrMode(args);
+    // Hold the event loop for the whole run, or a signal can wait seconds for the handler above.
+    // When nothing holds the loop, Node waits on the main thread for every background job V8 has
+    // started before it goes on. Nothing held it while the grammars loaded (they wait on V8's
+    // promises, not on anything of Node's), and the job it then met was TurboFan compiling the
+    // parser code the extraction had made hot: at the start of the first model call, a signal
+    // waited about 1 s at rest and up to 5 s on loaded cores (T-44). The timer never fires.
+    const held = setInterval(() => {}, 2 ** 30);
+    try {
+      await runPrMode(args);
+    } finally {
+      clearInterval(held);
+    }
     return;
   }
 
