@@ -21,7 +21,7 @@ import path from 'node:path';
 import { CACHE_DIR, SCHEMA_VERSION, type DigestManifest, type DigestResult } from './digest.js';
 import { extract } from './extract.js';
 import { inventory } from './inventory.js';
-import type { FileExtract, FileRecord, ImportGraph, RankedFile } from './types.js';
+import type { FileExtract, FileRecord, ImportGraph, RankedFile, UnparsedFile } from './types.js';
 import type { TierDigest } from './rollup.js';
 
 export interface Checkpoint {
@@ -196,7 +196,22 @@ export interface Side {
   dir: string;
   files: FileRecord[];
   extracts: FileExtract[];
+  /**
+   * T-37: the changed files this side has and could not read, each with why: what `extract()` could
+   * not read, parse or walk, and what git could not hand over. None of them has an extract here.
+   */
+  unparsed: UnparsedFile[];
   dispose: () => void;
+}
+
+/** The most of one file a PR side takes from git. Past about 70 MB a file exhausts the parser anyway (T-31). */
+const SHOW_BUFFER = 64 * 1024 * 1024;
+
+/** The size of `file` at `sha` when it is a file there; null when the commit has no file at that path. */
+function blobSize(root: string, sha: string, file: string): number | null {
+  if (tryGit(root, 'cat-file', '-t', `${sha}:${file}`) !== 'blob') return null;
+  const size = tryGit(root, 'cat-file', '-s', `${sha}:${file}`);
+  return size === null ? null : Number(size);
 }
 
 /**
@@ -256,6 +271,7 @@ export async function sideAt(
   process.once('SIGTERM', onSignal);
 
   try {
+    const notFetched: UnparsedFile[] = [];
     for (const rel of paths) {
       // The T-1 self-scan rule: a tool that writes into the tree it reads must exclude its
       // own output. Nothing should ever put the cache here, and if something does, this is
@@ -267,10 +283,23 @@ export async function sideAt(
       try {
         content = execFileSync('git', ['-C', root, 'show', `${sha}:${source}`], {
           stdio: ['ignore', 'pipe', 'ignore'],
-          maxBuffer: 64 * 1024 * 1024,
+          maxBuffer: SHOW_BUFFER,
         });
-      } catch {
-        continue; // absent on this side (added or deleted) — the diff set already says so
+      } catch (err) {
+        // Absent on this side (added or deleted) is the usual reason, and the diff set already says
+        // so. T-37: a file that IS here but that git could not hand over is not absent, and dropping
+        // it read as the whole of its surface added or removed. So it is listed, with why.
+        const size = blobSize(root, sha, source);
+        if (size !== null) {
+          const failed = err as { code?: string; status?: number | null };
+          notFetched.push({
+            path: rel,
+            reason: size > SHOW_BUFFER
+              ? `it is ${(size / (1024 * 1024)).toFixed(1)} MiB, more than the 64 MiB a PR side reads from git`
+              : `git could not show it${failed.code ? ` (${failed.code})` : failed.status != null ? ` (exit ${failed.status})` : ''}`,
+          });
+        }
+        continue;
       }
       const dest = path.join(dir, rel);
       fs.mkdirSync(path.dirname(dest), { recursive: true });
@@ -281,8 +310,8 @@ export async function sideAt(
     if (inv.files.some((f) => f.path === CACHE_DIR || f.path.startsWith(`${CACHE_DIR}/`))) {
       throw new Error('the digest cache reached a PR side directory — see T-1 lessons');
     }
-    const { extracts } = await extract(dir, inv.files);
-    return { dir, files: inv.files, extracts, dispose };
+    const { extracts, unparsed } = await extract(dir, inv.files);
+    return { dir, files: inv.files, extracts, unparsed: [...notFetched, ...unparsed], dispose };
   } catch (err) {
     dispose(); // never leave a temp tree behind on a throw
     throw err;

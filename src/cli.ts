@@ -27,6 +27,7 @@ import { PrResolutionError } from './pr.js';
 import { NoCheckpointError } from './checkpoint.js';
 
 import { band } from './prtour.js';
+import { notReadOn } from './delta.js';
 import { runPrFlow } from './prflow.js';
 import { buildPlan, interpretPlan, type BuildPlan } from './build/index.js';
 import type { InterpretCost } from './interpret.js';
@@ -194,6 +195,14 @@ async function runPrMode(args: Args): Promise<void> {
   if (stale.overlap.length) {
     console.log(`  ⚠ checkpoint is ${stale.behind} commits behind, and ${stale.overlap.length} of the files it missed are touched here`);
   }
+  // T-37: a file with a side repo-tour could not read, which side, and why.
+  const unread = deltas.filter((d) => d.unread);
+  if (unread.length) {
+    console.log(`  not read           ${unread.length} ${unread.length === 1 ? 'file' : 'files'} on a side of this change:`);
+    for (const d of unread) {
+      console.log(`    ${d.path}: not read ${notReadOn(d.unread!)}${d.basis === 'unread' ? ' — not scored' : ''}`);
+    }
+  }
 
   const out = args.view ?? path.join(root, CACHE_DIR, `pr-${refs.headSha.slice(0, 8)}.html`);
   fs.mkdirSync(path.dirname(out), { recursive: true });
@@ -202,7 +211,9 @@ async function runPrMode(args: Args): Promise<void> {
   console.log(`\n  ${pad('meaning', 9)}${pad('lines', 7)}${pad('band', 9)}${pad('basis', 13)}path`);
   console.log(`  ${'-'.repeat(78)}`);
   for (const d of deltas.slice(0, 20)) {
-    console.log(`  ${pad(d.meaningDelta.toFixed(2), 9)}${pad(String(d.linesChanged), 7)}${pad(band(d.meaningDelta), 9)}${pad(d.basis, 13)}${d.path}`);
+    // A file that was not scored has no score or band to print (T-37).
+    const scored = d.basis !== 'unread';
+    console.log(`  ${pad(scored ? d.meaningDelta.toFixed(2) : '—', 9)}${pad(String(d.linesChanged), 7)}${pad(scored ? band(d.meaningDelta) : 'not read', 9)}${pad(d.basis, 13)}${d.path}`);
   }
   console.log(`\n  ripple             ${rip.reinterpret.length} re-interpreted (one hop), ${rip.structuralOnly.length} reachable beyond and NOT re-interpreted`);
   console.log(`  tour               ${result.stops} stops`);

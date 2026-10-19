@@ -23,7 +23,7 @@ import path from 'node:path';
 
 import type { CodeStep } from './codetour.js';
 import type { FileDelta, RippleResult } from './delta.js';
-import { orderByMeaning } from './delta.js';
+import { notReadOn, orderByMeaning } from './delta.js';
 import type { Staleness } from './checkpoint.js';
 import type { Hunk, PrRefs } from './pr.js';
 
@@ -62,7 +62,7 @@ function n(x: number): string {
 }
 
 /** One trailing full stop, whoever wrote the sentence. Model text may or may not carry one. */
-function sentence(text: string): string {
+export function sentence(text: string): string {
   const t = text.trim();
   if (!t) return '';
   return /[.!?]$/.test(t) ? t : `${t}.`;
@@ -114,16 +114,22 @@ function whySentence(refs: PrRefs, file: string): string {
     : 'No reason is recorded for this change. This tour was built from two refs, so there is no pull request description to read.';
 }
 
+/** The lines a stop shows: the change, with three lines either side. */
+function around(hunks: Hunk[]): { startLine: number; endLine: number } {
+  const first = hunks[0];
+  const last = hunks[hunks.length - 1];
+  return { startLine: first ? Math.max(1, first.start - 3) : 1, endLine: last ? last.end + 3 : 40 };
+}
+
+const STATUS_WORD: Record<FileDelta['status'], string> = { A: 'added', M: 'modified', D: 'deleted', R: 'renamed' };
+
 function fileStop(
   d: FileDelta,
   refs: PrRefs,
   hunks: Hunk[],
   chapter: { key: string; title: string; subtitle: string },
 ): CodeStep {
-  const first = hunks[0];
-  const last = hunks[hunks.length - 1];
-  const start = first ? Math.max(1, first.start - 3) : 1;
-  const end = last ? last.end + 3 : 40;
+  const { startLine: start, endLine: end } = around(hunks);
 
   const b = band(d.meaningDelta);
   const verdict =
@@ -150,7 +156,10 @@ function fileStop(
     `${d.status === 'A' ? 'Added' : d.status === 'D' ? 'Deleted' : d.status === 'R' ? 'Renamed' : 'Modified'}.`,
     `Meaning delta ${d.meaningDelta.toFixed(2)} (${b}); ${n(d.linesChanged)} ${d.linesChanged === 1 ? 'line' : 'lines'} changed across ${n(hunks.length)} ${hunks.length === 1 ? 'hunk' : 'hunks'}.`,
     sentence(opener(d.reason)),
-    surfaceBits ? `Public surface: ${surfaceBits}` : 'Public surface unchanged.',
+    // T-37: an added or deleted file with a side not read keeps its stop, and lists no symbols for it.
+    d.unread
+      ? `Public surface not compared: not read ${notReadOn(d.unread)}.`
+      : surfaceBits ? `Public surface: ${surfaceBits}` : 'Public surface unchanged.',
     d.interpreted ? '' : 'This file was not interpreted on both sides, so its score rests on structure alone.',
     whySentence(refs, d.path),
   ].filter(Boolean).join('\n\n');
@@ -172,17 +181,26 @@ export function buildPrTour(input: PrTourInput): PrTourPlan {
   const steps: CodeStep[] = [];
 
   const ordered = orderByMeaning(deltas);
-  const moved = ordered.filter((d) => band(d.meaningDelta) !== 'steady');
-  const steady = ordered.filter((d) => band(d.meaningDelta) === 'steady');
+  // T-37: a modified or renamed file with a side not read is not scored, so no chapter about how far a
+  // meaning moved can hold it. An added or deleted one keeps its place, as new or gone.
+  const scored = ordered.filter((d) => d.basis !== 'unread');
+  const notScored = ordered.filter((d) => d.basis === 'unread');
+  const unread = ordered.filter((d) => d.unread);
+  const moved = scored.filter((d) => band(d.meaningDelta) !== 'steady');
+  const steady = scored.filter((d) => band(d.meaningDelta) === 'steady');
 
   // ---- opening: what this is, and the one claim worth leading with
-  const biggest = ordered[0];
+  const biggest = scored[0];
   const byLines = [...deltas].sort((a, b) => b.linesChanged - a.linesChanged)[0];
   const reordered = biggest && byLines && biggest.path !== byLines.path;
 
   const openSummary =
     `${n(deltas.length)} ${deltas.length === 1 ? 'file' : 'files'} changed. ` +
-    `${n(moved.length)} moved in meaning, ${n(steady.length)} did not. ` +
+    `${n(moved.length)} moved in meaning, ${n(steady.length)} did not` +
+    (notScored.length
+      ? `, and ${n(notScored.length)} could not be read, so ${notScored.length === 1 ? 'it is' : 'they are'} not scored`
+      : '') +
+    '. ' +
     (reordered
       ? `The biggest diff is ${path.basename(byLines.path)}; the biggest change of meaning is ${path.basename(biggest.path)}.`
       : 'Read them in this order.');
@@ -225,6 +243,32 @@ export function buildPrTour(input: PrTourInput): PrTourPlan {
         'Two changes that are each fine on their own can be wrong together, and neither diff shows it. ' +
           'Re-running `repo-tour digest .` refreshes the checkpoint and this stop goes away.',
       ].join('\n\n'),
+      chapter: CHAPTERS.what,
+    });
+  }
+
+  // ---- what this tour could not read (T-37). The PR page says it with its own notice and tag: it
+  // does not render these steps.
+  if (unread.length > 0) {
+    const first = unread[0]!;
+    steps.push({
+      file: first.path,
+      ...around(hunksByFile.get(first.path) ?? []),
+      title: 'What this tour could not read',
+      summary:
+        `${n(unread.length)} ${unread.length === 1 ? 'file' : 'files'} could not be read on a side of this change, ` +
+        `so this tour does not say what ${unread.length === 1 ? 'it' : 'they'} did to the public surface.`,
+      text: [
+        'repo-tour reads each changed file on both sides of the change, to compare what it exports. It could not read these:',
+        unread.map((d) => `  · ${d.path} (${STATUS_WORD[d.status]}): not read ${notReadOn(d.unread!)}`).join('\n'),
+        notScored.length
+          ? 'A modified or renamed file that was not read is not scored: its public surface is not compared, it is not ranked by meaning, and the files that import it are not followed.'
+          : '',
+        notScored.length < unread.length
+          ? 'An added or deleted file keeps its place as new or gone, which needs no reading; only its public surface goes unlisted.'
+          : '',
+        'The diff is still on the page.',
+      ].filter(Boolean).join('\n\n'),
       chapter: CHAPTERS.what,
     });
   }

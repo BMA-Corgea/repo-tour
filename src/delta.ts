@@ -233,6 +233,57 @@ export function surfaceChange(before: FileExtract | undefined, after: FileExtrac
 
 export type ChangeStatus = 'A' | 'M' | 'D' | 'R';
 
+/**
+ * T-37: why a side of a change was not read, per side. Present only when one was not; both reasons
+ * when neither side was.
+ */
+export interface UnreadSides {
+  /** why the base side (before this change) was not read */
+  base?: string;
+  /** why the head side (after it) was not read */
+  head?: string;
+}
+
+/**
+ * T-37: what one side of a PR made of one changed file.
+ *
+ *   read     it has an extract
+ *   failed   it could not be read, parsed, walked or fetched from git (the side's `unparsed`)
+ *   skipped  the side has it, but it is not a file repo-tour parses: generated, vendored, binary,
+ *            or a language with no parser
+ *   absent   the side does not have it: the PR added or deleted it
+ */
+export type SideState =
+  | { kind: 'read' }
+  | { kind: 'failed'; reason: string }
+  | { kind: 'skipped'; reason: string }
+  | { kind: 'absent' };
+
+/**
+ * T-37: which sides of a change were not read, or undefined when there is nothing to say.
+ *
+ * A side that failed always counts. A side skipped for its class counts only opposite a side that
+ * was read: that pair is the one whose surfaces would compare an extract against nothing, and read
+ * as everything added or removed. A file skipped on both sides, or skipped where the other side does
+ * not exist (a lock file, an added generated file), makes no such claim and shows as it always has.
+ */
+export function unreadOf(before: SideState, after: SideState): UnreadSides | undefined {
+  const why = (side: SideState, other: SideState): string | undefined =>
+    side.kind === 'failed' || (side.kind === 'skipped' && other.kind === 'read') ? side.reason : undefined;
+  const base = why(before, after);
+  const head = why(after, before);
+  if (base === undefined && head === undefined) return undefined;
+  return { ...(base !== undefined ? { base } : {}), ...(head !== undefined ? { head } : {}) };
+}
+
+/** T-37: the side and why, in the words every surface uses: "on the head side: <why>". */
+export function notReadOn(u: UnreadSides): string {
+  if (u.base !== undefined && u.head !== undefined) {
+    return u.base === u.head ? `on both sides: ${u.base}` : `on both sides (base: ${u.base}; head: ${u.head})`;
+  }
+  return u.head !== undefined ? `on the head side: ${u.head}` : `on the base side: ${u.base ?? ''}`;
+}
+
 export interface FileDelta {
   path: string;
   status: ChangeStatus;
@@ -244,10 +295,19 @@ export interface FileDelta {
   interpreted: boolean;
   /** plain language: why this scored what it did, so the ordering can be argued with */
   reason: string;
-  /** how the score was reached, so a tour never implies more confidence than it has */
-  basis: 'adjudicated' | 'claims' | 'structure' | 'status';
+  /**
+   * how the score was reached, so a tour never implies more confidence than it has. `unread`: it was
+   * not reached — a side of this modified or renamed file was not read (T-37), so it is not scored
+   */
+  basis: 'adjudicated' | 'claims' | 'structure' | 'status' | 'unread';
   /** true when this file did not change but its meaning may have — a ripple (spec §5) */
   ripple?: boolean;
+  /**
+   * T-37: a side of this change that was not read, and why. A modified or renamed file with one is
+   * not scored; an added or deleted file keeps its status score, since "new" and "gone" need no
+   * reading. Absent when every side there is was read.
+   */
+  unread?: UnreadSides;
 }
 
 export interface DeltaInput {
@@ -267,6 +327,8 @@ export interface DeltaInput {
    * rename at 0.47, because the model wrote a different essay rather than a paraphrase.
    */
   adjudication?: { magnitude: number; headline: string; kind: string; source: string };
+  /** T-37: the sides of this change that were not read, from `unreadOf` */
+  unread?: UnreadSides;
 }
 
 function joinMeanings(ms: StopMeaning[]): string {
@@ -281,9 +343,33 @@ function joinMeanings(ms: StopMeaning[]): string {
  * comparison that let confident-sounding prose talk it down would be exactly wrong.
  */
 export function fileDelta(input: DeltaInput): FileDelta {
-  const surface = surfaceChange(input.beforeExtract, input.afterExtract);
-  const surfaceCount = surface.added.length + surface.removed.length + surface.changed.length;
   const interpreted = input.before.length > 0 && input.after.length > 0;
+  const unread = input.unread && (input.unread.base !== undefined || input.unread.head !== undefined)
+    ? input.unread
+    : undefined;
+
+  // T-37: a modified or renamed file with a side not read is not scored. Its surfaces would compare an
+  // extract against nothing and read as everything added or removed. A verdict on its diff is shown
+  // on the page, but sets no score: nothing downstream may treat this file as moved.
+  if (unread && (input.status === 'M' || input.status === 'R')) {
+    return {
+      path: input.path,
+      status: input.status,
+      linesChanged: input.linesChanged,
+      meaningDelta: 0,
+      surface: { added: [], removed: [], changed: [] },
+      interpreted,
+      reason: `not read ${notReadOn(unread)} — so its public surface is not compared, and it is not scored`,
+      basis: 'unread',
+      unread,
+    };
+  }
+
+  // An added or deleted file keeps its status score; with a side not read it lists no symbols.
+  const surface: SurfaceChange = unread
+    ? { added: [], removed: [], changed: [] }
+    : surfaceChange(input.beforeExtract, input.afterExtract);
+  const surfaceCount = surface.added.length + surface.removed.length + surface.changed.length;
 
   let score = 0;
   let reason: string;
@@ -346,6 +432,7 @@ export function fileDelta(input: DeltaInput): FileDelta {
     interpreted,
     reason,
     basis,
+    ...(unread ? { unread } : {}),
   };
 }
 
@@ -408,9 +495,11 @@ export function ripple(graph: ImportGraph, moved: string[], threshold = 0.3): Ri
   };
 }
 
-/** The tour's order: meaning first, and never lines. */
+/** The tour's order: meaning first, and never lines. A file that was not scored (T-37) comes after the rest. */
 export function orderByMeaning(deltas: FileDelta[]): FileDelta[] {
+  const unscored = (d: FileDelta): number => (d.basis === 'unread' ? 1 : 0);
   return [...deltas].sort(
-    (a, b) => b.meaningDelta - a.meaningDelta || b.linesChanged - a.linesChanged || a.path.localeCompare(b.path),
+    (a, b) => unscored(a) - unscored(b)
+      || b.meaningDelta - a.meaningDelta || b.linesChanged - a.linesChanged || a.path.localeCompare(b.path),
   );
 }

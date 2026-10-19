@@ -22,12 +22,16 @@ import { renderPrView } from './prview.js';
 import { parseUnified, rawDiff, type FileDiff } from './diff.js';
 import { interpretStops, type StopMeaning } from './interpret.js';
 import { resolvePr, diffSet, lineCounts, hunks, type Hunk, type PrRefs } from './pr.js';
-import { loadCheckpoint, sideAt, staleness, type Checkpoint, type Staleness } from './checkpoint.js';
+import { loadCheckpoint, sideAt, staleness, type Checkpoint, type Side, type Staleness } from './checkpoint.js';
 import { buildArchitecture, architectureBrief } from './architecture.js';
 import { interpretArchitecture } from './interpret.js';
-import { fileDelta, ripple, orderByMeaning, type FileDelta, type RippleResult } from './delta.js';
+import {
+  fileDelta, ripple, orderByMeaning, unreadOf, type FileDelta, type RippleResult, type SideState,
+} from './delta.js';
 import { buildPrTour, band } from './prtour.js';
 import { adjudicate, type Adjudication } from './adjudicate.js';
+import { PARSEABLE } from './inventory.js';
+import type { FileRecord } from './types.js';
 
 export interface PrFlowOptions {
   pr?: number;
@@ -53,6 +57,38 @@ export interface PrFlowResult {
   stops: number;
   /** null when the two commits are identical; the caller decides what to say about it */
   empty: boolean;
+}
+
+/**
+ * T-37: why a side has a file but no extract of it, when nothing failed: its class, which is what
+ * `extract()` skips. Only content can make it differ between two sides of a change (a binary file, a
+ * generated-file header): the language comes from the extension, and a rename's base side is read
+ * under its new path.
+ */
+function skippedFor(f: FileRecord): string {
+  if (f.binary) return 'treated as binary';
+  if (f.classification === 'generated') {
+    return f.signals.includes('generated-header')
+      ? 'treated as generated (a generated-file header in its first lines)'
+      : 'treated as generated';
+  }
+  if (f.classification === 'vendored') return 'treated as vendored';
+  if (!f.language) return 'not in a language repo-tour parses';
+  return PARSEABLE.has(f.language) ? 'it was not parsed' : `there is no parser for ${f.language}`;
+}
+
+/** T-37: what one side made of each path: read, failed, skipped for its class, or absent. */
+function stateOn(side: Side): (p: string) => SideState {
+  const extracted = new Set(side.extracts.map((e) => e.path));
+  const failed = new Map(side.unparsed.map((u) => [u.path, u.reason] as const));
+  const files = new Map(side.files.map((f) => [f.path, f] as const));
+  return (p) => {
+    if (extracted.has(p)) return { kind: 'read' };
+    const reason = failed.get(p);
+    if (reason !== undefined) return { kind: 'failed', reason };
+    const f = files.get(p);
+    return f ? { kind: 'skipped', reason: skippedFor(f) } : { kind: 'absent' };
+  };
 }
 
 /**
@@ -216,6 +252,8 @@ export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFl
 
     const beforeExtracts = new Map(beforeSide.extracts.map((e) => [e.path, e] as const));
     const afterExtracts = new Map(afterSide.extracts.map((e) => [e.path, e] as const));
+    const before = stateOn(beforeSide);
+    const after = stateOn(afterSide);
 
     const deltas: FileDelta[] = changes.map((c) => {
       const collect = (m: Map<string, StopMeaning>, p: string) =>
@@ -227,10 +265,12 @@ export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFl
         beforeExtract: beforeExtracts.get(c.path),
         afterExtract: afterExtracts.get(c.path),
         adjudication: verdicts.get(c.path),
+        unread: unreadOf(before(c.path), after(c.path)),
       });
     });
 
-    const moved = deltas.filter((d) => band(d.meaningDelta) === 'moved').map((d) => d.path);
+    // A file that was not scored is never moved, whatever a later change does to its number (T-37).
+    const moved = deltas.filter((d) => d.basis !== 'unread' && band(d.meaningDelta) === 'moved').map((d) => d.path);
     const rip = ripple(checkpoint.graph, moved);
     const plan = buildPrTour({ refs, deltas, ripple: rip, staleness: stale, hunksByFile });
     say(`${plan.steps.length} stops`);
