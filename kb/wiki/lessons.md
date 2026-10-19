@@ -10,6 +10,18 @@ One entry per lesson, newest first, each citing the ticket or incident it came f
 
 ---
 
+## Before a fact moves from a log nobody reads to a page someone does, check it on the path that page is used on (T-58, 2026-10-19)
+
+T-58 asked for the facts the PR tour's steps carry to reach the PR page, the checkpoint's "has not seen these" first.
+On GONS's path the checkpoint is the PR's head, and `staleness()` diffed the checkpoint against base with two dots, so
+it reported every file in the PR as missed. GONS's call printed that false warning on every tour, and nobody noticed,
+because GONS discards that output. Moving the fact onto the page would have put the false warning in front of the
+owner on every PR. The foreman caught it by reading its own run of GONS's call before the build started.
+
+**The rule:** before surfacing a computed fact where people will read it, run the path that page is actually used on
+and read what the fact says there. A wrong value that nobody reads is still wrong, and surfacing it only makes it
+visible.
+
 ## A new rule meets every file that reaches it, not only the one it was written for (T-37, 2026-10-19)
 
 T-37 had to stop a PR tour claiming that a file's whole public surface was added or removed when one side of the file

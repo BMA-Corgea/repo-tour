@@ -16,9 +16,11 @@ here and found via the reference table below.
   tests pass on a busy machine with their 3 s budget unchanged. T-21's startup-pause part closed with it; its launcher
   part stays parked. **T-37 is complete** (`3e840c0`, signed off the same way): a file a PR tour could not read on one
   side no longer reads as its whole public surface added or removed; it is not scored and never ripples, and the PR
-  page, the tour and the CLI say which file, which side and why. The run wound down when its approved work was done:
-  **the run's form asks the owner what runs next** (its link is in `.autodev/foreman/RESUME.md`, on this machine).
-  Non-security finds are kept, not fixed (GA-16 Q2): this run's 13 joined the 2026-10-16 run's 17 in **T-57**, which
+  page, the tour and the CLI say which file, which side and why. The owner then answered the run's form with "A - the
+  PR-tour fixes" (GA-19): **T-58** (ten wrong answers a PR tour gives about the diff itself, split out of T-57) got
+  through its plan and **stopped mid-build** when the owner wound every foreman down (5:33 pm Denver). Its work in
+  progress is on its local branch; the next run resumes it (`.autodev/foreman/RESUME.md`, on this machine).
+  Non-security finds are kept, not fixed (GA-16 Q2): this run's joined the 2026-10-16 run's in **T-57**, which
   replaces T-56.
 - **Foreman run 2026-10-16 (the owner away; GA-16, the away form):** five tickets complete, each signed off for the
   owner by the foreman after its own check (GA-16, GA-18). **T-36** (`cf46d61`): a file name can no longer run script
@@ -56,15 +58,16 @@ here and found via the reference table below.
 - **T-33** (bug) — After an update every open tour reloads at once, and each waits behind the rebu… — intake
 - **T-55** (techdebt) — Parse in a worker that can be stopped (parked until its trigger): give a huge f… — intake
 - **T-57** (techdebt) — Follow-ups found in the 2026-10-16 and 2026-10-19 runs, kept as one ticket for … — intake
+- **T-58** (bug) — PR tours give wrong answers about the diff itself: ten cases split out of T-57 … — build
 
 ## Waiting on
 
 <!-- Holds: "waiting at <gate> on <keyholder> since <date>, ping sent to
      <channel>" — no session should discover a hold by archaeology (ruling 24). -->
 
-- **The 2026-10-19 form** (its link is in `.autodev/foreman/RESUME.md`): one question for the owner, what the next
-  run works on (recommended: the ten PR-tour items of T-57). Nothing is at a human gate; T-55 and T-57 are parked for
-  the owner.
+- **Nothing at a human gate.** The owner answered the 2026-10-19 form ("A - the PR-tour fixes", GA-19), which covers
+  T-58 through to sign-off while they are away. T-58 waits at build for the next run; T-55 and T-57 are parked for the
+  owner.
 - **T-21** and **T-33** — the owner said "not now" (GA-14, GA-15). **T-19** — parked by the owner (GA-13).
 
 ## Recent past (~15 items / ~30 days)
