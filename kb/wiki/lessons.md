@@ -10,6 +10,30 @@ One entry per lesson, newest first, each citing the ticket or incident it came f
 
 ---
 
+## A test's time budget is an assertion too (T-44, 2026-10-17)
+
+T-20's signal tests gave a run 3 s to end after one Ctrl-C, and under heavy load they flaked. The first fix widened the
+budget to 15 s, and the foreman approved it because the test "still asserts the same two things": the signal is not
+swallowed, and cleanup happens. A fresh review showed the budget was a third assertion: at 3 s the test also proved that
+one signal stops the model call within seconds, and handlers that let the call run 5 to 10 s longer passed at 15 s. It
+also found the real cause: while the grammars compile, the event loop sits empty and Node waits on V8's background jobs,
+so a signal is not heard. One timer held for the length of `pr` took the pause from 1-4 s to a few milliseconds, and the
+3 s test passed under load unchanged.
+
+**The rule:** before widening a test's time limit, say what the limit itself proves, and look for the cause of the
+delay first; a wider window is the fix only when the delay is genuinely out of the product's hands.
+
+## A getter can be a cache, and an idle process can sit on freed memory (T-38, 2026-10-17)
+
+`node.children` in web-tree-sitter looks like a read, but it builds one JS object per child and keeps them on the node
+until the file is done: on 8 MiB of `(` that was 2.4 GB of JS heap on top of the parser's own 1.6 GB. Walking the same
+children with a cursor holds nothing. And once the memory is released, an idle Node process may not hand it back for
+80 to 100 seconds: V8 decides when, so "the memory comes back" has to be measured over time, not assumed from a
+released reference.
+
+**The rule:** measure a memory change from outside the process (its resident set, sampled), and run heap checks under a
+capped heap rather than against V8's timing, which flakes.
+
 ## A check that scores one row per range cannot see the second declaration (T-30, 2026-10-17)
 
 T-30's builder wrote an every-symbol check to prove "zero regressions against main" and reported 0. Review 3 found 46:
