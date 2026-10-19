@@ -196,7 +196,9 @@ describe('T-37 AC1: a PR side says what it could not read', () => {
       const unparsed = (side as { unparsed?: Array<{ path: string; reason: string }> }).unparsed;
       expect(unparsed?.map((u) => u.path), 'a big file was dropped as though the PR had deleted it, or one repo-tour never parses was called unread')
         .toEqual(['src/big.ts']);
-      expect(unparsed?.[0]?.reason, 'the reason does not say the file was too big to read from git').toMatch(/65\.\d MiB.*64 MiB/);
+      // 65.001 MiB: rounded up to a tenth, so a file past the buffer never reads as no bigger than it
+      expect(unparsed?.[0]?.reason, 'the reason does not say the file was too big to read from git')
+        .toBe('it is 65.1 MiB, more than the 64 MiB a PR side reads from git');
       expect(side.files.map((f) => f.path), 'a file git did not hand over was written into the side').toEqual([]);
       const unfetched = (side as { unfetched?: Array<{ path: string; classification: string }> }).unfetched;
       expect(unfetched?.map((f) => `${f.path} ${f.classification}`), 'a big file this side would skip for its class was not kept as such')
@@ -209,24 +211,36 @@ describe('T-37 AC1: a PR side says what it could not read', () => {
     }
   }, 180_000);
 
-  it('a file this side has but git cannot produce (an offline partial clone) is listed, not dropped as absent', async () => {
-    const origin = await prRepo({ ...SHARED, 'src/catalog.ts': CATALOG }, { 'src/catalog.ts': CATALOG + PR_ADDS });
+  it('a file this side has but git cannot produce (an offline partial clone) is listed: from the top or a package folder, past 500 paths, whatever its name', async () => {
+    const origin = await prRepo(
+      { ...SHARED, 'packages/app/src/catalog.ts': CATALOG, ':magic.ts': CATALOG },
+      { 'packages/app/src/catalog.ts': CATALOG + PR_ADDS, ':magic.ts': CATALOG + PR_ADDS },
+    );
     git(origin.root, 'config', 'uploadpack.allowFilter', 'true');
     const clone = path.join(fresh('partial'), 'clone');
     execFileSync('git', ['clone', '-q', '--filter=blob:none', '--no-checkout', pathToFileURL(origin.root).href, clone], { stdio: 'ignore' });
-    git(clone, 'checkout', '-q', '--detach', origin.head); // fetches head's blobs; the base's catalog stays unfetched
+    git(clone, 'checkout', '-q', '--detach', origin.head); // fetches head's blobs; the base's two changed files stay unfetched
     git(clone, 'remote', 'set-url', 'origin', pathToFileURL(path.join(origin.root, 'gone')).href); // offline from here
-    const side = await sideAt(clone, origin.base, ['src/catalog.ts']);
+    // 600 paths the base side does not have come first, so the two it has are looked up past the first 500.
+    const absent = Array.from({ length: 600 }, (_, k) => `missing/f${k}.ts`);
+    const top = await sideAt(clone, origin.base, [...absent, ':magic.ts', 'packages/app/src/catalog.ts']);
+    // A monorepo's package folder: git names files from the repository's top, and the side has to look them up there.
+    const pkg = await sideAt(path.join(clone, 'packages', 'app'), origin.base, ['packages/app/src/catalog.ts']);
     try {
-      expect(side.files).toEqual([]);
-      const unparsed = (side as { unparsed?: Array<{ path: string; reason: string }> }).unparsed;
-      expect(unparsed?.map((u) => u.path), 'a file the base side has, that git could not fetch, was dropped as though the PR had added it')
-        .toEqual(['src/catalog.ts']);
-      expect(unparsed?.[0]?.reason).toMatch(/^git could not show it/);
+      expect(top.files).toEqual([]);
+      const listed = (top as { unparsed?: Array<{ path: string; reason: string }> }).unparsed;
+      // Soft: each of the three fails on its own message.
+      expect.soft(listed?.map((u) => u.path), 'a file the base side has, that git could not fetch, was dropped as though the PR had added it')
+        .toEqual([':magic.ts', 'packages/app/src/catalog.ts']);
+      expect.soft(listed?.[0]?.reason, 'the reason does not say the content is missing from this clone')
+        .toBe('its content is not in this clone, and git could not fetch it');
+      expect.soft((pkg as { unparsed?: Array<{ path: string }> }).unparsed?.map((u) => u.path),
+        'run from a package folder, a file git could not fetch was dropped as absent').toEqual(['packages/app/src/catalog.ts']);
     } finally {
-      side.dispose();
+      top.dispose();
+      pkg.dispose();
     }
-  }, 60_000);
+  }, 120_000);
 
   it('a file the side does not have (added in the PR) is not listed: absent is not unread (guard)', async () => {
     const repo = await prRepo({ ...SHARED }, { 'src/new.ts': CATALOG });
@@ -486,6 +500,8 @@ describe('T-37: an added file not read at head keeps main\'s score, and gains th
     const d = r.deltas.find((x) => x.path === 'src/added.ts')! as FileDelta & { unread?: unknown };
     expect(d.unread, 'an added file that was not read does not say so').toEqual({ head: INJECTED });
     expect(r.html, 'the page has no notice for the added file it did not read').toMatch(/<div class="bar unread">[\s\S]*src\/added\.ts/);
+    expect(/<div class="bar unread">([\s\S]*?)<\/div>/.exec(r.html)?.[1], 'the notice says the surface of an added file was compared, or not')
+      .toContain('so this page does not say what it did to the public surface');
     const row = /<button class="prfile" data-file="src\/added\.ts"[^>]*>([\s\S]*?)<\/button>/.exec(r.html)?.[1] ?? '';
     expect(row, 'the added file\'s row is not tagged "not read"').toContain('<span class="nr"');
     const stop = /<div class="stop" data-file="src\/added\.ts">([\s\S]*?)<div class="detail">([\s\S]*?)<\/div>/.exec(r.html)!;
@@ -633,6 +649,8 @@ describe('T-37: how a side not read is said', () => {
     const opening = tour([notScored]).steps[0]!.summary ?? '';
     expect(opening, 'the opening orders files it did not rank').not.toContain('Read them in this order.');
     expect(opening).toContain('none is ranked');
+    expect(tour([]).steps[0]!.summary, 'a PR with no changed files does not open as main does')
+      .toBe('0 files changed. 0 moved in meaning, 0 did not. Read them in this order.');
   });
 });
 
