@@ -10,18 +10,17 @@ here and found via the reference table below.
 <!-- What is in motion right now: one line per active ticket/effort —
      what, why, where it stands, what is next. Never pruned while live. -->
 
-- **Foreman run 2026-10-19 (the owner away, announcement A-20261019-1305-ec16; sign-off under GA-16 Q1):** **T-44 is
-  complete** (`5dece29`, signed off for the owner by the foreman after its own check): `pr` holds its event loop for the
-  whole run, so one signal at its first model call is heard in milliseconds instead of after 1 to 5 s, and T-20's signal
-  tests pass on a busy machine with their 3 s budget unchanged. T-21's startup-pause part closed with it; its launcher
-  part stays parked. **T-37 is complete** (`3e840c0`, signed off the same way): a file a PR tour could not read on one
-  side no longer reads as its whole public surface added or removed; it is not scored and never ripples, and the PR
-  page, the tour and the CLI say which file, which side and why. The owner then answered the run's form with "A - the
-  PR-tour fixes" (GA-19): **T-58** (ten wrong answers a PR tour gives about the diff itself, split out of T-57) got
-  through its plan and **stopped mid-build** when the owner wound every foreman down (5:33 pm Denver). Its work in
-  progress is on its local branch; the next run resumes it (`.autodev/foreman/RESUME.md`, on this machine).
-  Non-security finds are kept, not fixed (GA-16 Q2): this run's joined the 2026-10-16 run's in **T-57**, which
-  replaces T-56.
+- **Foreman run 2026-11-11 (the owner busy, then away from 5:35 pm Denver; announcements A-20261111-1712-5c46 and
+  A-20261111-1731-24c9):** **T-58 is complete** (`c08940d`, signed off for the owner by the foreman after its own check,
+  GA-19): a PR tour now tells the truth about the diff itself. A file turned into a folder tours instead of failing, an
+  accented name is read and named, a link is named as not read, a rename has its real counts, a diff over 32 MiB keeps
+  its counts, GONS's tours lose a false staleness warning, the page shows what the tour's steps say, the model gets
+  bounded prompts and no binary bytes, a package folder shows its diffs, and the CLI keeps its columns. Its review
+  failed the first build on four blockers, all fixed. **T-63 is landed** (`50d71d5`, from Build Tutorials' T-72 patch,
+  on the owner's Nov 10 form, GA-21): a `.gitattributes` or a `.repo-tour/` cache file the repository commits as a
+  link, a FIFO or a huge file is no longer read; it waits at the owner's accept. **In flight:** two security
+  fixes started under the owner's "security holes only" rule, **T-67** (GA-23) and **T-59** (GA-22); their details stay
+  in the local ledger until they land. The next run picks both up from their handoffs.
 - **Foreman run 2026-10-16 (the owner away; GA-16, the away form):** five tickets complete, each signed off for the
   owner by the foreman after its own check (GA-16, GA-18). **T-36** (`cf46d61`): a file name can no longer run script
   on the repo page, the digest view or the Ask panel. **T-45** (`7d30c3b`; filed by the T-34 seat and started at once
@@ -58,16 +57,19 @@ here and found via the reference table below.
 - **T-33** (bug) — After an update every open tour reloads at once, and each waits behind the rebu… — intake
 - **T-55** (techdebt) — Parse in a worker that can be stopped (parked until its trigger): give a huge f… — intake
 - **T-57** (techdebt) — Follow-ups found in the 2026-10-16 and 2026-10-19 runs, kept as one ticket for … — intake
-- **T-58** (bug) — PR tours give wrong answers about the diff itself: ten cases split out of T-57 … — build
+- **T-63** (bug) — A hostile .gitattributes can make repo-tour read without end — landed `50d71d5`, at uat, waiting on the owner's accept
+- **T-67** (bug, security) — in flight; details in the local ledger until it lands
+- **T-59** (bug, security) — in flight; details in the local ledger until it lands
 
 ## Waiting on
 
 <!-- Holds: "waiting at <gate> on <keyholder> since <date>, ping sent to
      <channel>" — no session should discover a hold by archaeology (ruling 24). -->
 
-- **Nothing at a human gate.** The owner answered the 2026-10-19 form ("A - the PR-tour fixes", GA-19), which covers
-  T-58 through to sign-off while they are away. T-58 waits at build for the next run; T-55 and T-57 are parked for the
-  owner.
+- **T-63** — waiting at accept on the owner since 2026-11-11 (landed `50d71d5`; its check sheet is
+  `.autodev/evidence/T-63/uat.md`; the owner's Nov 10 answer said "reviewed like any other change", not a sign-off).
+- **T-67** and **T-59** — security fixes in flight on their own branches (GA-23, GA-22); nothing waits on the owner.
+  T-55 and T-57 are parked for the owner.
 - **T-21** and **T-33** — the owner said "not now" (GA-14, GA-15). **T-19** — parked by the owner (GA-13).
 
 ## Recent past (~15 items / ~30 days)
@@ -75,6 +77,11 @@ here and found via the reference table below.
 <!-- One line per completed item, WITH the why. Newest first. Prune from the
      bottom; the permanent record lives in tickets, events.jsonl, and wiki. -->
 
+- 2026-11-11 **T-58 COMPLETE** (signed off for the owner by the foreman, GA-19; landed `c08940d`) — ten wrong answers a
+  PR tour gave about the diff itself (T-57's items 18-27), each shown wrong on main and right on the branch at GONS's
+  layer; 290 real commit pairs tour as before. Why: a tour that is confidently wrong sends a reviewer the wrong way.
+- 2026-10-19 **foreman run** — T-44 and T-37 complete (GA-16); T-58 filed on the owner's form (GA-19) and stopped
+  mid-build at the owner's wind-down.
 - 2026-10-19 **T-56 CLOSED superseded** by T-57, which holds its 17 items plus the 2026-10-19 run's 13, so the
   owner still has ONE parked ticket of non-security finds (their note on GA-16 Q2).
 - 2026-10-19 **T-37 COMPLETE** (signed off for the owner by the foreman, GA-16; landed `3e840c0`) — a file a PR tour

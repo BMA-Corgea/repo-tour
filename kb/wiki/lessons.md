@@ -10,6 +10,15 @@ One entry per lesson, newest first, each citing the ticket or incident it came f
 
 ---
 
+## A security fix's brief says what to make safe, not every way to break it (T-63, 2026-11-11)
+
+**2026-11-11, T-63.** A seat's brief for a defensive fix carried a long safety section and a list of hostile test
+shapes (links to devices, pipes, memory caps). The model's safety filter read the paste as attack work and moved the
+seat's whole session to an older model, which finished the ticket well. The fix itself was never in question.
+
+**The rule:** brief a security fix in plain defensive words: the outcome, the safety rule for tests, the bar. Leave
+the list of hostile shapes to the seat and its reviewer, who build them in the code where they belong.
+
 ## Before a fact moves from a log nobody reads to a page someone does, check it on the path that page is used on (T-58, 2026-10-19)
 
 T-58 asked for the facts the PR tour's steps carry to reach the PR page, the checkpoint's "has not seen these" first.

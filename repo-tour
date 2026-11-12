@@ -283,12 +283,17 @@ cmd_pr() { # cmd_pr [<number>] [--base R --head R] [flags...]
   printf '\n%srepo-tour%s %s%s%s\n' "$C_B" "$C_0" "$C_DIM" "$(cd "$target" && pwd)" "$C_0"
   printf '%scomparing the change against the interpretation you already have.%s\n' "$C_DIM" "$C_0"
 
-  ( cd "$ROOT" && npx tsx src/cli.ts pr "$target" "${flags[@]+"${flags[@]}"}" )
-  local rc=$?
+  # T-59: open the page THIS run wrote, which the CLI names on its last line. The newest `pr-*.html` in the folder can
+  # be one a repository committed there, and with --view this run writes somewhere else entirely.
+  local log; log="$(mktemp "${TMPDIR:-/tmp}/repo-tour-pr.XXXXXX")" || return 1
+  ( cd "$ROOT" && npx tsx src/cli.ts pr "$target" "${flags[@]+"${flags[@]}"}" ) | tee "$log"
+  local rc=${PIPESTATUS[0]}
+  local page; page="$(sed -n 's/^  page               //p' "$log" | tail -1)"
+  rm -f "$log"
   [ $rc -eq 0 ] || return $rc
 
-  local page
-  page="$(ls -t "$target/.repo-tour"/pr-*.html 2>/dev/null | head -1)"
+  # a relative --view is the CLI's, which ran from the repo-tour checkout
+  case "$page" in ''|/*) ;; *) page="$ROOT/$page" ;; esac
   [ -n "$page" ] && _open_view "$page"
   return 0
 }
