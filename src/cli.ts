@@ -31,6 +31,7 @@ import { notReadOn } from './delta.js';
 import { runPrFlow } from './prflow.js';
 import { buildPlan, interpretPlan, type BuildPlan } from './build/index.js';
 import type { InterpretCost } from './interpret.js';
+import { inert, inertLines } from './inert.js';
 
 interface Args {
   command: string;
@@ -106,25 +107,6 @@ function parseArgs(argv: string[]): Args {
 
 function pad(s: string, n: number): string {
   return s.length >= n ? s : s + ' '.repeat(n - s.length);
-}
-
-/**
- * T-58: a repository's own words (a file's name) as the terminal should show them: as text, and nothing else. Read
- * with `-z`, a name reaches the CLI exactly as a PR's author chose it, so an escape sequence in it would run in the
- * reader's terminal (colour, a rewritten screen, a link, a clipboard write) and a newline would forge a row of the
- * table; git's own quoting used to stop both. Each control character, and each character that reorders text, is shown
- * as its escape instead.
- */
-function inert(s: string): string {
-  return s.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
-}
-
-/**
- * T-59: a whole message (an error's, a stack) that may carry a repository's words: each of its own lines made inert,
- * so it still reads as the lines it was written in, and nothing in it runs.
- */
-function inertLines(s: string): string {
-  return s.split('\n').map(inert).join('\n');
 }
 
 function padStart(s: string, n: number): string {
@@ -639,6 +621,14 @@ async function main(): Promise<void> {
 }
 
 main().catch((err: unknown) => {
-  console.error(inertLines(err instanceof Error ? err.stack ?? err.message : String(err)));
+  // T-59: an error's message can quote what a repository planted (a parse error quotes the file it read), so the
+  // message is one inert line, its own newlines shown; the frames after it are this program's, each on its line.
+  if (err instanceof Error) {
+    const head = `${err.name}: ${err.message}`;
+    const stack = err.stack ?? '';
+    console.error(inert(head) + (stack.startsWith(head) ? inertLines(stack.slice(head.length)) : ''));
+  } else {
+    console.error(inert(String(err)));
+  }
   process.exit(1);
 });

