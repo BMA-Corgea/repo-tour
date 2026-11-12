@@ -238,6 +238,9 @@ describe('T-58 AC18: a PR that turns a file into a directory of the same name, o
       const { r, error } = runs[name]!;
       expect(error, `a PR where ${removed} gives way to ${added} failed outright`).toBeUndefined();
       expect(r!.deltas.map((d) => `${d.status} ${d.path}`).sort()).toEqual([`A ${added}`, `D ${removed}`, 'M src/util.ts'].sort());
+      // A folder's listing written as a file would leave the folder's file with nowhere to go: every file is read
+      // where it exists.
+      expect(r!.deltas.filter((d) => d.unread).map((d) => `${d.path} ${JSON.stringify(d.unread)}`), 'a file was not read on a side that has it').toEqual([]);
       const rows = rowsOf(r!.html);
       expect(rows.get(removed), `the page does not show ${removed}'s removed line`).toEqual({ added: 0, removed: removed.endsWith('.ts') ? 3 : 1 });
       expect(rows.get(added), `the page does not show ${added}'s added lines`).toEqual({ added: added.endsWith('.ts') ? 3 : 1, removed: 0 });
