@@ -154,6 +154,12 @@ export function parseUnified(file: string, raw: string): FileDiff {
   let removed = 0;
 
   for (const line of raw.split('\n')) {
+    // A new file section ends the hunk before it, so its own `---`/`+++` lines are preamble, not a line removed and
+    // a line added. Git prints a type change (a file that became a symbolic link) as two sections (T-58).
+    if (line.startsWith('diff --git ')) {
+      current = null;
+      continue;
+    }
     const head = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$/.exec(line);
     if (head) {
       oldNo = Number(head[1]);

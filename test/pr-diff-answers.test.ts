@@ -341,6 +341,17 @@ describe('T-58 AC20: a file that becomes a symlink, or the reverse, appears as t
     });
   }
 
+  for (const [name, counts] of [['file-to-symlink', { added: 1, removed: 3 }], ['symlink-to-file', { added: 3, removed: 1 }]] as const) {
+    it(`${name}: the page's diff is git's, its counts real, with no header line read as a changed line`, () => {
+      const { run } = runs[name]!;
+      // git prints a type change as two file sections, a delete and an add
+      expect(rowsOf(run.r!.html).get('src/catalog.ts'), 'the type change\'s counts take in the second section\'s header').toEqual(counts);
+      const rows = payloadOf(run.r!.html)['src/catalog.ts']?.rows ?? [];
+      expect(rows.filter((r) => r.k !== 'hh' && /^(-- |\+\+ |diff --git|index |new file mode|deleted file mode)/.test(r.t)).map((r) => r.t),
+        'a diff header line is shown as a changed line').toEqual([]);
+    });
+  }
+
   it('the side that holds the link does not read it as code', async () => {
     const { repo } = runs['file-to-symlink']!;
     const side = await sideAt(repo.root, repo.head, ['src/catalog.ts']);
