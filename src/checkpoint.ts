@@ -20,6 +20,7 @@ import path from 'node:path';
 
 import { CACHE_DIR, SCHEMA_VERSION, type DigestManifest, type DigestResult } from './digest.js';
 import { FROM_THE_TOP } from './diff.js';
+import { inert } from './inert.js';
 import { extract, isParseTarget } from './extract.js';
 import { inventory } from './inventory.js';
 import type { FileExtract, FileRecord, ImportGraph, RankedFile, UnparsedFile } from './types.js';
@@ -96,7 +97,8 @@ export function loadCheckpoint(root: string, outDir?: string): Checkpoint {
   const manifest = readJson<DigestManifest>(path.join(dir, 'digest.json'));
   if (manifest.schemaVersion !== SCHEMA_VERSION) {
     throw new NoCheckpointError(
-      `the digest on disk is schema v${manifest.schemaVersion}; this build reads v${SCHEMA_VERSION}.\n` +
+      // the version is the digest file's own word, and a repository can ship that file (T-59)
+      `the digest on disk is schema v${inert(String(manifest.schemaVersion))}; this build reads v${SCHEMA_VERSION}.\n` +
         '  Comparing against a digest written by a different shape of this tool would produce\n' +
         '  differences that are the format moving, not the code. Run:  repo-tour digest .',
     );
