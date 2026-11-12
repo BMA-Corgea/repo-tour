@@ -836,6 +836,8 @@ describe('T-58 review B1: a type change of a file with no parser names its link 
 describe('T-58 review B2, B3: no file\'s diff loses what is its own', () => {
   it('a submodule bump keeps its diff (as on main): on the page and in what the model reads', async () => {
     // Built by hand: `git add -A` drops a gitlink that has no submodule checked out behind it.
+    // The two submodule commits are this run's own, so no verdict cached by an earlier run hides the prompt.
+    const [subA, subB] = ['a', 'b'].map((x) => createHash('sha1').update(`${SALT}-${x}`).digest('hex'));
     const root = fresh('repo');
     git(root, 'init', '-q');
     git(root, 'checkout', '-q', '-b', 'main');
@@ -843,14 +845,14 @@ describe('T-58 review B2, B3: no file\'s diff loses what is its own', () => {
     git(root, 'config', 'user.name', 'repo-tour test');
     writeAll(root, { '.gitignore': '.repo-tour/\n', ...SHARED });
     git(root, 'add', '-A');
-    git(root, 'update-index', '--add', '--cacheinfo', `160000,${'1'.repeat(40)},deps/sub`);
+    git(root, 'update-index', '--add', '--cacheinfo', `160000,${subA},deps/sub`);
     git(root, 'commit', '-q', '-m', 'base');
     const base = git(root, 'rev-parse', 'HEAD');
     await digest(root, { write: true });
     git(root, 'checkout', '-q', '-b', 'feature');
     writeAll(root, { 'src/util.ts': UTIL_AFTER + `// ${SALT} sub\n` });
     git(root, 'add', 'src/util.ts');
-    git(root, 'update-index', '--cacheinfo', `160000,${'2'.repeat(40)},deps/sub`);
+    git(root, 'update-index', '--cacheinfo', `160000,${subB},deps/sub`);
     git(root, 'commit', '-q', '-m', 'the submodule moves on');
     const head = git(root, 'rev-parse', 'HEAD');
     git(root, 'checkout', '-q', 'main');
@@ -860,9 +862,10 @@ describe('T-58 review B2, B3: no file\'s diff loses what is its own', () => {
     expect(rowsOf(run.value!.html).get('deps/sub'), 'a submodule bump shows no change').toEqual({ added: 1, removed: 1 });
     const rows = payloadOf(run.value!.html)['deps/sub']?.rows ?? [];
     expect(rows.filter((x) => x.k !== 'hh').map((x) => x.t), 'the page lost the submodule\'s two commits')
-      .toEqual([`Subproject commit ${'1'.repeat(40)}`, `Subproject commit ${'2'.repeat(40)}`]);
+      .toEqual([`Subproject commit ${subA}`, `Subproject commit ${subB}`]);
     const verdict = run.prompts.find((p) => p.kind === 'adjudicate' && p.file === 'deps/sub');
-    expect(verdict?.text, 'the model read an empty diff for a submodule bump').toContain(`+Subproject commit ${'2'.repeat(40)}`);
+    expect(verdict, 'no verdict was asked for the submodule').toBeDefined();
+    expect(verdict!.text, 'the model read an empty diff for a submodule bump').toContain(`+Subproject commit ${subB}`);
   }, 120_000);
 
   for (const [name, from, to] of [['into', 'notes', 'notes/notes'], ['out of', 'docs/guide', 'docs']] as const) {
