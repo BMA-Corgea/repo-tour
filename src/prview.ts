@@ -25,7 +25,8 @@ import type { RippleResult } from './delta.js';
 import type { FileDiff, DiffLineKind } from './diff.js';
 import type { PrRefs } from './pr.js';
 import type { Adjudication } from './adjudicate.js';
-import { band, sentence } from './prtour.js';
+import type { Staleness } from './checkpoint.js';
+import { band, sentence, whySentence } from './prtour.js';
 import { HIGHLIGHTER } from './repoview.js';
 import { askPanelScript, askPanelHtml, ASK_CSS } from './askpanel.js';
 import { notesPanelScript, notesPanelHtml, notesKey, NOTES_CSS } from './notes.js';
@@ -60,6 +61,8 @@ export interface PrViewOptions {
   steps: CodeStep[];
   ripple: RippleResult;
   verdicts: Map<string, Adjudication>;
+  /** T-58: what the checkpoint has not seen, so the page can say it as the tour's stop does */
+  staleness?: Staleness;
 }
 
 function esc(s: string): string {
@@ -137,6 +140,27 @@ function unreadNotice(deltas: FileDelta[]): string {
   return `<div class="bar unread"><span class="said"><b>${n} ${n === 1 ? 'file was' : 'files were'} not read</b> on a side `
     + `of this change, so this page does not say what ${n === 1 ? 'it' : 'they'} did to the public surface — ${which}${more}</span></div>`;
 }
+
+/**
+ * T-58 — the tour's "The checkpoint has not seen these", in T-37's notice bar: the files that changed on the base,
+ * after the digest this page compares against, and in this pull request too, and the commit that digest was taken at.
+ * Never how many commits behind it is (T-9 criterion 7, the owner: "I don't really want to know about how far ahead
+ * or behind it is for now"). Nothing when it has missed nothing.
+ */
+function staleNotice(s: Staleness | undefined): string {
+  if (!s || s.overlap.length === 0) return '';
+  const SHOWN = 3;
+  const n = s.overlap.length;
+  const which = s.overlap.slice(0, SHOWN).map((p) => `<code>${esc(p)}</code>`).join(', ');
+  const more = n > SHOWN ? `, and ${n - SHOWN} more` : '';
+  return `<div class="bar stale"><span class="said"><b>The digest this page compares against has not seen every change on the base.</b> `
+    + `${n === 1 ? 'One file' : `${n} files`} changed there that this pull request also changes — ${which}${more}. `
+    + 'Two changes that are each fine on their own can be wrong together, and neither diff shows it. '
+    + `The digest was taken at <code>${esc((s.sha ?? '').slice(0, 8))}</code>.</span></div>`;
+}
+
+/** T-58: the most of one line of the PR author's own words (a commit subject, a line of the description) the page shows. */
+const AUTHOR_LINE_MAX = 300;
 
 /**
  * The diff as data, not as markup.
@@ -232,6 +256,9 @@ table.diff tr.hh td { background:var(--chip); color:var(--muted); padding:3px 12
   margin-left:auto; padding:0 5px; border:1px solid var(--hl-line); border-radius:4px;
   background:var(--hl); color:var(--ink); font-size:10px; flex:none;
 }
+.bar.stale { padding:7px 20px; background:var(--hl); border-bottom:1px solid var(--hl-line); }
+.bar.stale .said { color:var(--ink); }
+.bar.stale code { background:var(--chip); padding:1px 6px; border-radius:4px; font-size:11px; }
 `;
 
 export function renderPrView(opts: PrViewOptions): string {
@@ -299,6 +326,9 @@ export function renderPrView(opts: PrViewOptions): string {
       notScored
         ? 'Not ranked by how far the meaning moved: it was not scored.'
         : `Ranked ${rank.get(d.path)} of ${scored.length} by how far the meaning moved (${d.meaningDelta.toFixed(2)}).`,
+      // T-58: the tour's own "why" and where it came from (spec §7). The PR's author wrote it: plain text, escaped with
+      // the rest of the detail, and cut.
+      whySentence(refs, d.path, AUTHOR_LINE_MAX),
     ].join('\n');
     return `<div class="stop" data-file="${esc(d.path)}">
       <span class="chip">${esc(notScored ? 'not read' : band(d.meaningDelta))}</span>
@@ -316,9 +346,24 @@ export function renderPrView(opts: PrViewOptions): string {
          <div class="body">${esc(
            `${rip.reinterpret.length} file${rip.reinterpret.length === 1 ? '' : 's'} import something this PR changed, without changing a character` +
            (rip.reinterpret.length ? `: ${rip.reinterpret.join(', ')}.` : '.') +
-           (rip.structuralOnly.length ? ` A further ${rip.structuralOnly.length} sit beyond that and were not re-read.` : ''),
+           // T-58: the tour names them (up to 20), so the page does too
+           (rip.structuralOnly.length
+             ? ` A further ${rip.structuralOnly.length} sit beyond that and were not re-read: ${rip.structuralOnly.slice(0, 20).join(', ')}`
+               + (rip.structuralOnly.length > 20 ? `, and ${rip.structuralOnly.length - 20} more.` : '.')
+             : ''),
          )}</div>
        </div>`
+    : '';
+
+  // T-58: the tour opens with the description's first lines; the page carries them as its first stop. The PR's author
+  // wrote them: each line escaped and cut, joined by line breaks, never read as markdown or HTML.
+  const firstLines = (refs.prose.body ?? '').split(/\r?\n/).slice(0, 6)
+    .map((l) => esc(l.length > AUTHOR_LINE_MAX ? `${l.slice(0, AUTHOR_LINE_MAX)}…` : l));
+  const description = refs.prose.body
+    ? `<div class="stop">
+      <h4>From the description</h4>
+      <div class="body">${firstLines.join('<br>')}</div>
+    </div>`
     : '';
 
   return `<!doctype html>
@@ -343,7 +388,7 @@ export function renderPrView(opts: PrViewOptions): string {
     <span class="tab on">Files changed</span>
   </div>
 </div>
-${unreadNotice(deltas)}
+${unreadNotice(deltas)}${staleNotice(opts.staleness)}
 <div class="layout">
   <div class="panel">
     <h3>Files <span class="chip">${deltas.length}</span></h3>
@@ -359,7 +404,7 @@ ${unreadNotice(deltas)}
       <button class="stab" data-pane="notes" type="button">Notes<span class="chip" id="ncount">0</span></button>
       <button class="stab" data-pane="ask" type="button">Ask</button>
     </div>
-    <div class="pane on" id="pane-stops"><div class="stops">${stops}${rippleStop}</div></div>
+    <div class="pane on" id="pane-stops"><div class="stops">${description}${stops}${rippleStop}</div></div>
     <div class="pane" id="pane-notes">${notesPanelHtml()}</div>
     <div class="pane" id="pane-ask">${askPanelHtml()}</div>
   </div>

@@ -106,9 +106,13 @@ export function whyFor(refs: PrRefs, file: string): { text: string; source: stri
   return null;
 }
 
-function whySentence(refs: PrRefs, file: string): string {
+/**
+ * The "why" a file stop gives, with where it came from. `max` cuts the quoted text (T-58: the PR page carries this
+ * sentence too, and the text is whatever the PR's author wrote); the tour quotes it whole.
+ */
+export function whySentence(refs: PrRefs, file: string, max = Infinity): string {
   const why = whyFor(refs, file);
-  if (why) return `Why: "${why.text}" — from ${why.source}.`;
+  if (why) return `Why: "${why.text.length > max ? `${why.text.slice(0, max)}…` : why.text}" — from ${why.source}.`;
   return refs.prose.source === 'github'
     ? 'The author recorded no reason for this change — nothing in the description, the commits or a linked issue explains it.'
     : 'No reason is recorded for this change. This tour was built from two refs, so there is no pull request description to read.';

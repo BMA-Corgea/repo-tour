@@ -527,6 +527,34 @@ describe('T-58 AC23: what the tour\'s steps tell the reader reaches the PR page'
     const html = page();
     expect(html, 'the description is only behind the link').toMatch(/<h4>From the description<\/h4>\s*<div class="body">Tests were crowding the tour\.<br>This lowers their weight\.<br><br>Closes #12<\/div>/);
   });
+
+  it('a commit subject and a description written to break the page reach it as plain text, cut (the foreman\'s condition 2)', () => {
+    const evil = '"</script><img src=x onerror=alert(1)><a href="javascript:alert(2)">x</a>';
+    const long = 'L'.repeat(5000);
+    const hostile: PrRefs = {
+      ...refs,
+      prose: {
+        ...refs.prose,
+        body: `${evil}\n[click](javascript:alert(3))\n${long}`,
+        commits: [{ sha: 'd'.repeat(40), message: `rank.ts: ${evil} ${long}\n\nmore` }],
+      },
+    };
+    const render = (r: PrRefs): string => renderPrView({
+      refs: r, deltas, diffs: new Map(), ripple, verdicts: new Map(), steps: [], staleness: stale,
+    } as Parameters<typeof renderPrView>[0]);
+    const html = render(hostile);
+    expect(html, 'the hostile commit subject is not on the page as text')
+      .toContain('Why: &quot;rank.ts: &quot;&lt;/script&gt;&lt;img src=x onerror=alert(1)&gt;&lt;a href=&quot;javascript:alert(2)&quot;&gt;');
+    const said = /<h4>From the description<\/h4>\s*<div class="body">([\s\S]*?)<\/div>/.exec(html)?.[1];
+    expect(said, 'the hostile description is not on the page as text')
+      .toBe('&quot;&lt;/script&gt;&lt;img src=x onerror=alert(1)&gt;&lt;a href=&quot;javascript:alert(2)&quot;&gt;x&lt;/a&gt;'
+        + `<br>[click](javascript:alert(3))<br>${'L'.repeat(300)}…`);
+    const count = (s: string, x: string): number => s.split(x).length - 1;
+    expect(count(html, '</script>'), 'the PR\'s own words closed one of the page\'s scripts').toBe(count(render(refs), '</script>'));
+    expect(html, 'the PR\'s own words became markup').not.toMatch(/<img src=x|<a href="javascript:|href="javascript:/);
+    const why = detailOf(html, 'src/rank.ts')!.split('\n').pop()!;
+    expect(why.length, 'a 5,000-character commit subject reached the page whole').toBeLessThan(400);
+  });
 });
 
 // =========================================================================== AC24: bounded prompts

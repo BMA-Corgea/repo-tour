@@ -178,7 +178,7 @@ export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFl
         repoPath: root,
         repoOverview: await cachedOverview(root, checkpoint, { provider: opts.provider, model: opts.model }),
         refs, deltas: [], diffs: new Map(), steps: plan.steps,
-        ripple: { reinterpret: [], structuralOnly: [], reachable: 0 }, verdicts: new Map(),
+        ripple: { reinterpret: [], structuralOnly: [], reachable: 0 }, verdicts: new Map(), staleness: stale,
       }),
       stops: plan.steps.length, empty: true,
     };
@@ -315,7 +315,7 @@ export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFl
         repoPath: root,
         repoOverview: await cachedOverview(root, checkpoint, { provider: opts.provider, model: opts.model }),
         refs, deltas: orderByMeaning(deltas), diffs: new Map([...diffs].map(([k, v]) => [k, v.parsed])),
-        steps: plan.steps, ripple: rip, verdicts,
+        steps: plan.steps, ripple: rip, verdicts, staleness: stale,
         repoName: path.basename(root) || root,
         // What the digest already worked out these files are for, and who leans on them.
         // The Ask panel needs both to answer anything the page does not literally say.
