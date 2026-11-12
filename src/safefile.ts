@@ -27,6 +27,8 @@
  * every caller already has the right fallback.
  */
 import fs from 'node:fs';
+import path from 'node:path';
+import { randomBytes } from 'node:crypto';
 
 export function readGuardedFile(file: string, maxBytes: number): Buffer | null {
   let fd: number | null = null;
@@ -58,4 +60,76 @@ export function readGuardedFile(file: string, maxBytes: number): Buffer | null {
 export function readGuardedText(file: string, maxBytes: number): string | null {
   const buf = readGuardedFile(file, maxBytes);
   return buf === null ? null : buf.toString('utf8');
+}
+
+/**
+ * The WRITE side (T-67). repo-tour writes its cache INTO `<repo>/.repo-tour/…`, a folder the toured
+ * repository controls and can commit. A plain `fs.writeFileSync` follows a committed link at a cache
+ * file's name, and `fs.mkdirSync` follows a committed link at `.repo-tour` or a folder under it, so a
+ * repository could redirect repo-tour's own writes and overwrite a file outside itself (Build
+ * Tutorials / the foreman's probe: the digest was written THROUGH a committed `.repo-tour/digest.json`
+ * link). A refusal is thrown as `CacheWriteRefused` so the caller degrades (completes in memory, says
+ * one plain line) instead of writing through the link.
+ */
+export class CacheWriteRefused extends Error {}
+
+/**
+ * Ensure `dir` — the cache root `<repo>/.repo-tour` (`cacheRoot`), or a folder under it — and every
+ * folder from `cacheRoot` down to it is a REAL directory, creating a missing one; refuse a symlink or
+ * a non-directory, so a committed link cannot send the writes elsewhere. `cacheRoot`'s parent (the
+ * repository root the user pointed at) is not the toured repository's to choose, so the check starts at
+ * `cacheRoot`. One level at a time, because `mkdirSync(recursive)` follows an existing link.
+ */
+export function ensureSafeDir(cacheRoot: string, dir: string): void {
+  const rel = path.relative(cacheRoot, dir);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+    throw new CacheWriteRefused(`${dir} is not inside the cache root ${cacheRoot}; cache not written`);
+  }
+  let cur = cacheRoot;
+  ensureOneRealDir(cur);
+  for (const part of rel === '' ? [] : rel.split(path.sep)) {
+    cur = path.join(cur, part);
+    ensureOneRealDir(cur);
+  }
+}
+
+function ensureOneRealDir(p: string): void {
+  let st: fs.Stats;
+  try {
+    st = fs.lstatSync(p);
+  } catch {
+    // Absent: create a real directory. The parent was ensured just before, so this is non-recursive and
+    // cannot be redirected by a link at the parent.
+    fs.mkdirSync(p);
+    return;
+  }
+  if (st.isSymbolicLink() || !st.isDirectory()) {
+    throw new CacheWriteRefused(`${p} is a link or not a folder; cache not written`);
+  }
+}
+
+/**
+ * Write `data` to `dir/name` without following a committed link at that name: write a fresh temp file in
+ * the SAME (already-`ensureSafeDir`-verified) folder, then rename it over the final name. A rename
+ * REPLACES whatever directory entry is at `name` — a committed link included — instead of writing
+ * through it. The temp file is opened `O_EXCL | O_NOFOLLOW` so it, too, is never an existing link.
+ * `dir` must have been verified with `ensureSafeDir` first.
+ */
+export function writeFileSafely(dir: string, name: string, data: string | Buffer): void {
+  const tmp = path.join(dir, `.${name}.${randomBytes(6).toString('hex')}.tmp`);
+  const { O_WRONLY, O_CREAT, O_EXCL, O_NOFOLLOW } = fs.constants;
+  const buf = typeof data === 'string' ? Buffer.from(data, 'utf8') : data;
+  const fd = fs.openSync(tmp, O_WRONLY | O_CREAT | O_EXCL | (O_NOFOLLOW ?? 0), 0o600);
+  try {
+    let n = 0;
+    while (n < buf.length) n += fs.writeSync(fd, buf, n, buf.length - n, null);
+  } finally {
+    fs.closeSync(fd);
+  }
+  try {
+    fs.renameSync(tmp, path.join(dir, name));
+  } catch (err) {
+    try { fs.rmSync(tmp, { force: true }); } catch { /* best effort on our own temp */ }
+    throw err;
+  }
 }
