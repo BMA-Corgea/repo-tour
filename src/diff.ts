@@ -120,6 +120,25 @@ export function diffCounts(root: string, from: string, to: string, file: string,
   }
 }
 
+/**
+ * The line git's own diff opens with, `index <base blob>..<head blob>`, for a file whose text is left out. It names the
+ * two contents, so what the model reads in the diff's place, and the verdict cached on it, belong to this change and
+ * not to another of the same file with the same counts (T-58). Empty when git will not say.
+ */
+export function diffIndex(root: string, from: string, to: string, file: string, renamedFrom?: string): string {
+  try {
+    const out = execFileSync('git', [
+      '-C', root, ...FROM_THE_TOP, 'diff', '--raw', '-z', '--no-abbrev', '-M', `${from}..${to}`,
+      '--', ...(renamedFrom !== undefined ? exactly(renamedFrom) : []), ...exactly(file),
+    ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 1024 * 1024 });
+    // ":<base mode> <head mode> <base blob> <head blob> <status>\0<path>\0…"
+    const fields = (out.split('\0')[0] ?? '').split(' ');
+    return fields.length >= 4 ? `index ${fields[2]}..${fields[3]}` : '';
+  } catch {
+    return '';
+  }
+}
+
 export function unifiedDiff(root: string, from: string, to: string, file: string, context = 6, renamedFrom?: string): FileDiff {
   const read = readDiff(root, from, to, file, context, renamedFrom);
   if (read.tooBig) return { path: file, hunks: [], ...diffCounts(root, from, to, file, renamedFrom), empty: true, tooBig: true };

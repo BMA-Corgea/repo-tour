@@ -425,6 +425,10 @@ describe('T-58 AC22: a diff too big to show says so', () => {
     const verdict = run.prompts.find((p) => p.kind === 'adjudicate' && p.file === 'data/big.csv');
     expect(verdict, 'no verdict was asked for the file').toBeDefined();
     expect(verdict!.text, 'the model read an empty diff as the whole change').toMatch(/too big/);
+    // The verdict is cached on what the model reads: without the two contents named, another change of this file with
+    // the same counts would be served this change's verdict.
+    const [b, h] = [repo.base, repo.head].map((sha) => git(repo.root, 'rev-parse', `${sha}:data/big.csv`));
+    expect(verdict!.text, 'what the model reads in the diff\'s place does not name the two contents').toContain(`index ${b}..${h}`);
   });
 });
 
@@ -672,6 +676,9 @@ describe('T-58 AC25: a binary file is never sent to the model as text', () => {
     expect(run.prompts.filter((p) => p.bytes.includes(0) || p.text.includes('BINARY-PAYLOAD')).map((p) => `${p.kind} ${p.file}`),
       'git\'s text diff of a binary file went to the model').toEqual([]);
     expect(payloadOf(run.value!.html)['assets/blob.dat'] ?? null, 'the page carries the binary file\'s bytes as diff rows').toBeNull();
+    const verdict = run.prompts.find((p) => p.kind === 'adjudicate' && p.file === 'assets/blob.dat');
+    expect(verdict?.text, 'what the model reads in the binary diff\'s place does not name the two contents (its cached verdict would serve another change)')
+      .toMatch(/^index [0-9a-f]{7,}\.\.[0-9a-f]{7,}$/m);
   }, 120_000);
 });
 

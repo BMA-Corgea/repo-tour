@@ -19,7 +19,7 @@ import path from 'node:path';
 
 import { CACHE_DIR } from './digest.js';
 import { renderPrView } from './prview.js';
-import { diffCounts, parseUnified, readDiff, type FileDiff } from './diff.js';
+import { diffCounts, diffIndex, parseUnified, readDiff, type FileDiff } from './diff.js';
 import { interpretStops, type StopMeaning } from './interpret.js';
 import { resolvePr, diffSet, lineCounts, hunks, type Hunk, type PrRefs } from './pr.js';
 import { loadCheckpoint, sideAt, staleness, type Checkpoint, type Side, type Staleness } from './checkpoint.js';
@@ -221,7 +221,9 @@ export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFl
         // textual change" on the page, and as no change at all to the model.
         const counts = diffCounts(root, diffFrom, refs.headSha, p, renamedFrom.get(p));
         diffs.set(p, {
-          raw: `(This file's diff is too big to show: it is over 32 MiB of text, with ${counts.added} lines added and `
+          // git's index line first, as its own diff has it: the verdict is cached on this text
+          raw: `${diffIndex(root, diffFrom, refs.headSha, p, renamedFrom.get(p))}\n`
+            + `(This file's diff is too big to show: it is over 32 MiB of text, with ${counts.added} lines added and `
             + `${counts.removed} removed. Its text is left out.)`,
           parsed: { path: p, hunks: [], ...counts, empty: true, tooBig: true },
         });
@@ -230,7 +232,7 @@ export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFl
       const parsed = parseUnified(p, read.text);
       if (binary.has(p) && parsed.hunks.length > 0) {
         diffs.set(p, {
-          raw: '(This is a binary file: its content is not shown.)',
+          raw: `${/^index [0-9a-f]+\.\.[0-9a-f]+/m.exec(read.text)?.[0] ?? ''}\n(This is a binary file: its content is not shown.)`,
           parsed: { path: p, hunks: [], added: parsed.added, removed: parsed.removed, empty: true },
         });
         continue;
