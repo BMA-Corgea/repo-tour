@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CACHE_DIR } from './digest.js';
+import { ensureSafeDir, writeFileSafely } from './safefile.js';
 
 export interface TourRecord {
   id: string;
@@ -87,13 +88,15 @@ export function saveTour(
 ): TourRecord {
   const id = meta.head ? meta.head.slice(0, 10) : 'working';
   const dir = path.join(toursDir(root), id);
-  fs.mkdirSync(dir, { recursive: true });
+  // T-67: `.repo-tour/tours/<id>` is inside the toured repository; write only into real folders and
+  // replace a committed link at a file name rather than following it.
+  ensureSafeDir(path.join(root, CACHE_DIR), dir);
 
   const page = path.join(dir, 'index.html');
-  fs.writeFileSync(page, html);
+  writeFileSafely(dir, 'index.html', html);
 
   const record: TourRecord = { ...meta, id, page, generatedAt };
-  fs.writeFileSync(path.join(dir, 'tour.json'), JSON.stringify(record, null, 2));
+  writeFileSafely(dir, 'tour.json', JSON.stringify(record, null, 2));
   register(record);
   return record;
 }

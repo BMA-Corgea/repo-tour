@@ -41,7 +41,7 @@ import {
   MAX_FETCH_HOPS, FETCH_BUDGET, SOURCE_BUDGET, type AskContext, type AskMessage, type AskFetched,
 } from './ask.js';
 import { serveFetch, resolveInRepo } from './fetchrepo.js';
-import { readGuardedText } from './safefile.js';
+import { readGuardedText, ensureSafeDir, writeFileSafely } from './safefile.js';
 import { findCitations } from './cite.js';
 import { listPrs, PrResolutionError, type PrListResult } from './pr.js';
 import { NoCheckpointError } from './checkpoint.js';
@@ -135,8 +135,11 @@ function markerPath(repoPath: string): string {
  */
 function markBuilding(repoPath: string, lines: string[], force = false): void {
   try {
-    fs.mkdirSync(path.dirname(markerPath(repoPath)), { recursive: true });
-    fs.writeFileSync(markerPath(repoPath), JSON.stringify(
+    // T-67: `.repo-tour/building.json` is inside the toured repository; write into a real folder and
+    // replace a committed link at the name rather than following it. A refusal is swallowed here.
+    const dir = path.dirname(markerPath(repoPath));
+    ensureSafeDir(path.join(repoPath, CACHE_DIR), dir);
+    writeFileSafely(dir, path.basename(markerPath(repoPath)), JSON.stringify(
       { startedAt: new Date().toISOString(), lines, ...(force ? { force: true } : {}) }, null, 2,
     ));
   } catch { /* a build that cannot record itself still runs */ }
@@ -219,10 +222,12 @@ function readRendered(repoPath: string, fp: string): Rendered | null {
 function writeRendered(repoPath: string, r: Rendered, keep = 4): void {
   const dir = renderedDir(repoPath);
   try {
-    fs.mkdirSync(dir, { recursive: true });
+    // T-67: `.repo-tour/rendered` is inside the toured repository; require real folders and replace a
+    // committed link at a file name rather than following it.
+    ensureSafeDir(path.join(repoPath, CACHE_DIR), dir);
     const { html, ...meta } = r;
-    fs.writeFileSync(path.join(dir, `${r.fingerprint}.html`), html);
-    fs.writeFileSync(path.join(dir, `${r.fingerprint}.json`), JSON.stringify(meta, null, 2));
+    writeFileSafely(dir, `${r.fingerprint}.html`, html);
+    writeFileSafely(dir, `${r.fingerprint}.json`, JSON.stringify(meta, null, 2));
 
     const metas = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
     const dated = metas
