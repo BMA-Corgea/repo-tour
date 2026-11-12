@@ -18,9 +18,13 @@ here and found via the reference table below.
   bounded prompts and no binary bytes, a package folder shows its diffs, and the CLI keeps its columns. Its review
   failed the first build on four blockers, all fixed. **T-63 is landed** (`50d71d5`, from Build Tutorials' T-72 patch,
   on the owner's Nov 10 form, GA-21): a `.gitattributes` or a `.repo-tour/` cache file the repository commits as a
-  link, a FIFO or a huge file is no longer read; it waits at the owner's accept. **In flight:** two security
-  fixes started under the owner's "security holes only" rule, **T-67** (GA-23) and **T-59** (GA-22); their details stay
-  in the local ledger until they land. The next run picks both up from their handoffs.
+  link, a FIFO or a huge file is no longer read; it waits at the owner's accept. Two more security fixes,
+  started tonight under the owner's "security holes only" rule, are **landed** and wait at his accept with T-63:
+  **T-67** (`6ba0f11`, GA-23): repo-tour writes its `.repo-tour/` cache only inside the repository it tours; a link the
+  repository commits there is replaced or refused, never written through, and a refused cache is said in one line.
+  **T-59** (`237dfab`, GA-22): a file, folder or branch name, or a value in a cache the repository ships, prints in the
+  terminal as visible escapes, never as escape sequences or forged lines. **T-68** holds every non-security find of
+  the 2026-10-16, 2026-10-19 and 2026-11-11 runs as one parked ticket for the owner (it replaces T-57).
 - **Foreman run 2026-10-16 (the owner away; GA-16, the away form):** five tickets complete, each signed off for the
   owner by the foreman after its own check (GA-16, GA-18). **T-36** (`cf46d61`): a file name can no longer run script
   on the repo page, the digest view or the Ask panel. **T-45** (`7d30c3b`; filed by the T-34 seat and started at once
@@ -56,20 +60,19 @@ here and found via the reference table below.
 - **T-21** (bug) — A Ctrl-C through the ./repo-tour launcher can kill repo-tour before it cleans up (its… — intake
 - **T-33** (bug) — After an update every open tour reloads at once, and each waits behind the rebu… — intake
 - **T-55** (techdebt) — Parse in a worker that can be stopped (parked until its trigger): give a huge f… — intake
-- **T-57** (techdebt) — Follow-ups found in the 2026-10-16 and 2026-10-19 runs, kept as one ticket for … — intake
-- **T-63** (bug) — A hostile .gitattributes can make repo-tour read without end — landed `50d71d5`, at uat, waiting on the owner's accept
-- **T-67** (bug, security) — in flight; details in the local ledger until it lands
-- **T-59** (bug, security) — in flight; details in the local ledger until it lands
+- **T-63** (bug) — a hostile `.gitattributes` or cache file is no longer read without end — landed `50d71d5`, at the owner's accept
+- **T-67** (bug) — the `.repo-tour/` cache is never written through a committed link — landed `6ba0f11`, at the owner's accept
+- **T-59** (bug) — a repository's names print in the terminal as text — landed `237dfab`, at the owner's accept
+- **T-68** (techdebt) — Follow-ups found in the 2026-10-16, 2026-10-19 and 2026-11-11 runs, kept as one… — intake
 
 ## Waiting on
 
 <!-- Holds: "waiting at <gate> on <keyholder> since <date>, ping sent to
      <channel>" — no session should discover a hold by archaeology (ruling 24). -->
 
-- **T-63** — waiting at accept on the owner since 2026-11-11 (landed `50d71d5`; its check sheet is
-  `.autodev/evidence/T-63/uat.md`; the owner's Nov 10 answer said "reviewed like any other change", not a sign-off).
-- **T-67** and **T-59** — security fixes in flight on their own branches (GA-23, GA-22); nothing waits on the owner.
-  T-55 and T-57 are parked for the owner.
+- **T-63, T-67, T-59** — waiting at accept on the owner since 2026-11-11, each landed and pushed with a check sheet
+  (`.autodev/evidence/<ticket>/uat.md`); no recorded answer of the owner's lets the foreman sign these three off.
+  T-55 and T-68 are parked for the owner.
 - **T-21** and **T-33** — the owner said "not now" (GA-14, GA-15). **T-19** — parked by the owner (GA-13).
 
 ## Recent past (~15 items / ~30 days)
@@ -77,6 +80,11 @@ here and found via the reference table below.
 <!-- One line per completed item, WITH the why. Newest first. Prune from the
      bottom; the permanent record lives in tickets, events.jsonl, and wiki. -->
 
+- 2026-11-11 **T-67, T-59, T-63 landed** (`6ba0f11`, `237dfab`, `50d71d5`) — a repository can no longer steer repo-tour
+  through what it commits: no endless read of a planted file, no write through a planted link, no escape sequence or
+  forged line in the terminal. Why: repo-tour reads repositories its owner did not write. Each waits at his accept.
+- 2026-11-11 **T-57 CLOSED superseded** by T-68 (the same parked list plus two runs' finds: still one ticket);
+  **T-60 CLOSED duplicate** of T-67 (T-59's reviewer found the same write on its own).
 - 2026-11-11 **T-58 COMPLETE** (signed off for the owner by the foreman, GA-19; landed `c08940d`) — ten wrong answers a
   PR tour gave about the diff itself (T-57's items 18-27), each shown wrong on main and right on the branch at GONS's
   layer; 290 real commit pairs tour as before. Why: a tour that is confidently wrong sends a reviewer the wrong way.

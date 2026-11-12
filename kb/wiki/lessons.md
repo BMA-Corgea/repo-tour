@@ -10,6 +10,17 @@ One entry per lesson, newest first, each citing the ticket or incident it came f
 
 ---
 
+## A fix for reading through a link asks the question for writing through it (T-63, T-67, 2026-11-11)
+
+**2026-11-11, T-63.** The fix closed every read of a file the toured repository can commit as a link: `.gitattributes`
+and the `.repo-tour/` cache. Reading its diff, the next question was the other direction: the same `.repo-tour/`
+folder is also WRITTEN, with plain `writeFileSync`, and a committed link at a cache file's name sent the digest's JSON
+into a file outside the repository (T-67, confirmed on main with a victim file in a temp folder). The read fix was
+right and complete for reads; the worse hole was one word over.
+
+**The rule:** when a fix names a class ("a path the repository controls"), list every verb that touches it: read,
+write, create, rename, remove. A class named for one verb is half a class.
+
 ## A security fix's brief says what to make safe, not every way to break it (T-63, 2026-11-11)
 
 **2026-11-11, T-63.** A seat's brief for a defensive fix carried a long safety section and a list of hostile test
