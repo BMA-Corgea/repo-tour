@@ -119,7 +119,13 @@ export function writeFileSafely(dir: string, name: string, data: string | Buffer
   const tmp = path.join(dir, `.${name}.${randomBytes(6).toString('hex')}.tmp`);
   const { O_WRONLY, O_CREAT, O_EXCL, O_NOFOLLOW } = fs.constants;
   const buf = typeof data === 'string' ? Buffer.from(data, 'utf8') : data;
-  const fd = fs.openSync(tmp, O_WRONLY | O_CREAT | O_EXCL | (O_NOFOLLOW ?? 0), 0o600);
+  let fd: number;
+  try {
+    fd = fs.openSync(tmp, O_WRONLY | O_CREAT | O_EXCL | (O_NOFOLLOW ?? 0), 0o600);
+  } catch (err) {
+    // Failing to open our own temp file is a cache problem, never a reason to crash the digest.
+    throw new CacheWriteRefused(`could not write ${name} into ${dir}: ${(err as Error).message}`);
+  }
   try {
     let n = 0;
     while (n < buf.length) n += fs.writeSync(fd, buf, n, buf.length - n, null);
@@ -127,9 +133,13 @@ export function writeFileSafely(dir: string, name: string, data: string | Buffer
     fs.closeSync(fd);
   }
   try {
+    // A rename replaces whatever entry is at `name` — a committed link included — never writing through
+    // it. If `name` is a committed DIRECTORY the rename fails (EISDIR); if the disk is full, ENOSPC.
+    // Either way the cache is simply not written: a `CacheWriteRefused` the caller degrades on, never an
+    // unhandled throw with a stack trace. Our own temp file is removed first.
     fs.renameSync(tmp, path.join(dir, name));
   } catch (err) {
     try { fs.rmSync(tmp, { force: true }); } catch { /* best effort on our own temp */ }
-    throw err;
+    throw new CacheWriteRefused(`could not place ${name} in ${dir}: ${(err as Error).message}`);
   }
 }

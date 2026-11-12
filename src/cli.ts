@@ -613,6 +613,7 @@ async function main(): Promise<void> {
 
     // Tours are entities, not loose files: record this one and refresh the library.
     if (codeTour && args.write && viewWritten) {
+     try {
       const abs = path.resolve(args.target);
       const dirty = isDirty(abs);
       const repoHead = m.repos.find((x) => x.root === '');
@@ -642,6 +643,12 @@ async function main(): Promise<void> {
       console.log(`  saved as           ${record.id}${dirty ? '  (uncommitted tree — not pinned to a commit)' : ''}`);
       console.log(`                     ${record.page}`);
       console.log(`  all your tours     ${libPath}`);
+     } catch (err) {
+       // A hostile `.repo-tour/tours/…` (a linked folder, or a directory at a file name) must not crash
+       // the tour: the tour is already rendered and shown above; only the library record is lost.
+       if (!(err instanceof CacheWriteRefused)) throw err;
+       process.stderr.write(`repo-tour: did not save the tour to the library — ${err.message}\n`);
+     }
     }
     if (codeTour) {
       const archCount = tourSteps.filter((s) => s.architecture).length;

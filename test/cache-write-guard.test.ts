@@ -124,6 +124,22 @@ describe('a cache write never follows a committed link out of the repo (T-67)', 
     expect(fs.lstatSync(path.join(clone, '.repo-tour', 'view.html')).isSymbolicLink()).toBe(false);
   });
 
+  it('AC3: a committed DIRECTORY at a cache file name degrades, it does not crash (review finding)', async () => {
+    // A repo can commit `.repo-tour/digest.json` as a directory. The folder chain is real, so ensureSafeDir
+    // passes; the rename then fails EISDIR. That must become a refusal the digest degrades on — not an
+    // unhandled throw with a stack trace (AC3). (Before the fix the digest threw EISDIR to the top.)
+    const root = scratch();
+    const repo = path.join(root, 'repo');
+    initRepo(repo);
+    fs.mkdirSync(path.join(repo, '.repo-tour'));
+    fs.mkdirSync(path.join(repo, '.repo-tour', 'digest.json')); // a DIRECTORY where a file is expected
+
+    const res = await digest(repo);                        // must not throw
+    expect(res.cacheWrite?.written).toBe(false);
+    expect(res.manifest.counts.files).toBeGreaterThan(0);  // the digest still completed in memory
+    expect(fs.statSync(path.join(repo, '.repo-tour', 'digest.json')).isDirectory()).toBe(true);
+  });
+
   it('AC2: an ordinary repository writes and reads back its cache as before', async () => {
     const root = scratch();
     const repo = path.join(root, 'repo');
