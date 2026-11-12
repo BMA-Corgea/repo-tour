@@ -18,6 +18,8 @@
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 
+import { namedTo, FROM_THE_TOP } from './diff.js';
+
 const execFileAsync = promisify(execFile);
 
 export interface PrCommit {
@@ -66,6 +68,22 @@ function git(root: string, ...args: string[]): string {
 function tryGit(root: string, ...args: string[]): string | null {
   try {
     return git(root, ...args);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A `-z` listing, as git printed it. Not trimmed: with `-z` a path is printed byte for byte, and a name may begin or
+ * end with a space (T-58).
+ */
+function tryListing(root: string, ...args: string[]): string | null {
+  try {
+    return execFileSync('git', ['-C', root, ...FROM_THE_TOP, ...args], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      maxBuffer: 32 * 1024 * 1024,
+    });
   } catch {
     return null;
   }
@@ -270,25 +288,39 @@ function assemble(
   };
 }
 
-/** Files this PR touches, with their change kind — the diff set, and nothing wider. */
+/**
+ * Files this PR touches, with their change kind — the diff set, and nothing wider.
+ *
+ * `-z`, so git prints every path as it is. Without it, git C-quotes a name holding an accent, a `"`, a `\` or a tab
+ * (`"src/caf\303\251.ts"`), and every later step read that string as the file's name: it was found on neither side,
+ * and the page said its public surface was unchanged (T-58).
+ *
+ * `T` is a type change: a file that became a symbolic link or a submodule, or the reverse. It was dropped, so the file
+ * was missing from the tour (T-58).
+ */
 export function diffSet(
   root: string,
   from: string,
   to: string,
-): Array<{ path: string; status: 'A' | 'M' | 'D' | 'R'; from?: string }> {
-  const raw = tryGit(root, 'diff', '--name-status', '-M', `${from}..${to}`);
+): Array<{ path: string; status: 'A' | 'M' | 'D' | 'R' | 'T'; from?: string }> {
+  const raw = tryListing(root, 'diff', '--name-status', '-z', '-M', `${from}..${to}`);
   if (!raw) return [];
-  const out: Array<{ path: string; status: 'A' | 'M' | 'D' | 'R'; from?: string }> = [];
-  for (const line of raw.split('\n')) {
-    const parts = line.split('\t');
-    const code = (parts[0] ?? '').trim();
+  const out: Array<{ path: string; status: 'A' | 'M' | 'D' | 'R' | 'T'; from?: string }> = [];
+  // "<status>\0<path>\0", and for a rename or a copy "<status>\0<old path>\0<new path>\0"
+  const parts = raw.split('\0');
+  for (let i = 0; i < parts.length;) {
+    const code = parts[i++] ?? '';
     if (!code) continue;
-    if (code.startsWith('R') && parts.length >= 3) {
-      out.push({ status: 'R', from: parts[1]!, path: parts[2]! });
-    } else if (parts.length >= 2) {
-      const status = code[0] as 'A' | 'M' | 'D';
-      if (status === 'A' || status === 'M' || status === 'D') out.push({ status, path: parts[1]! });
+    if (code.startsWith('R') || code.startsWith('C')) {
+      const source = parts[i++];
+      const dest = parts[i++];
+      if (code.startsWith('R') && source !== undefined && dest !== undefined) out.push({ status: 'R', from: source, path: dest });
+      continue;
     }
+    const file = parts[i++];
+    if (file === undefined) break;
+    const status = code[0] as 'A' | 'M' | 'D' | 'T';
+    if (status === 'A' || status === 'M' || status === 'D' || status === 'T') out.push({ status, path: file });
   }
   return out;
 }
@@ -308,9 +340,14 @@ export interface Hunk {
  * "the file changed" is the kind of gesture that makes a tour feel generated. `-U0` gives
  * the exact ranges; the tour pads them a little so a stop shows a change in its context
  * rather than stripped of it.
+ *
+ * The file is named from the repository's top, so a tour run from a package folder finds its hunks; and a renamed
+ * file is named with its old path too (`renamedFrom`), so its hunks are what changed rather than the whole file read
+ * as new (T-58). `others`: the PR's other changed paths, none of which is brought in under this one (`namedTo`).
  */
-export function hunks(root: string, from: string, to: string, file: string): Hunk[] {
-  const raw = tryGit(root, 'diff', '-U0', `${from}..${to}`, '--', file);
+export function hunks(root: string, from: string, to: string, file: string, renamedFrom?: string, others: readonly string[] = []): Hunk[] {
+  const raw = tryGit(root, ...FROM_THE_TOP, 'diff', '-U0', ...(renamedFrom !== undefined ? ['-M'] : []), `${from}..${to}`,
+    '--', ...namedTo(file, renamedFrom, others));
   if (!raw) return [];
   const out: Hunk[] = [];
   for (const line of raw.split('\n')) {
@@ -328,17 +365,36 @@ export function hunks(root: string, from: string, to: string, file: string): Hun
   return out;
 }
 
-/** Lines added + removed per file, the number GitHub sorts by and this tour does not. */
+/**
+ * Lines added + removed per file, the number GitHub sorts by and this tour does not.
+ *
+ * `-z`, as `diffSet` reads it, so each count is filed under the path the rest of the flow uses: a quoted name was
+ * filed under git's quoted string, and a rename under `src/{old.ts => new.ts}`, so both read 0 (T-58).
+ */
 export function lineCounts(root: string, from: string, to: string): Map<string, number> {
-  const raw = tryGit(root, 'diff', '--numstat', '-M', `${from}..${to}`);
+  const raw = tryListing(root, 'diff', '--numstat', '-z', '-M', `${from}..${to}`);
   const out = new Map<string, number>();
   if (!raw) return out;
-  for (const line of raw.split('\n')) {
-    const [add, del, file] = line.split('\t');
+  // "<added>\t<removed>\t<path>\0", and for a rename "<added>\t<removed>\t\0<old path>\0<new path>\0". A name may
+  // hold a tab, so only the first two separate the counts.
+  const parts = raw.split('\0');
+  for (let i = 0; i < parts.length;) {
+    const row = parts[i++] ?? '';
+    if (!row) continue;
+    const first = row.indexOf('\t');
+    const second = row.indexOf('\t', first + 1);
+    if (first < 0 || second < 0) continue;
+    const add = row.slice(0, first);
+    const del = row.slice(first + 1, second);
+    let file = row.slice(second + 1);
+    if (file === '') {
+      i++; // the old path
+      file = parts[i++] ?? '';
+    }
     if (!file) continue;
     const a = add === '-' ? 0 : Number(add);
     const d = del === '-' ? 0 : Number(del);
-    out.set(file.trim(), a + d);
+    out.set(file, a + d);
   }
   return out;
 }

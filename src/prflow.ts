@@ -19,14 +19,14 @@ import path from 'node:path';
 
 import { CACHE_DIR } from './digest.js';
 import { renderPrView } from './prview.js';
-import { parseUnified, rawDiff, type FileDiff } from './diff.js';
+import { diffCounts, diffIndex, parseUnified, readDiff, type FileDiff } from './diff.js';
 import { interpretStops, type StopMeaning } from './interpret.js';
 import { resolvePr, diffSet, lineCounts, hunks, type Hunk, type PrRefs } from './pr.js';
 import { loadCheckpoint, sideAt, staleness, type Checkpoint, type Side, type Staleness } from './checkpoint.js';
 import { buildArchitecture, architectureBrief } from './architecture.js';
 import { interpretArchitecture } from './interpret.js';
 import {
-  fileDelta, ripple, orderByMeaning, unreadOf, type FileDelta, type RippleResult, type SideState,
+  fileDelta, ripple, orderByMeaning, unreadOf, type FileDelta, type RippleResult, type SideState, type UnreadSides,
 } from './delta.js';
 import { buildPrTour, band } from './prtour.js';
 import { adjudicate, type Adjudication } from './adjudicate.js';
@@ -77,18 +77,37 @@ function skippedFor(f: FileRecord): string {
   return isParseTarget(f) ? 'it was not parsed' : `there is no parser for ${f.language}`;
 }
 
-/** T-37: what one side made of each path: read, failed, skipped for its class (fetched or not), or absent. */
+/**
+ * T-37: what one side made of each path: read, failed, skipped for its class (fetched or not), or absent. T-58: a
+ * symbolic link or a submodule is skipped for what it is.
+ */
 function stateOn(side: Side): (p: string) => SideState {
   const extracted = new Set(side.extracts.map((e) => e.path));
   const failed = new Map(side.unparsed.map((u) => [u.path, u.reason] as const));
+  const links = new Map(side.links.map((l) => [l.path, l.reason] as const));
   const files = new Map([...side.files, ...side.unfetched].map((f) => [f.path, f] as const));
   return (p) => {
     if (extracted.has(p)) return { kind: 'read' };
     const reason = failed.get(p);
     if (reason !== undefined) return { kind: 'failed', reason };
+    const link = links.get(p);
+    if (link !== undefined) return { kind: 'skipped', reason: link };
     const f = files.get(p);
     return f ? { kind: 'skipped', reason: skippedFor(f) } : { kind: 'absent' };
   };
+}
+
+/**
+ * T-58: a type change's sides that are a symbolic link or a submodule, which no side ever reads, added to what
+ * `unreadOf` says. That rule names a side skipped for its class only opposite a side that was read or failed, so a
+ * file with no parser that became a link (`CLAUDE.md` to `AGENTS.md`), or a submodule, was scored, ranked and called
+ * moved, with its link side never named.
+ */
+function withLinkSides(u: UnreadSides | undefined, base: string | undefined, head: string | undefined): UnreadSides | undefined {
+  const out: UnreadSides = { ...(u ?? {}) };
+  if (out.base === undefined && base !== undefined) out.base = base;
+  if (out.head === undefined && head !== undefined) out.head = head;
+  return out.base === undefined && out.head === undefined ? undefined : out;
 }
 
 /**
@@ -172,7 +191,7 @@ export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFl
         repoPath: root,
         repoOverview: await cachedOverview(root, checkpoint, { provider: opts.provider, model: opts.model }),
         refs, deltas: [], diffs: new Map(), steps: plan.steps,
-        ripple: { reinterpret: [], structuralOnly: [], reachable: 0 }, verdicts: new Map(),
+        ripple: { reinterpret: [], structuralOnly: [], reachable: 0 }, verdicts: new Map(), staleness: stale,
       }),
       stops: plan.steps.length, empty: true,
     };
@@ -186,8 +205,10 @@ export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFl
   const afterSide = await sideAt(root, refs.headSha, paths);
 
   try {
+    // Every path the PR names, a rename's old one included, so that no file's diff brings in another's (T-58).
+    const named = [...paths, ...renamedFrom.values()];
     const hunksByFile = new Map<string, Hunk[]>();
-    for (const p of paths) hunksByFile.set(p, hunks(root, diffFrom, refs.headSha, p));
+    for (const p of paths) hunksByFile.set(p, hunks(root, diffFrom, refs.headSha, p, renamedFrom.get(p), named));
 
     // Who imports what, from the checkpoint's own graph — the reason a change in one file
     // can be felt in another. Half of the context the narrative is written from, and half
@@ -202,9 +223,36 @@ export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFl
     // The literal change, parsed once. The page renders it and the model reads it — both
     // from the same text, so what the reader sees is what the narrative was written about.
     const diffs = new Map<string, { raw: string; parsed: FileDiff }>();
+    // T-58: a file either side calls binary never hands its bytes to the model or to the page. Git says "Binary files
+    // … differ" of most; one it was told to diff as text (a `diff` attribute), or one whose first NUL falls between git's
+    // 8,000 bytes and the inventory's 8 KB, came back as hunks of its bytes.
+    const binary = new Set(
+      [...beforeSide.files, ...beforeSide.unfetched, ...afterSide.files, ...afterSide.unfetched].filter((f) => f.binary).map((f) => f.path),
+    );
     for (const p of paths) {
-      const raw = rawDiff(root, diffFrom, refs.headSha, p);
-      diffs.set(p, { raw, parsed: parseUnified(p, raw) });
+      const read = readDiff(root, diffFrom, refs.headSha, p, 6, renamedFrom.get(p), named);
+      if (read.tooBig) {
+        // T-58: too big to show is said, with git's counts, on the page and to the model: an empty diff read as "no
+        // textual change" on the page, and as no change at all to the model.
+        const counts = diffCounts(root, diffFrom, refs.headSha, p, renamedFrom.get(p), named);
+        diffs.set(p, {
+          // git's index line first, as its own diff has it: the verdict is cached on this text
+          raw: `${diffIndex(root, diffFrom, refs.headSha, p, renamedFrom.get(p), named)}\n`
+            + `(This file's diff is too big to show: it is over 32 MiB of text, with ${counts.added} lines added and `
+            + `${counts.removed} removed. Its text is left out.)`,
+          parsed: { path: p, hunks: [], ...counts, empty: true, tooBig: true },
+        });
+        continue;
+      }
+      const parsed = parseUnified(p, read.text);
+      if (binary.has(p) && parsed.hunks.length > 0) {
+        diffs.set(p, {
+          raw: `${/^index [0-9a-f]+\.\.[0-9a-f]+/m.exec(read.text)?.[0] ?? ''}\n(This is a binary file: its content is not shown.)`,
+          parsed: { path: p, hunks: [], added: parsed.added, removed: parsed.removed, empty: true },
+        });
+        continue;
+      }
+      diffs.set(p, { raw: read.text, parsed });
     }
 
     const stopsFor = (side: typeof beforeSide) =>
@@ -215,7 +263,8 @@ export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFl
         return {
           file: f.path,
           startLine: first ? Math.max(1, first.start - 3) : 1,
-          endLine: Math.min(f.loc || 1, last ? last.end + 3 : 60),
+          // past the inventory's read a file's line count is -1: its hunks bound the stop (T-58), not an end of -1
+          endLine: Math.min(f.loc < 0 ? Infinity : f.loc || 1, last ? last.end + 3 : 60),
           title: path.basename(f.path),
           text: '',
         };
@@ -253,6 +302,8 @@ export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFl
     const beforeExtracts = new Map(beforeSide.extracts.map((e) => [e.path, e] as const));
     const afterExtracts = new Map(afterSide.extracts.map((e) => [e.path, e] as const));
     const before = stateOn(beforeSide);
+    const linkBefore = new Map(beforeSide.links.map((l) => [l.path, l.reason] as const));
+    const linkAfter = new Map(afterSide.links.map((l) => [l.path, l.reason] as const));
     const after = stateOn(afterSide);
 
     const deltas: FileDelta[] = changes.map((c) => {
@@ -265,7 +316,9 @@ export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFl
         beforeExtract: beforeExtracts.get(c.path),
         afterExtract: afterExtracts.get(c.path),
         adjudication: verdicts.get(c.path),
-        unread: unreadOf(before(c.path), after(c.path)),
+        unread: c.status === 'T'
+          ? withLinkSides(unreadOf(before(c.path), after(c.path)), linkBefore.get(c.path), linkAfter.get(c.path))
+          : unreadOf(before(c.path), after(c.path)),
       });
     });
 
@@ -283,7 +336,7 @@ export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFl
         repoPath: root,
         repoOverview: await cachedOverview(root, checkpoint, { provider: opts.provider, model: opts.model }),
         refs, deltas: orderByMeaning(deltas), diffs: new Map([...diffs].map(([k, v]) => [k, v.parsed])),
-        steps: plan.steps, ripple: rip, verdicts,
+        steps: plan.steps, ripple: rip, verdicts, staleness: stale,
         repoName: path.basename(root) || root,
         // What the digest already worked out these files are for, and who leans on them.
         // The Ask panel needs both to answer anything the page does not literally say.

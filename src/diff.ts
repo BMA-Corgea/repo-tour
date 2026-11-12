@@ -38,7 +38,36 @@ export interface FileDiff {
   removed: number;
   /** true when git gave us no text to show — a binary file, or a pure rename */
   empty: boolean;
+  /**
+   * T-58: git's diff was more than the 32 MiB a page carries. There are no hunks; `added` and `removed` are git's own
+   * counts, so the page can say how big it was rather than "+0 −0" and "no textual change".
+   */
+  tooBig?: true;
 }
+
+/**
+ * T-58: one file of a PR (and, for a rename, the path it came from), named to `git diff` from the repository's top.
+ *
+ * Git reads a plain pathspec from the folder it runs in, and the app tours a monorepo package from its folder, so a
+ * path counted from the top named nothing there and every file showed "+0 −0". `top` counts it from the top wherever
+ * git runs; `literal` keeps a `*`, `?` or `[` in a name from matching other files. A pathspec also names what is under
+ * a path, so a file that became a folder of the same name brought in that folder's files: each of the PR's other
+ * changed paths (`others`) under it is excluded, by name. Only those: excluding the whole folder also dropped a
+ * submodule, whose entry is a folder to git, and the other half of a rename into or out of a folder of its own name.
+ */
+export function namedTo(file: string, renamedFrom?: string, others: readonly string[] = []): string[] {
+  const one = (p: string, partner: string | undefined): string[] => [
+    `:(top,literal)${p}`,
+    ...others.filter((o) => o !== partner && o.startsWith(`${p}/`)).map((o) => `:(top,literal,exclude)${o}`),
+  ];
+  return [...(renamedFrom !== undefined ? one(renamedFrom, file) : []), ...one(file, renamedFrom)];
+}
+
+/**
+ * Git's own setting to count diff paths from the folder it runs in, turned off for every listing the PR flow reads,
+ * so a reader's configuration cannot make one folder's paths stand for the repository's (T-58).
+ */
+export const FROM_THE_TOP = ['-c', 'diff.relative=false'];
 
 /**
  * `-U6` rather than the default 3.
@@ -46,19 +75,87 @@ export interface FileDiff {
  * A two-line change with three lines of context is legible to someone who already knows the
  * file and useless to someone meeting it for the first time, which is exactly who this
  * product is for.
+ *
+ * `renamedFrom`: a renamed file's old path. Named to git beside the new one, the two pair up as a rename and the diff
+ * is what changed; the new path alone read as a new file, every line of it added (T-58). `others`: the PR's other
+ * changed paths, so none of them is brought in under this one (`namedTo`).
  */
-export function rawDiff(root: string, from: string, to: string, file: string, context = 6): string {
+export function rawDiff(
+  root: string, from: string, to: string, file: string, context = 6, renamedFrom?: string, others: readonly string[] = [],
+): string {
+  return readDiff(root, from, to, file, context, renamedFrom, others).text;
+}
+
+/** A file's diff as git printed it, or word that it was too big to hold. */
+export interface RawDiff {
+  text: string;
+  /** git printed more than the 32 MiB buffer: `text` is empty, and not because nothing changed (T-58) */
+  tooBig: boolean;
+}
+
+/**
+ * `rawDiff`, telling a diff too big to hold from an empty one. Past the buffer, git's output was swallowed as `''`,
+ * and the page then said "a rename, a mode change, or a binary file" of a 33 MiB change (T-58).
+ */
+export function readDiff(
+  root: string, from: string, to: string, file: string, context = 6, renamedFrom?: string, others: readonly string[] = [],
+): RawDiff {
   try {
-    return execFileSync('git', ['-C', root, 'diff', `-U${context}`, '-M', `${from}..${to}`, '--', file], {
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 32 * 1024 * 1024,
-    });
+    return {
+      text: execFileSync('git', [
+        '-C', root, ...FROM_THE_TOP, 'diff', `-U${context}`, '-M', `${from}..${to}`, '--', ...namedTo(file, renamedFrom, others),
+      ], {
+        encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 32 * 1024 * 1024,
+      }),
+      tooBig: false,
+    };
+  } catch (err) {
+    return { text: '', tooBig: (err as { code?: string }).code === 'ENOBUFS' };
+  }
+}
+
+/** One file's lines added and removed, as git counts them: what a diff too big to show still has to say (T-58). */
+export function diffCounts(
+  root: string, from: string, to: string, file: string, renamedFrom?: string, others: readonly string[] = [],
+): { added: number; removed: number } {
+  try {
+    const out = execFileSync('git', [
+      '-C', root, ...FROM_THE_TOP, 'diff', '--numstat', '-z', '-M', `${from}..${to}`, '--', ...namedTo(file, renamedFrom, others),
+    ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 1024 * 1024 });
+    // "<added>\t<removed>\t<path>\0", or for a rename "<added>\t<removed>\t\0<old>\0<new>\0"; "-" for a binary file
+    const [add = '', del = ''] = (out.split('\0')[0] ?? '').split('\t');
+    return { added: add === '-' ? 0 : Number(add) || 0, removed: del === '-' ? 0 : Number(del) || 0 };
+  } catch {
+    return { added: 0, removed: 0 };
+  }
+}
+
+/**
+ * The line git's own diff opens with, `index <base blob>..<head blob>`, for a file whose text is left out. It names the
+ * two contents, so what the model reads in the diff's place, and the verdict cached on it, belong to this change and
+ * not to another of the same file with the same counts (T-58). Empty when git will not say.
+ */
+export function diffIndex(
+  root: string, from: string, to: string, file: string, renamedFrom?: string, others: readonly string[] = [],
+): string {
+  try {
+    const out = execFileSync('git', [
+      '-C', root, ...FROM_THE_TOP, 'diff', '--raw', '-z', '--no-abbrev', '-M', `${from}..${to}`, '--', ...namedTo(file, renamedFrom, others),
+    ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 1024 * 1024 });
+    // ":<base mode> <head mode> <base blob> <head blob> <status>\0<path>\0…"
+    const fields = (out.split('\0')[0] ?? '').split(' ');
+    return fields.length >= 4 ? `index ${fields[2]}..${fields[3]}` : '';
   } catch {
     return '';
   }
 }
 
-export function unifiedDiff(root: string, from: string, to: string, file: string, context = 6): FileDiff {
-  return parseUnified(file, rawDiff(root, from, to, file, context));
+export function unifiedDiff(
+  root: string, from: string, to: string, file: string, context = 6, renamedFrom?: string, others: readonly string[] = [],
+): FileDiff {
+  const read = readDiff(root, from, to, file, context, renamedFrom, others);
+  if (read.tooBig) return { path: file, hunks: [], ...diffCounts(root, from, to, file, renamedFrom, others), empty: true, tooBig: true };
+  return parseUnified(file, read.text);
 }
 
 export function parseUnified(file: string, raw: string): FileDiff {
@@ -70,6 +167,12 @@ export function parseUnified(file: string, raw: string): FileDiff {
   let removed = 0;
 
   for (const line of raw.split('\n')) {
+    // A new file section ends the hunk before it, so its own `---`/`+++` lines are preamble, not a line removed and
+    // a line added. Git prints a type change (a file that became a symbolic link) as two sections (T-58).
+    if (line.startsWith('diff --git ')) {
+      current = null;
+      continue;
+    }
     const head = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$/.exec(line);
     if (head) {
       oldNo = Number(head[1]);
