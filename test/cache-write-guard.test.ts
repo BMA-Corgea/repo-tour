@@ -15,7 +15,10 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { digest } from '../src/digest.js';
+
+const DIST_CLI = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'cli.js');
 
 const scratches: string[] = [];
 function scratch(): string {
@@ -90,6 +93,35 @@ describe('a cache write never follows a committed link out of the repo (T-67)', 
     const res = await digest(repo);
     expect(fs.readdirSync(outside)).toHaveLength(0);  // nothing written into it
     expect(res.cacheWrite?.written).toBe(false);
+  });
+
+  it('AC1/AC4: `repo-tour tour` does not write its view.html through a committed link (cli.ts)', () => {
+    // On main `tour` writes <root>/.repo-tour/view.html with a plain writeFileSync and follows a committed
+    // link there, overwriting the target. The guard replaces the link with a real file. PATCHED CLI, child
+    // process under timeout; victim inside this test's own scratch.
+    const root = scratch();
+    const victim = path.join(root, 'victim.html');
+    fs.writeFileSync(victim, 'VICTIM ORIGINAL\n');
+    const before = sha(victim);
+
+    const repo = path.join(root, 'repo');
+    initRepo(repo);
+    fs.mkdirSync(path.join(repo, '.repo-tour'));
+    fs.symlinkSync(victim, path.join(repo, '.repo-tour', 'view.html'));
+    const git = (...a: string[]) => execFileSync('git', ['-C', repo, ...a], { stdio: ['ignore', 'pipe', 'ignore'] });
+    git('add', '-A'); git('commit', '-qm', 'trap');
+    const clone = path.join(root, 'clone');
+    execFileSync('git', ['clone', '-q', repo, clone]);
+
+    let code = 0;
+    try {
+      execFileSync('timeout', ['-k', '5', '60', process.execPath, DIST_CLI, 'tour', clone],
+        { stdio: ['ignore', 'ignore', 'ignore'] });
+    } catch (e) { code = (e as { status?: number }).status ?? -1; }
+
+    expect(code).not.toBe(124);
+    expect(sha(victim)).toBe(before);  // the victim is byte-identical; the link was replaced
+    expect(fs.lstatSync(path.join(clone, '.repo-tour', 'view.html')).isSymbolicLink()).toBe(false);
   });
 
   it('AC2: an ordinary repository writes and reads back its cache as before', async () => {
