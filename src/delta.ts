@@ -231,7 +231,8 @@ export function surfaceChange(before: FileExtract | undefined, after: FileExtrac
   return { added: added.sort(), removed: removed.sort(), changed: changed.sort() };
 }
 
-export type ChangeStatus = 'A' | 'M' | 'D' | 'R';
+/** git's change kinds; `T` is a type change: a file that became a symbolic link or a submodule, or the reverse (T-58) */
+export type ChangeStatus = 'A' | 'M' | 'D' | 'R' | 'T';
 
 /**
  * T-37: why a side of a change was not read, per side. Present only when one was not; both reasons
@@ -300,7 +301,7 @@ export interface FileDelta {
   reason: string;
   /**
    * how the score was reached, so a tour never implies more confidence than it has. `unread`: it was
-   * not reached — a side of this modified or renamed file was not read (T-37), so it is not scored
+   * not reached — a side of this modified, renamed or retyped file was not read (T-37, T-58), so it is not scored
    */
   basis: 'adjudicated' | 'claims' | 'structure' | 'status' | 'unread';
   /** true when this file did not change but its meaning may have — a ripple (spec §5) */
@@ -353,8 +354,9 @@ export function fileDelta(input: DeltaInput): FileDelta {
 
   // T-37: a modified or renamed file with a side not read is not scored. Its surfaces would compare an
   // extract against nothing and read as everything added or removed. A verdict on its diff is shown
-  // on the page, but sets no score: nothing downstream may treat this file as moved.
-  if (unread && (input.status === 'M' || input.status === 'R')) {
+  // on the page, but sets no score: nothing downstream may treat this file as moved. T-58: so is a type
+  // change, one side of which is a symbolic link or a submodule, never read as code.
+  if (unread && (input.status === 'M' || input.status === 'R' || input.status === 'T')) {
     return {
       path: input.path,
       status: input.status,

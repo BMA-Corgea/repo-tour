@@ -108,6 +108,17 @@ function pad(s: string, n: number): string {
   return s.length >= n ? s : s + ' '.repeat(n - s.length);
 }
 
+/**
+ * T-58: a repository's own words (a file's name) as the terminal should show them: as text, and nothing else. Read
+ * with `-z`, a name reaches the CLI exactly as a PR's author chose it, so an escape sequence in it would run in the
+ * reader's terminal (colour, a rewritten screen, a link, a clipboard write) and a newline would forge a row of the
+ * table; git's own quoting used to stop both. Each control character, and each character that reorders text, is shown
+ * as its escape instead.
+ */
+function inert(s: string): string {
+  return s.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+}
+
 function padStart(s: string, n: number): string {
   return s.length >= n ? s : ' '.repeat(n - s.length) + s;
 }
@@ -163,7 +174,7 @@ async function runPrMode(args: Args): Promise<void> {
       interpret: args.interpret,
       model: args.model,
       provider: args.provider ?? undefined,
-      onProgress: (line) => console.log(`  ${line}`),
+      onProgress: (line) => console.log(`  ${inert(line)}`),
     });
   } catch (err) {
     if (err instanceof PrResolutionError) {
@@ -200,7 +211,7 @@ async function runPrMode(args: Args): Promise<void> {
   if (unread.length) {
     console.log(`  not read           ${unread.length} ${unread.length === 1 ? 'file' : 'files'} on a side of this change:`);
     for (const d of unread) {
-      console.log(`    ${d.path}: not read ${notReadOn(d.unread!)}${d.basis === 'unread' ? ' — not scored' : ''}`);
+      console.log(`    ${inert(d.path)}: not read ${notReadOn(d.unread!)}${d.basis === 'unread' ? ' — not scored' : ''}`);
     }
   }
 
@@ -208,12 +219,16 @@ async function runPrMode(args: Args): Promise<void> {
   fs.mkdirSync(path.dirname(out), { recursive: true });
   fs.writeFileSync(out, result.html);
 
-  console.log(`\n  ${pad('meaning', 9)}${pad('lines', 7)}${pad('band', 9)}${pad('basis', 13)}path`);
-  console.log(`  ${'-'.repeat(78)}`);
-  for (const d of deltas.slice(0, 20)) {
+  // The lines column is its longest count and one space wide, never narrower than it was: a seven-digit count ran into
+  // the band (`5679831moved`), and a table of counts up to six digits prints as it always has (T-58).
+  const shown = deltas.slice(0, 20);
+  const linesWidth = Math.max(7, ...shown.map((d) => String(d.linesChanged).length + 1));
+  console.log(`\n  ${pad('meaning', 9)}${pad('lines', linesWidth)}${pad('band', 9)}${pad('basis', 13)}path`);
+  console.log(`  ${'-'.repeat(78 + linesWidth - 7)}`);
+  for (const d of shown) {
     // A file that was not scored has no score or band to print (T-37).
     const scored = d.basis !== 'unread';
-    console.log(`  ${pad(scored ? d.meaningDelta.toFixed(2) : '—', 9)}${pad(String(d.linesChanged), 7)}${pad(scored ? band(d.meaningDelta) : 'not read', 9)}${pad(d.basis, 13)}${d.path}`);
+    console.log(`  ${pad(scored ? d.meaningDelta.toFixed(2) : '—', 9)}${pad(String(d.linesChanged), linesWidth)}${pad(scored ? band(d.meaningDelta) : 'not read', 9)}${pad(d.basis, 13)}${inert(d.path)}`);
   }
   console.log(`\n  ripple             ${rip.reinterpret.length} re-interpreted (one hop), ${rip.structuralOnly.length} reachable beyond and NOT re-interpreted`);
   console.log(`  tour               ${result.stops} stops`);

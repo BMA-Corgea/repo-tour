@@ -106,6 +106,8 @@ export function stepKey(file: string, startLine: number, endLine: number): strin
  */
 export function stopKey(
   fileSha: string, startLine: number, endLine: number, choice?: LlmChoice,
+  /** T-58: the excerpt a cut stop sent; absent for a stop sent whole */
+  cutTo?: string,
 ): string {
   // Who wrote an explanation is part of what it IS: a local 7B model and Sonnet do not
   // produce interchangeable prose, and silently serving one as the other would be a lie
@@ -118,26 +120,62 @@ export function stopKey(
   const writer = !choice || (choice.provider === 'claude' && choice.model === DEFAULT_MODEL)
     ? ''
     : `:${choice.provider}/${choice.model}`;
+  // T-58: a stop whose excerpt was cut is filed under what it sent, so an answer written from part of the code never
+  // stands in for one written from all of it, nor the reverse. A stop sent whole keeps the key it always had, the same
+  // way the default writer does: no explanation already paid for is thrown away.
+  const cut = cutTo === undefined ? '' : `:cut:${createHash('sha256').update(cutTo).digest('hex').slice(0, 16)}`;
   return createHash('sha256')
-    .update(`${PROMPT_VERSION}:${fileSha}:${startLine}-${endLine}${writer}`)
+    .update(`${PROMPT_VERSION}:${fileSha}:${startLine}-${endLine}${writer}${cut}`)
     .digest('hex')
     .slice(0, 32);
 }
 
-function numberedSlice(lines: string[], from: number, to: number): string {
+/** T-58: the most of one source line a prompt carries. A longer line is cut, and the excerpt says how long it was. */
+export const PROMPT_LINE_MAX = 1000;
+/**
+ * T-58: the most source one prompt carries, shared evenly by the excerpts of its file. An excerpt past its share
+ * keeps its first lines and names the ones it leaves out. A one-line 7 MiB file was a 7 MiB prompt, and a short-lined
+ * file of a million lines a 13 MB one.
+ */
+export const PROMPT_SOURCE_MAX = 200_000;
+
+/**
+ * Lines `from`..`to`, numbered, within `budget` characters, each line at most `PROMPT_LINE_MAX`. `cut` when anything
+ * was left out; the text then says what. Under both bounds the text is what it always was.
+ */
+function numberedSlice(lines: string[], from: number, to: number, budget = Infinity): { text: string; cut: boolean } {
   const out: string[] = [];
   const width = String(to).length;
+  const last = Math.min(to, lines.length);
+  let used = 0;
+  let cut = false;
   for (let i = from; i <= to && i <= lines.length; i++) {
-    out.push(`${String(i).padStart(width)} | ${lines[i - 1] ?? ''}`);
+    let line = lines[i - 1] ?? '';
+    if (line.length > PROMPT_LINE_MAX) {
+      line = `${line.slice(0, PROMPT_LINE_MAX)} … [this line is ${line.length.toLocaleString('en-US')} characters long; `
+        + `only its first ${PROMPT_LINE_MAX.toLocaleString('en-US')} are shown]`;
+      cut = true;
+    }
+    const row = `${String(i).padStart(width)} | ${line}`;
+    if (used + row.length + 1 > budget) {
+      out.push(`… [lines ${i}-${last} of this excerpt are not shown: there is no room for them in this prompt]`);
+      cut = true;
+      break;
+    }
+    out.push(row);
+    used += row.length + 1;
   }
-  return out.join('\n');
+  return { text: out.join('\n'), cut };
 }
 
 interface FileJob {
   file: string;
   sha: string;
-  /** `key` is the cache filename (writer-aware); `at` is the location the map is keyed by */
-  stops: Array<{ step: CodeStep; key: string; at: string; index: number }>;
+  /**
+   * `key` is the cache filename (writer-aware); `at` is the location the map is keyed by; `excerpt` is what the
+   * prompt shows of it (T-58: worked out before the cache is asked, since a cut stop has its own key)
+   */
+  stops: Array<{ step: CodeStep; key: string; at: string; index: number; excerpt: string }>;
 }
 
 const SYSTEM = [
@@ -177,14 +215,15 @@ function buildPrompt(
   job: FileJob,
   file: FileRecord,
   extract: FileExtract | undefined,
-  lines: string[],
   importers: number,
 ): string {
   const internal = (extract?.imports ?? []).filter((i) => i.resolved !== null).map((i) => i.raw);
   const parts: string[] = [];
 
   parts.push(`Repository: ${repoName}`);
-  parts.push(`File: ${job.file} (${file.loc} lines, ${file.language ?? 'unknown language'})`);
+  // A file past the inventory's read has no line count (-1): its size says how big it is instead (T-58).
+  const size = file.loc >= 0 ? `${file.loc} lines` : `${(file.bytes / (1024 * 1024)).toFixed(1)} MiB`;
+  parts.push(`File: ${job.file} (${size}, ${file.language ?? 'unknown language'})`);
   parts.push(
     importers > 0
       ? `Context: ${importers} other file${importers === 1 ? '' : 's'} in this repo import it.`
@@ -197,7 +236,7 @@ function buildPrompt(
 
   job.stops.forEach((s, i) => {
     parts.push(`--- EXCERPT ${i + 1} — lines ${s.step.startLine}-${s.step.endLine} (${s.step.title}) ---`);
-    parts.push(numberedSlice(lines, s.step.startLine, s.step.endLine));
+    parts.push(s.excerpt);
     parts.push('');
   });
 
@@ -306,13 +345,35 @@ export async function interpretStops(
     inputTokens: 0, outputTokens: 0, usd: 0, model: choice.model, failures: [],
   };
 
+  // T-58: what each stop shows of its file, worked out before the cache is asked, since a cut stop has its own key.
+  // Each file is read once and let go once its stops are done. A file the inventory calls binary is never read as
+  // text and gets no stop: its bytes went to the model as characters. A file that cannot be read has no excerpt, and
+  // its stops are not asked about, as before.
+  const excerpts = new Map<number, { text: string; cut: boolean } | null>();
+  const stopsOf = new Map<string, number[]>();
+  steps.forEach((step, index) => {
+    const f = fileByPath.get(step.file);
+    if (step.synthetic || !f || f.binary) return;
+    stopsOf.set(step.file, [...(stopsOf.get(step.file) ?? []), index]);
+  });
+  for (const [file, indexes] of stopsOf) {
+    let lines: string[] | null = null;
+    try { lines = fs.readFileSync(path.join(root, file), 'utf8').split(/\r?\n/); } catch { /* no excerpt */ }
+    const share = Math.floor(PROMPT_SOURCE_MAX / indexes.length);
+    for (const index of indexes) {
+      const step = steps[index]!;
+      excerpts.set(index, lines ? numberedSlice(lines, step.startLine, step.endLine, share) : null);
+    }
+  }
+
   // Group the stops by file: one call per file, not one per stop.
   const jobs = new Map<string, FileJob>();
   steps.forEach((step, index) => {
     if (step.synthetic) return; // the tour's own words, not code to explain
     const f = fileByPath.get(step.file);
-    if (!f) return;
-    const key = stopKey(f.sha256, step.startLine, step.endLine, choice);
+    if (!f || f.binary) return;
+    const excerpt = excerpts.get(index) ?? null;
+    const key = stopKey(f.sha256, step.startLine, step.endLine, choice, excerpt?.cut ? excerpt.text : undefined);
 
     const at = stepKey(step.file, step.startLine, step.endLine);
 
@@ -332,17 +393,15 @@ export async function interpretStops(
     if (opts.cachedOnly) return;
 
     if (!jobs.has(step.file)) jobs.set(step.file, { file: step.file, sha: f.sha256, stops: [] });
-    jobs.get(step.file)!.stops.push({ step, key, at, index });
+    jobs.get(step.file)!.stops.push({ step, key, at, index, excerpt: excerpt?.text ?? '' });
   });
 
   for (const job of jobs.values()) {
     const f = fileByPath.get(job.file)!;
-    let text: string;
-    try { text = fs.readFileSync(path.join(root, job.file), 'utf8'); } catch { continue; }
-    const lines = text.split(/\r?\n/);
+    if (job.stops.some((s) => excerpts.get(s.index) == null)) continue; // the file could not be read
 
     const prompt = buildPrompt(
-      path.basename(root), job, f, extractByPath.get(job.file), lines,
+      path.basename(root), job, f, extractByPath.get(job.file),
       importerCount.get(job.file) ?? 0,
     );
 
