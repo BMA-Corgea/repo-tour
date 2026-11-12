@@ -247,6 +247,20 @@ describe('T-58 AC18: a PR that turns a file into a directory of the same name, o
     });
   }
 
+  it('a side asked for a path that is a folder at its commit (alone, as a batch of 500 paths can split it from its files) writes no listing of it', async () => {
+    const repo = await prRepo({
+      base: (r) => writeAll(r, { ...SHARED, 'lib/config': 'not code\n' }),
+      head: (r) => { fs.rmSync(path.join(r, 'lib/config')); writeAll(r, { 'lib/config/index.ts': CATALOG }); },
+    });
+    const side = await sideAt(repo.root, repo.head, ['lib/config']);
+    try {
+      expect(side.files.map((f) => f.path), 'git\'s listing of a folder was written and read as a file').toEqual([]);
+      expect(side.unparsed).toEqual([]);
+    } finally {
+      side.dispose();
+    }
+  }, 60_000);
+
   it('a renamed file that takes a directory\'s name, beside a file deleted from that directory: one path that cannot be written beside the others never stops the tour', async () => {
     // base: x/y.ts and x/z.ts. head: x/y.ts renamed to `x` (a file), x/z.ts deleted. The base side writes the rename
     // under its new name, `x`, so x/z.ts has no folder to go in.
