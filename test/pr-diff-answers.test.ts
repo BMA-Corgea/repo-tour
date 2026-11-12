@@ -802,6 +802,135 @@ describe('T-58 AC27: the CLI table keeps its columns for any line count', () => 
   }, 120_000);
 });
 
+// =========================================================================== the review's findings (B1-B4, S1, S2, N1)
+
+describe('T-58 review B1: a type change of a file with no parser names its link side, and is not scored', () => {
+  it('CLAUDE.md becomes a symbolic link to AGENTS.md; a text file becomes a submodule', async () => {
+    const repo = await prRepo({
+      base: (r) => writeAll(r, { ...SHARED, 'CLAUDE.md': '# Agents\nRead this first.\n', 'AGENTS.md': '# Agents\nThe instructions.\n', 'vendor/lib': 'a plain file\n' }),
+      head: (r) => {
+        fs.rmSync(path.join(r, 'CLAUDE.md'));
+        fs.symlinkSync('AGENTS.md', path.join(r, 'CLAUDE.md'));
+        fs.rmSync(path.join(r, 'vendor/lib'));
+        writeAll(r, { 'src/util.ts': UTIL_AFTER });
+      },
+    });
+    // the submodule half, written straight into git's index (no submodule repository is needed for a gitlink)
+    git(repo.root, 'checkout', '-q', 'feature');
+    git(repo.root, 'update-index', '--add', '--cacheinfo', `160000,${'1'.repeat(40)},vendor/lib`);
+    git(repo.root, 'commit', '-q', '--amend', '--no-edit');
+    const head = git(repo.root, 'rev-parse', 'HEAD');
+    git(repo.root, 'checkout', '-q', 'main');
+    const { r, error } = await flow({ ...repo, head });
+    expect(error).toBeUndefined();
+    for (const [p, why] of [['CLAUDE.md', /symbolic link/], ['vendor/lib', /submodule/]] as const) {
+      const d = r!.deltas.find((x) => x.path === p);
+      expect(d?.status, `${p} is not shown as a type change`).toBe('T');
+      expect(d?.unread?.head, `${p}'s link side is never named`).toMatch(why);
+      expect(d?.basis, `${p}, a file one side of which is a link, was scored`).toBe('unread');
+    }
+    expect(r!.html, 'the page has no not-read notice for them').toContain('class="bar unread"');
+  }, 120_000);
+});
+
+describe('T-58 review B2, B3: no file\'s diff loses what is its own', () => {
+  it('a submodule bump keeps its diff (as on main): on the page and in what the model reads', async () => {
+    // Built by hand: `git add -A` drops a gitlink that has no submodule checked out behind it.
+    const root = fresh('repo');
+    git(root, 'init', '-q');
+    git(root, 'checkout', '-q', '-b', 'main');
+    git(root, 'config', 'user.email', 'test@example.com');
+    git(root, 'config', 'user.name', 'repo-tour test');
+    writeAll(root, { '.gitignore': '.repo-tour/\n', ...SHARED });
+    git(root, 'add', '-A');
+    git(root, 'update-index', '--add', '--cacheinfo', `160000,${'1'.repeat(40)},deps/sub`);
+    git(root, 'commit', '-q', '-m', 'base');
+    const base = git(root, 'rev-parse', 'HEAD');
+    await digest(root, { write: true });
+    git(root, 'checkout', '-q', '-b', 'feature');
+    writeAll(root, { 'src/util.ts': UTIL_AFTER + `// ${SALT} sub\n` });
+    git(root, 'add', 'src/util.ts');
+    git(root, 'update-index', '--cacheinfo', `160000,${'2'.repeat(40)},deps/sub`);
+    git(root, 'commit', '-q', '-m', 'the submodule moves on');
+    const head = git(root, 'rev-parse', 'HEAD');
+    git(root, 'checkout', '-q', 'main');
+    const repo: Repo = { root, base, head, fork: base };
+    const run = await withModel(() => runPrFlow(repo.root, { base: repo.base, head: repo.head }));
+    expect(run.error).toBeUndefined();
+    expect(rowsOf(run.value!.html).get('deps/sub'), 'a submodule bump shows no change').toEqual({ added: 1, removed: 1 });
+    const rows = payloadOf(run.value!.html)['deps/sub']?.rows ?? [];
+    expect(rows.filter((x) => x.k !== 'hh').map((x) => x.t), 'the page lost the submodule\'s two commits')
+      .toEqual([`Subproject commit ${'1'.repeat(40)}`, `Subproject commit ${'2'.repeat(40)}`]);
+    const verdict = run.prompts.find((p) => p.kind === 'adjudicate' && p.file === 'deps/sub');
+    expect(verdict?.text, 'the model read an empty diff for a submodule bump').toContain(`+Subproject commit ${'2'.repeat(40)}`);
+  }, 120_000);
+
+  for (const [name, from, to] of [['into', 'notes', 'notes/notes'], ['out of', 'docs/guide', 'docs']] as const) {
+    it(`a file renamed ${name} a folder of its own name (${from} -> ${to}): its counts are the rename's`, async () => {
+      const repo = await prRepo({
+        base: (r) => writeAll(r, { ...SHARED, [from]: CATALOG + PAD }),
+        head: (r) => {
+          const body = fs.readFileSync(path.join(r, from), 'utf8');
+          fs.rmSync(path.join(r, from));
+          if (name === 'out of') fs.rmSync(path.join(r, 'docs'), { recursive: true, force: true });
+          write(r, to, body.replace('export const gamma = 3;\n', 'export const delta = 4;\n'));
+          writeAll(r, { 'src/util.ts': UTIL_AFTER });
+        },
+      });
+      const { r, error } = await flow(repo);
+      expect(error).toBeUndefined();
+      expect(r!.deltas.find((d) => d.path === to)?.status).toBe('R');
+      expect(rowsOf(r!.html).get(to), `a rename ${name} a folder of its own name counts half a rename`).toEqual({ added: 1, removed: 1 });
+      expect(r!.deltas.find((d) => d.path === to)?.linesChanged).toBe(2);
+    }, 120_000);
+  }
+
+  it('a file whose name holds *, ? and [ is named literally: its diff is its own', async () => {
+    const repo = await prRepo({
+      base: (r) => writeAll(r, { ...SHARED, 'src/st*r?[b].ts': CATALOG, 'src/stxrxb.ts': CATALOG }),
+      head: (r) => writeAll(r, { 'src/st*r?[b].ts': EDITED, 'src/stxrxb.ts': CATALOG + PR_ADDS }),
+    });
+    const { r, error } = await flow(repo);
+    expect(error).toBeUndefined();
+    expect(rowsOf(r!.html).get('src/st*r?[b].ts'), 'a name read as a glob took in another file\'s diff').toEqual({ added: 1, removed: 1 });
+  }, 120_000);
+});
+
+describe('T-58 review B4: a PR\'s file names reach the terminal as text', () => {
+  it('a name holding an escape sequence, or a newline that would forge a row, prints inert', async () => {
+    const forged = 'src/x\n  9.99     1      moved    adjudicated  src/FORGED.ts';
+    const repo = await prRepo({
+      base: (r) => writeAll(r, { ...SHARED, 'src/esc\x1b[31mred\x1b[0m.ts': CATALOG, [forged]: CATALOG }),
+      head: (r) => writeAll(r, { 'src/esc\x1b[31mred\x1b[0m.ts': EDITED, [forged]: EDITED }),
+    });
+    const child = spawn(process.execPath, [
+      '--import', TSX, path.join(REPO_ROOT, 'src', 'cli.ts'),
+      'pr', repo.root, '--base', repo.base, '--head', repo.head, '--no-interpret', '--view', path.join(fresh('view'), 'pr.html'),
+    ], { cwd: fresh('cwd'), env: { ...process.env, TMPDIR: fresh('tmp') }, stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    child.stdout.on('data', (b: Buffer) => { out += b.toString(); });
+    child.stderr.on('data', (b: Buffer) => { out += b.toString(); });
+    const code = await new Promise<number | null>((resolve) => child.on('exit', (c) => resolve(c)));
+    expect(code, out).toBe(0);
+    expect(out.includes('\x1b'), 'an escape sequence from a file name reached the terminal').toBe(false);
+    expect(out, 'a newline in a file name forged a row of the table').not.toMatch(/^ {2}9\.99 +1 +moved +adjudicated +src\/FORGED\.ts$/m);
+    expect(out, 'the names are not shown, as text').toContain('src/esc\\u001b[31mred\\u001b[0m.ts');
+  }, 120_000);
+});
+
+describe('T-58 review S1: two fixes no check pinned', () => {
+  it('the tour\'s could-not-read stop calls a type change by its name', async () => {
+    const repo = await prRepo({
+      base: (r) => writeAll(r, { ...SHARED, 'src/catalog.ts': CATALOG }),
+      head: (r) => { fs.rmSync(path.join(r, 'src/catalog.ts')); fs.symlinkSync('util.ts', path.join(r, 'src/catalog.ts')); },
+    });
+    const { r } = await flow(repo);
+    const plan = buildPrTour({ refs: r!.refs, deltas: r!.deltas, ripple: r!.ripple, staleness: r!.staleness, hunksByFile: new Map() });
+    const stop = plan.steps.find((s) => /could not read/i.test(s.title));
+    expect(stop?.text, 'the tour calls a type change something else').toContain('src/catalog.ts (type changed)');
+  }, 120_000);
+});
+
 // =========================================================================== guards: what must not move
 
 describe('T-58 guards: a PR none of the shapes touch tours as on main', () => {

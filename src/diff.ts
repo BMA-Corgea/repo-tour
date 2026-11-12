@@ -46,16 +46,21 @@ export interface FileDiff {
 }
 
 /**
- * T-58: exactly one file, named to `git diff` from the repository's top.
+ * T-58: one file of a PR (and, for a rename, the path it came from), named to `git diff` from the repository's top.
  *
  * Git reads a plain pathspec from the folder it runs in, and the app tours a monorepo package from its folder, so a
  * path counted from the top named nothing there and every file showed "+0 −0". `top` counts it from the top wherever
- * git runs; `literal` keeps a `*`, `?` or `[` in a name from matching other files; and the exclusion keeps a path
- * that is a directory on one side of the change (a file that became a folder of the same name) from bringing in that
- * folder's files.
+ * git runs; `literal` keeps a `*`, `?` or `[` in a name from matching other files. A pathspec also names what is under
+ * a path, so a file that became a folder of the same name brought in that folder's files: each of the PR's other
+ * changed paths (`others`) under it is excluded, by name. Only those: excluding the whole folder also dropped a
+ * submodule, whose entry is a folder to git, and the other half of a rename into or out of a folder of its own name.
  */
-export function exactly(file: string): string[] {
-  return [`:(top,literal)${file}`, `:(top,literal,exclude)${file}/`];
+export function namedTo(file: string, renamedFrom?: string, others: readonly string[] = []): string[] {
+  const one = (p: string, partner: string | undefined): string[] => [
+    `:(top,literal)${p}`,
+    ...others.filter((o) => o !== partner && o.startsWith(`${p}/`)).map((o) => `:(top,literal,exclude)${o}`),
+  ];
+  return [...(renamedFrom !== undefined ? one(renamedFrom, file) : []), ...one(file, renamedFrom)];
 }
 
 /**
@@ -72,10 +77,13 @@ export const FROM_THE_TOP = ['-c', 'diff.relative=false'];
  * product is for.
  *
  * `renamedFrom`: a renamed file's old path. Named to git beside the new one, the two pair up as a rename and the diff
- * is what changed; the new path alone read as a new file, every line of it added (T-58).
+ * is what changed; the new path alone read as a new file, every line of it added (T-58). `others`: the PR's other
+ * changed paths, so none of them is brought in under this one (`namedTo`).
  */
-export function rawDiff(root: string, from: string, to: string, file: string, context = 6, renamedFrom?: string): string {
-  return readDiff(root, from, to, file, context, renamedFrom).text;
+export function rawDiff(
+  root: string, from: string, to: string, file: string, context = 6, renamedFrom?: string, others: readonly string[] = [],
+): string {
+  return readDiff(root, from, to, file, context, renamedFrom, others).text;
 }
 
 /** A file's diff as git printed it, or word that it was too big to hold. */
@@ -89,12 +97,13 @@ export interface RawDiff {
  * `rawDiff`, telling a diff too big to hold from an empty one. Past the buffer, git's output was swallowed as `''`,
  * and the page then said "a rename, a mode change, or a binary file" of a 33 MiB change (T-58).
  */
-export function readDiff(root: string, from: string, to: string, file: string, context = 6, renamedFrom?: string): RawDiff {
+export function readDiff(
+  root: string, from: string, to: string, file: string, context = 6, renamedFrom?: string, others: readonly string[] = [],
+): RawDiff {
   try {
     return {
       text: execFileSync('git', [
-        '-C', root, ...FROM_THE_TOP, 'diff', `-U${context}`, '-M', `${from}..${to}`,
-        '--', ...(renamedFrom !== undefined ? exactly(renamedFrom) : []), ...exactly(file),
+        '-C', root, ...FROM_THE_TOP, 'diff', `-U${context}`, '-M', `${from}..${to}`, '--', ...namedTo(file, renamedFrom, others),
       ], {
         encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 32 * 1024 * 1024,
       }),
@@ -106,11 +115,12 @@ export function readDiff(root: string, from: string, to: string, file: string, c
 }
 
 /** One file's lines added and removed, as git counts them: what a diff too big to show still has to say (T-58). */
-export function diffCounts(root: string, from: string, to: string, file: string, renamedFrom?: string): { added: number; removed: number } {
+export function diffCounts(
+  root: string, from: string, to: string, file: string, renamedFrom?: string, others: readonly string[] = [],
+): { added: number; removed: number } {
   try {
     const out = execFileSync('git', [
-      '-C', root, ...FROM_THE_TOP, 'diff', '--numstat', '-z', '-M', `${from}..${to}`,
-      '--', ...(renamedFrom !== undefined ? exactly(renamedFrom) : []), ...exactly(file),
+      '-C', root, ...FROM_THE_TOP, 'diff', '--numstat', '-z', '-M', `${from}..${to}`, '--', ...namedTo(file, renamedFrom, others),
     ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 1024 * 1024 });
     // "<added>\t<removed>\t<path>\0", or for a rename "<added>\t<removed>\t\0<old>\0<new>\0"; "-" for a binary file
     const [add = '', del = ''] = (out.split('\0')[0] ?? '').split('\t');
@@ -125,11 +135,12 @@ export function diffCounts(root: string, from: string, to: string, file: string,
  * two contents, so what the model reads in the diff's place, and the verdict cached on it, belong to this change and
  * not to another of the same file with the same counts (T-58). Empty when git will not say.
  */
-export function diffIndex(root: string, from: string, to: string, file: string, renamedFrom?: string): string {
+export function diffIndex(
+  root: string, from: string, to: string, file: string, renamedFrom?: string, others: readonly string[] = [],
+): string {
   try {
     const out = execFileSync('git', [
-      '-C', root, ...FROM_THE_TOP, 'diff', '--raw', '-z', '--no-abbrev', '-M', `${from}..${to}`,
-      '--', ...(renamedFrom !== undefined ? exactly(renamedFrom) : []), ...exactly(file),
+      '-C', root, ...FROM_THE_TOP, 'diff', '--raw', '-z', '--no-abbrev', '-M', `${from}..${to}`, '--', ...namedTo(file, renamedFrom, others),
     ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 1024 * 1024 });
     // ":<base mode> <head mode> <base blob> <head blob> <status>\0<path>\0…"
     const fields = (out.split('\0')[0] ?? '').split(' ');
@@ -139,9 +150,11 @@ export function diffIndex(root: string, from: string, to: string, file: string, 
   }
 }
 
-export function unifiedDiff(root: string, from: string, to: string, file: string, context = 6, renamedFrom?: string): FileDiff {
-  const read = readDiff(root, from, to, file, context, renamedFrom);
-  if (read.tooBig) return { path: file, hunks: [], ...diffCounts(root, from, to, file, renamedFrom), empty: true, tooBig: true };
+export function unifiedDiff(
+  root: string, from: string, to: string, file: string, context = 6, renamedFrom?: string, others: readonly string[] = [],
+): FileDiff {
+  const read = readDiff(root, from, to, file, context, renamedFrom, others);
+  if (read.tooBig) return { path: file, hunks: [], ...diffCounts(root, from, to, file, renamedFrom, others), empty: true, tooBig: true };
   return parseUnified(file, read.text);
 }
 

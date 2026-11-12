@@ -26,7 +26,7 @@ import { loadCheckpoint, sideAt, staleness, type Checkpoint, type Side, type Sta
 import { buildArchitecture, architectureBrief } from './architecture.js';
 import { interpretArchitecture } from './interpret.js';
 import {
-  fileDelta, ripple, orderByMeaning, unreadOf, type FileDelta, type RippleResult, type SideState,
+  fileDelta, ripple, orderByMeaning, unreadOf, type FileDelta, type RippleResult, type SideState, type UnreadSides,
 } from './delta.js';
 import { buildPrTour, band } from './prtour.js';
 import { adjudicate, type Adjudication } from './adjudicate.js';
@@ -95,6 +95,19 @@ function stateOn(side: Side): (p: string) => SideState {
     const f = files.get(p);
     return f ? { kind: 'skipped', reason: skippedFor(f) } : { kind: 'absent' };
   };
+}
+
+/**
+ * T-58: a type change's sides that are a symbolic link or a submodule, which no side ever reads, added to what
+ * `unreadOf` says. That rule names a side skipped for its class only opposite a side that was read or failed, so a
+ * file with no parser that became a link (`CLAUDE.md` to `AGENTS.md`), or a submodule, was scored, ranked and called
+ * moved, with its link side never named.
+ */
+function withLinkSides(u: UnreadSides | undefined, base: string | undefined, head: string | undefined): UnreadSides | undefined {
+  const out: UnreadSides = { ...(u ?? {}) };
+  if (out.base === undefined && base !== undefined) out.base = base;
+  if (out.head === undefined && head !== undefined) out.head = head;
+  return out.base === undefined && out.head === undefined ? undefined : out;
 }
 
 /**
@@ -192,8 +205,10 @@ export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFl
   const afterSide = await sideAt(root, refs.headSha, paths);
 
   try {
+    // Every path the PR names, a rename's old one included, so that no file's diff brings in another's (T-58).
+    const named = [...paths, ...renamedFrom.values()];
     const hunksByFile = new Map<string, Hunk[]>();
-    for (const p of paths) hunksByFile.set(p, hunks(root, diffFrom, refs.headSha, p, renamedFrom.get(p)));
+    for (const p of paths) hunksByFile.set(p, hunks(root, diffFrom, refs.headSha, p, renamedFrom.get(p), named));
 
     // Who imports what, from the checkpoint's own graph — the reason a change in one file
     // can be felt in another. Half of the context the narrative is written from, and half
@@ -215,14 +230,14 @@ export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFl
       [...beforeSide.files, ...beforeSide.unfetched, ...afterSide.files, ...afterSide.unfetched].filter((f) => f.binary).map((f) => f.path),
     );
     for (const p of paths) {
-      const read = readDiff(root, diffFrom, refs.headSha, p, 6, renamedFrom.get(p));
+      const read = readDiff(root, diffFrom, refs.headSha, p, 6, renamedFrom.get(p), named);
       if (read.tooBig) {
         // T-58: too big to show is said, with git's counts, on the page and to the model: an empty diff read as "no
         // textual change" on the page, and as no change at all to the model.
-        const counts = diffCounts(root, diffFrom, refs.headSha, p, renamedFrom.get(p));
+        const counts = diffCounts(root, diffFrom, refs.headSha, p, renamedFrom.get(p), named);
         diffs.set(p, {
           // git's index line first, as its own diff has it: the verdict is cached on this text
-          raw: `${diffIndex(root, diffFrom, refs.headSha, p, renamedFrom.get(p))}\n`
+          raw: `${diffIndex(root, diffFrom, refs.headSha, p, renamedFrom.get(p), named)}\n`
             + `(This file's diff is too big to show: it is over 32 MiB of text, with ${counts.added} lines added and `
             + `${counts.removed} removed. Its text is left out.)`,
           parsed: { path: p, hunks: [], ...counts, empty: true, tooBig: true },
@@ -287,6 +302,8 @@ export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFl
     const beforeExtracts = new Map(beforeSide.extracts.map((e) => [e.path, e] as const));
     const afterExtracts = new Map(afterSide.extracts.map((e) => [e.path, e] as const));
     const before = stateOn(beforeSide);
+    const linkBefore = new Map(beforeSide.links.map((l) => [l.path, l.reason] as const));
+    const linkAfter = new Map(afterSide.links.map((l) => [l.path, l.reason] as const));
     const after = stateOn(afterSide);
 
     const deltas: FileDelta[] = changes.map((c) => {
@@ -299,7 +316,9 @@ export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFl
         beforeExtract: beforeExtracts.get(c.path),
         afterExtract: afterExtracts.get(c.path),
         adjudication: verdicts.get(c.path),
-        unread: unreadOf(before(c.path), after(c.path)),
+        unread: c.status === 'T'
+          ? withLinkSides(unreadOf(before(c.path), after(c.path)), linkBefore.get(c.path), linkAfter.get(c.path))
+          : unreadOf(before(c.path), after(c.path)),
       });
     });
 

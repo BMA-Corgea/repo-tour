@@ -18,7 +18,7 @@
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 
-import { exactly, FROM_THE_TOP } from './diff.js';
+import { namedTo, FROM_THE_TOP } from './diff.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -343,11 +343,11 @@ export interface Hunk {
  *
  * The file is named from the repository's top, so a tour run from a package folder finds its hunks; and a renamed
  * file is named with its old path too (`renamedFrom`), so its hunks are what changed rather than the whole file read
- * as new (T-58).
+ * as new (T-58). `others`: the PR's other changed paths, none of which is brought in under this one (`namedTo`).
  */
-export function hunks(root: string, from: string, to: string, file: string, renamedFrom?: string): Hunk[] {
+export function hunks(root: string, from: string, to: string, file: string, renamedFrom?: string, others: readonly string[] = []): Hunk[] {
   const raw = tryGit(root, ...FROM_THE_TOP, 'diff', '-U0', ...(renamedFrom !== undefined ? ['-M'] : []), `${from}..${to}`,
-    '--', ...(renamedFrom !== undefined ? exactly(renamedFrom) : []), ...exactly(file));
+    '--', ...namedTo(file, renamedFrom, others));
   if (!raw) return [];
   const out: Hunk[] = [];
   for (const line of raw.split('\n')) {
