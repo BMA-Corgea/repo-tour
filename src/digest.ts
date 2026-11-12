@@ -14,7 +14,7 @@ import { extract } from './extract.js';
 import { rank, type RankOptions } from './rank.js';
 import { rollup, type TierDigest } from './rollup.js';
 import { planIncremental, type IncrementalPlan, type PriorFile } from './incremental.js';
-import { readGuardedText } from './safefile.js';
+import { readGuardedText, ensureSafeDir, writeFileSafely, CacheWriteRefused } from './safefile.js';
 import type {
   FileExtract, FileRecord, ImportGraph, Inventory, RankedFile, RepoRef, UnparsedFile,
 } from './types.js';
@@ -85,6 +85,9 @@ export interface DigestResult {
   deepSlice: string[];
   tiers: TierDigest[];
   plan: IncrementalPlan | null;
+  /** Whether the on-disk cache was written, and why not when it was refused (T-67 AC3). Absent on a
+   *  checkpoint loaded from disk, which did not write anything. */
+  cacheWrite?: { written: boolean; reason?: string };
 }
 
 export interface DigestOptions extends InventoryOptions, RankOptions {
@@ -172,39 +175,52 @@ export async function digest(rootInput: string, opts: DigestOptions = {}): Promi
     unparsed,
   };
 
+  let cacheWrite: { written: boolean; reason?: string } = { written: opts.write !== false };
   if (opts.write !== false) {
     const outDir = outDirResolved;
     const filesDir = path.join(outDir, 'files');
     const tiersDir = path.join(outDir, 'tiers');
-    fs.mkdirSync(filesDir, { recursive: true });
-    fs.mkdirSync(tiersDir, { recursive: true });
+    // T-67: the cache sits inside the toured repository, which can commit `.repo-tour` or a file under
+    // it as a link. Every folder is checked to be a real directory (not a link) before it is written
+    // into, and every file is written to a temp name and renamed over the final — so a committed link
+    // is replaced, never written through. On refusal the digest still finishes; it only loses its cache.
+    try {
+      ensureSafeDir(outDir, outDir);
+      ensureSafeDir(outDir, filesDir);
+      ensureSafeDir(outDir, tiersDir);
 
-    fs.writeFileSync(path.join(outDir, 'digest.json'), JSON.stringify(manifest, null, 2));
-    fs.writeFileSync(path.join(outDir, 'graph.json'), JSON.stringify(graph, null, 2));
-    fs.writeFileSync(path.join(outDir, 'ranked.json'), JSON.stringify(ranked, null, 2));
-    // The path->hash index the NEXT run diffs against (criterion 6).
-    fs.writeFileSync(
-      path.join(outDir, 'inventory.json'),
-      JSON.stringify(inv.files.map((f) => ({ path: f.path, sha256: f.sha256 }))),
-    );
-    for (const tier of tiers) {
-      const name = (tier.path === '' ? '__root__' : tier.path.replace(/\//g, '__')) + '.json';
-      fs.writeFileSync(path.join(tiersDir, name), JSON.stringify(tier, null, 2));
-    }
+      writeFileSafely(outDir, 'digest.json', JSON.stringify(manifest, null, 2));
+      writeFileSafely(outDir, 'graph.json', JSON.stringify(graph, null, 2));
+      writeFileSafely(outDir, 'ranked.json', JSON.stringify(ranked, null, 2));
+      // The path->hash index the NEXT run diffs against (criterion 6).
+      writeFileSafely(
+        outDir, 'inventory.json',
+        JSON.stringify(inv.files.map((f) => ({ path: f.path, sha256: f.sha256 }))),
+      );
+      for (const tier of tiers) {
+        const name = (tier.path === '' ? '__root__' : tier.path.replace(/\//g, '__')) + '.json';
+        writeFileSafely(tiersDir, name, JSON.stringify(tier, null, 2));
+      }
 
-    // Keyed by CONTENT hash, not path: a rename with no edit costs nothing, and a revert
-    // re-uses the digest it had before (spec §4).
-    const extractByPath = new Map(extracts.map((e) => [e.path, e] as const));
-    const rankByPath = new Map(ranked.map((r) => [r.path, r] as const));
-    for (const file of inv.files) {
-      const payload = {
-        file,
-        rank: rankByPath.get(file.path) ?? null,
-        extract: extractByPath.get(file.path) ?? null,
-      };
-      fs.writeFileSync(path.join(filesDir, `${file.sha256}.json`), JSON.stringify(payload, null, 2));
+      // Keyed by CONTENT hash, not path: a rename with no edit costs nothing, and a revert
+      // re-uses the digest it had before (spec §4).
+      const extractByPath = new Map(extracts.map((e) => [e.path, e] as const));
+      const rankByPath = new Map(ranked.map((r) => [r.path, r] as const));
+      for (const file of inv.files) {
+        const payload = {
+          file,
+          rank: rankByPath.get(file.path) ?? null,
+          extract: extractByPath.get(file.path) ?? null,
+        };
+        writeFileSafely(filesDir, `${file.sha256}.json`, JSON.stringify(payload, null, 2));
+      }
+    } catch (err) {
+      if (!(err instanceof CacheWriteRefused)) throw err;
+      cacheWrite = { written: false, reason: err.message };
+      // One plain line, no stack trace: the digest is complete in memory; only its cache was not saved.
+      process.stderr.write(`repo-tour: did not write its cache — ${err.message}\n`);
     }
   }
 
-  return { manifest, inventory: inv, extracts, graph, ranked, deepSlice, tiers, plan };
+  return { manifest, inventory: inv, extracts, graph, ranked, deepSlice, tiers, plan, cacheWrite };
 }

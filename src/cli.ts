@@ -12,6 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { digest, CACHE_DIR } from './digest.js';
+import { ensureSafeDir, writeFileSafely, CacheWriteRefused } from './safefile.js';
 import { renderView } from './view.js';
 import { buildTourSteps } from './tour.js';
 import { buildCodeTour, buildArchitectureSteps } from './codetour.js';
@@ -27,6 +28,33 @@ import { PrResolutionError } from './pr.js';
 import { NoCheckpointError } from './checkpoint.js';
 
 import { band } from './prtour.js';
+
+/**
+ * Write a CLI output file. When it lands inside the toured repository's `.repo-tour/` cache (the default
+ * for `pr`, the build plan and the `tour` view), go through the write guard (T-67) so a committed link
+ * at a cache file's name or folder cannot redirect the write out of the repository; an explicit `--view`
+ * path the user gave is written as given. Returns false (after one plain line) when a cache write was
+ * refused, so the caller skips what depended on the file.
+ */
+function writeOutput(out: string, repoRoot: string, content: string): boolean {
+  const cacheRoot = path.join(repoRoot, CACHE_DIR);
+  const rel = path.relative(cacheRoot, out);
+  const insideCache = rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+  if (insideCache) {
+    try {
+      ensureSafeDir(cacheRoot, path.dirname(out));
+      writeFileSafely(path.dirname(out), path.basename(out), content);
+      return true;
+    } catch (err) {
+      if (!(err instanceof CacheWriteRefused)) throw err;
+      process.stderr.write(`repo-tour: did not write ${path.basename(out)} — ${err.message}\n`);
+      return false;
+    }
+  }
+  fs.mkdirSync(path.dirname(out), { recursive: true });
+  fs.writeFileSync(out, content);
+  return true;
+}
 import { notReadOn } from './delta.js';
 import { runPrFlow } from './prflow.js';
 import { buildPlan, interpretPlan, type BuildPlan } from './build/index.js';
@@ -207,8 +235,7 @@ async function runPrMode(args: Args): Promise<void> {
   }
 
   const out = args.view ?? path.join(root, CACHE_DIR, `pr-${refs.headSha.slice(0, 8)}.html`);
-  fs.mkdirSync(path.dirname(out), { recursive: true });
-  fs.writeFileSync(out, result.html);
+  writeOutput(out, root, result.html);
 
   // The lines column is its longest count and one space wide, never narrower than it was: a seven-digit count ran into
   // the band (`5679831moved`), and a table of counts up to six digits prints as it always has (T-58).
@@ -403,8 +430,7 @@ async function main(): Promise<void> {
     }
 
     const outPath = path.join(root, CACHE_DIR, 'build', 'plan.json');
-    fs.mkdirSync(path.dirname(outPath), { recursive: true });
-    fs.writeFileSync(outPath, JSON.stringify(finalPlan, null, 2));
+    writeOutput(outPath, root, JSON.stringify(finalPlan, null, 2));
 
     if (args.json) {
       console.log(JSON.stringify(finalPlan, null, 2));
@@ -563,28 +589,28 @@ async function main(): Promise<void> {
       ? path.join(path.resolve(args.target), CACHE_DIR, 'view.html')
       : null;
   if (viewPath) {
-    fs.mkdirSync(path.dirname(viewPath), { recursive: true });
-    fs.writeFileSync(
-      viewPath,
-      codeTour
-        ? renderRepoView(result, {
-            steps: tourSteps,
-            itinerary: codeTour.itinerary,
-            architecture: arch ?? undefined,
-          })
-        : renderView(result, { maxRows: args.maxRows, tour: steps }),
-    );
-    const kb = Math.round(fs.statSync(viewPath).size / 1024);
-    console.log(`\n  view               ${viewPath}  (${kb} KB, self-contained)`);
+    const viewHtml = codeTour
+      ? renderRepoView(result, {
+          steps: tourSteps,
+          itinerary: codeTour.itinerary,
+          architecture: arch ?? undefined,
+        })
+      : renderView(result, { maxRows: args.maxRows, tour: steps });
+    const viewWritten = writeOutput(viewPath, path.resolve(args.target), viewHtml);
+    if (viewWritten) {
+      const kb = Math.round(Buffer.byteLength(viewHtml, 'utf8') / 1024);
+      console.log(`\n  view               ${viewPath}  (${kb} KB, self-contained)`);
+    }
 
     // Tours are entities, not loose files: record this one and refresh the library.
-    if (codeTour && args.write) {
+    if (codeTour && args.write && viewWritten) {
+     try {
       const abs = path.resolve(args.target);
       const dirty = isDirty(abs);
       const repoHead = m.repos.find((x) => x.root === '');
       const record = saveTour(
         abs,
-        fs.readFileSync(viewPath, 'utf8'),
+        viewHtml,
         {
           repoName: path.basename(abs) || abs,
           repoPath: abs,
@@ -608,6 +634,12 @@ async function main(): Promise<void> {
       console.log(`  saved as           ${record.id}${dirty ? '  (uncommitted tree — not pinned to a commit)' : ''}`);
       console.log(`                     ${inert(record.page)}`);
       console.log(`  all your tours     ${libPath}`);
+     } catch (err) {
+       // A hostile `.repo-tour/tours/…` (a linked folder, or a directory at a file name) must not crash
+       // the tour: the tour is already rendered and shown above; only the library record is lost.
+       if (!(err instanceof CacheWriteRefused)) throw err;
+       process.stderr.write(`repo-tour: did not save the tour to the library — ${err.message}\n`);
+     }
     }
     if (codeTour) {
       const archCount = tourSteps.filter((s) => s.architecture).length;
