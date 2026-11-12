@@ -119,6 +119,14 @@ function inert(s: string): string {
   return s.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
 }
 
+/**
+ * T-59: a whole message (an error's, a stack) that may carry a repository's words: each of its own lines made inert,
+ * so it still reads as the lines it was written in, and nothing in it runs.
+ */
+function inertLines(s: string): string {
+  return s.split('\n').map(inert).join('\n');
+}
+
 function padStart(s: string, n: number): string {
   return s.length >= n ? s : ' '.repeat(n - s.length) + s;
 }
@@ -133,7 +141,7 @@ function printRanked(ranked: RankedFile[], top: number): void {
   ranked.slice(0, top).forEach((r, i) => {
     console.log(
       `  ${pad(String(i + 1), 4)}${pad(r.score.toFixed(3), 8)}${padStart(String(r.churn), 5)}  ` +
-      `${padStart(String(r.inDegree), 3)}  ${padStart(String(r.loc), 6)}  ${pad(r.classification, 12)}${r.path}`,
+      `${padStart(String(r.inDegree), 3)}  ${padStart(String(r.loc), 6)}  ${pad(r.classification, 12)}${inert(r.path)}`,
     );
   });
 }
@@ -178,12 +186,12 @@ async function runPrMode(args: Args): Promise<void> {
     });
   } catch (err) {
     if (err instanceof PrResolutionError) {
-      console.error(`\nrepo-tour pr: ${err.message}\n`);
+      console.error(`\nrepo-tour pr: ${inertLines(err.message)}\n`);
       process.exit(2);
     }
     if (err instanceof NoCheckpointError) {
       if (args.noCold) process.exit(3);
-      console.error(`\nrepo-tour pr: ${err.message}\n`);
+      console.error(`\nrepo-tour pr: ${inertLines(err.message)}\n`);
       process.exit(3);
     }
     throw err;
@@ -192,8 +200,8 @@ async function runPrMode(args: Args): Promise<void> {
   const { refs, checkpoint, staleness: stale, deltas, ripple: rip } = result;
 
   console.log(`\nrepo-tour — pull request`);
-  console.log(`  head               ${refs.headSha.slice(0, 12)}  ${refs.headLabel}`);
-  console.log(`  base               ${refs.baseSha.slice(0, 12)}  ${refs.baseLabel}`);
+  console.log(`  head               ${refs.headSha.slice(0, 12)}  ${inert(refs.headLabel)}`);
+  console.log(`  base               ${refs.baseSha.slice(0, 12)}  ${inert(refs.baseLabel)}`);
   if (refs.forkSha) console.log(`  forked at          ${refs.forkSha.slice(0, 12)}  (base has moved ${refs.baseAhead} since)`);
   console.log(`  checkpoint         ${checkpoint.sha?.slice(0, 12) ?? 'unrecorded'}  taken ${checkpoint.generatedAt.slice(0, 16).replace('T', ' ')}`);
 
@@ -330,8 +338,8 @@ async function main(): Promise<void> {
       if (!tours.length) { console.log('\nNo tours yet. Run: repo-tour tour <path>\n'); return; }
       console.log(`\n${tours.length} tour${tours.length === 1 ? '' : 's'}:\n`);
       for (const t of tours) {
-        console.log(`  ${pad(t.id, 12)} ${pad(t.repoName, 18)} ${padStart(String(t.stops), 3)} stops  ${t.generatedAt.slice(0, 16).replace('T', ' ')}`);
-        console.log(`  ${' '.repeat(12)} ${t.page}`);
+        console.log(`  ${pad(t.id, 12)} ${pad(inert(t.repoName), 18)} ${padStart(String(t.stops), 3)} stops  ${t.generatedAt.slice(0, 16).replace('T', ' ')}`);
+        console.log(`  ${' '.repeat(12)} ${inert(t.page)}`);
       }
       console.log('');
       return;
@@ -379,7 +387,7 @@ async function main(): Promise<void> {
     if (head && existing && existing.head === head && !isDirty(abs)) {
       console.log(`\n  This commit already has a tour, and nothing has changed since.`);
       console.log(`  ${existing.stops} stops · made ${existing.generatedAt.slice(0, 16).replace('T', ' ')}`);
-      console.log(`\n  ${existing.page}`);
+      console.log(`\n  ${inert(existing.page)}`);
       console.log(`\n  Use --fresh to rebuild it anyway.\n`);
       return;
     }
@@ -405,7 +413,7 @@ async function main(): Promise<void> {
         model: args.model,
         ...(args.provider ? { provider: args.provider } : {}),
         cachedOnly: args.cachedOnly,
-        ...(quiet ? {} : { onProgress: (msg: string) => console.error(`  ${msg}`) }),
+        ...(quiet ? {} : { onProgress: (msg: string) => console.error(`  ${inert(msg)}`) }),
       });
       finalPlan = interpreted.plan;
       planCost = interpreted.cost;
@@ -428,7 +436,7 @@ async function main(): Promise<void> {
         `in ${planCost.calls} call(s) on ${planCost.model}`,
       );
       console.log(`  cost               ${planCost.metered ? `$${planCost.usd.toFixed(4)}` : 'this provider does not report usage'}`);
-      for (const f of planCost.failures) console.log(`  ! ${f}`);
+      for (const f of planCost.failures) console.log(`  ! ${inert(f)}`);
     }
     console.log(`\n  plan               ${outPath}\n`);
     return;
@@ -448,7 +456,7 @@ async function main(): Promise<void> {
       model: args.model,
       ...(args.provider ? { provider: args.provider } : {}),
       cachedOnly: !args.interpret,
-      onProgress: (msg: string) => console.log(`  ${msg}`),
+      onProgress: (msg: string) => console.log(`  ${inert(msg)}`),
     };
 
     // The system first, then the code. Both go through stage 4; the architecture call sees
@@ -510,7 +518,7 @@ async function main(): Promise<void> {
   for (const repo of m.repos) {
     const label = repo.root === '' ? '. (scan root)' : repo.root;
     const head = repo.head ? repo.head.slice(0, 8) : 'no commits';
-    console.log(`  ${pad(label, 46)} ${padStart(String(repo.commitCount), 6)} commits  ${head}${repo.pointer ? '  (worktree/submodule)' : ''}`);
+    console.log(`  ${pad(inert(label), 46)} ${padStart(String(repo.commitCount), 6)} commits  ${head}${repo.pointer ? '  (worktree/submodule)' : ''}`);
   }
 
   console.log(`\nINVENTORY`);
@@ -532,7 +540,7 @@ async function main(): Promise<void> {
   const unparsed = m.unparsed ?? [];
   if (unparsed.length > 0) {
     console.log(`  not read        ${padStart(String(unparsed.length), 6)} ${unparsed.length === 1 ? 'file' : 'files'}, left out of the tour:`);
-    for (const u of unparsed) console.log(`    ${u.path}: ${u.reason}`);
+    for (const u of unparsed) console.log(`    ${inert(u.path)}: ${inert(u.reason)}`);
   }
   console.log(`  note: ${cov.note}`);
 
@@ -547,7 +555,7 @@ async function main(): Promise<void> {
     console.log(`  reused (cached)    ${padStart(String(ic.cachedStops), 8)} stops — paid for on an earlier run`);
     console.log(`  tokens in / out    ${padStart(ic.inputTokens + ' / ' + ic.outputTokens, 8)}`);
     console.log(`  cost               ${padStart('$' + ic.usd.toFixed(4), 8)}`);
-    for (const f of ic.failures) console.log(`  ! ${f}`);
+    for (const f of ic.failures) console.log(`  ! ${inert(f)}`);
   } else {
     console.log(`  tokens fast        ${padStart(String(m.cost.tokens.fast), 8)}`);
     console.log(`  tokens strong      ${padStart(String(m.cost.tokens.strong), 8)}`);
@@ -615,14 +623,14 @@ async function main(): Promise<void> {
       fs.writeFileSync(libPath, renderLibrary(all, heads, Date.now()));
 
       console.log(`  saved as           ${record.id}${dirty ? '  (uncommitted tree — not pinned to a commit)' : ''}`);
-      console.log(`                     ${record.page}`);
+      console.log(`                     ${inert(record.page)}`);
       console.log(`  all your tours     ${libPath}`);
     }
     if (codeTour) {
       const archCount = tourSteps.filter((s) => s.architecture).length;
       console.log(`  tour               ${tourSteps.length} stops — ${archCount} on the system, ${codeTour.steps.length} through ${codeTour.itinerary.length} files:`);
-      if (arch) for (const sub of arch.subsystems) console.log(`                       [part] ${sub.path}`);
-      for (const f of codeTour.itinerary) console.log(`                       ${f}`);
+      if (arch) for (const sub of arch.subsystems) console.log(`                       [part] ${inert(sub.path)}`);
+      for (const f of codeTour.itinerary) console.log(`                       ${inert(f)}`);
     }
     if (steps) console.log(`  overlay            ${steps.length} steps over the metrics view`);
   }
@@ -630,6 +638,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err: unknown) => {
-  console.error(err instanceof Error ? err.stack ?? err.message : String(err));
+  console.error(inertLines(err instanceof Error ? err.stack ?? err.message : String(err)));
   process.exit(1);
 });

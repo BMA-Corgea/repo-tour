@@ -66,7 +66,8 @@ Parser.prototype.parse = function (...args) {
 const ESC_NAME = 'src/esc\x1b[31mred\x1b[0m.ts';
 /** a newline, then what would read as a ranked row of its own */
 const FORGED_NAME = 'src/x\n  1   0.999       9    9      99  source      src/FORGED.ts';
-const LINK_NAME = 'src/fails\x1b]8;;http://evil.example\x07link\x1b]8;;\x07.ts';
+/** an OSC 8 link, without the slashes of a URL (a file name cannot hold them) */
+const LINK_NAME = 'src/fails\x1b]8;;https:evil.example\x07link\x1b]8;;\x07.ts';
 const NESTED = 'vendor/sub\x1b[2Jrepo';
 
 let repo: string;
