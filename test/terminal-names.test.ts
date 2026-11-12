@@ -166,6 +166,19 @@ describe('T-59 AC3: `repo-tour pr --pr N` prints a branch\'s name as text', () =
     expect(run.out).toContain('feature\\u202etxt.exe');
   }, 120_000);
 
+  it('the checkpoint\'s commit and time, read from a digest a repository can ship, print as text (review B1)', async () => {
+    const { root, env } = await prRepo('feature', 'main');
+    // the digest on disk is the repository's own file: plant hostile values where pr reads its commit and its time
+    const manifest = path.join(root, '.repo-tour', 'digest.json');
+    const m = JSON.parse(fs.readFileSync(manifest, 'utf8')) as { generatedAt: string; repos: Array<{ root: string; head: string | null }> };
+    m.repos = m.repos.map((r) => (r.root === '' ? { ...r, head: '\x1b[2J\x1b[3J\x1b[H' } : r));
+    m.generatedAt = '\x1b]0;PWNED\x07\n FORGED';
+    fs.writeFileSync(manifest, JSON.stringify(m));
+    const run = await cli(['pr', root, '--pr', '1', '--no-interpret', '--view', path.join(fresh('view'), 'pr.html')], env);
+    expect(run.out.includes('\x1b'), 'an escape sequence from the digest on disk reached the terminal').toBe(false);
+    expect(run.out, 'a newline from the digest on disk forged a line').not.toMatch(/^ FORGED/m);
+  }, 120_000);
+
   it('an error that names the branch shows it as an escape too', async () => {
     const { root, env } = await prRepo('feature', 'gone\u202Ebranch');
     const run = await cli(['pr', root, '--pr', '1', '--no-interpret'], env);

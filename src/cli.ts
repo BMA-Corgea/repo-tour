@@ -203,7 +203,8 @@ async function runPrMode(args: Args): Promise<void> {
   console.log(`  head               ${refs.headSha.slice(0, 12)}  ${inert(refs.headLabel)}`);
   console.log(`  base               ${refs.baseSha.slice(0, 12)}  ${inert(refs.baseLabel)}`);
   if (refs.forkSha) console.log(`  forked at          ${refs.forkSha.slice(0, 12)}  (base has moved ${refs.baseAhead} since)`);
-  console.log(`  checkpoint         ${checkpoint.sha?.slice(0, 12) ?? 'unrecorded'}  taken ${checkpoint.generatedAt.slice(0, 16).replace('T', ' ')}`);
+  // The checkpoint is a file in the repository's working tree, which a repository can ship: its words too (T-59).
+  console.log(`  checkpoint         ${inert(checkpoint.sha?.slice(0, 12) ?? 'unrecorded')}  taken ${inert(checkpoint.generatedAt.slice(0, 16).replace('T', ' '))}`);
 
   if (result.empty) {
     console.log('\n  nothing changed between those two commits.\n');
