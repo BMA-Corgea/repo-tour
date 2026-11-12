@@ -14,12 +14,23 @@ import { extract } from './extract.js';
 import { rank, type RankOptions } from './rank.js';
 import { rollup, type TierDigest } from './rollup.js';
 import { planIncremental, type IncrementalPlan, type PriorFile } from './incremental.js';
+import { readGuardedText } from './safefile.js';
 import type {
   FileExtract, FileRecord, ImportGraph, Inventory, RankedFile, RepoRef, UnparsedFile,
 } from './types.js';
 
 export const SCHEMA_VERSION = 1;
 export const CACHE_DIR = '.repo-tour';
+
+/**
+ * The `.repo-tour/` cache lives inside the toured repository, so a hostile repository can ship it: a
+ * committed link in place of a cache file would make a plain read follow it out of the walk's rules,
+ * the same hole as the `.gitattributes` one (T-63 AC5). So the cache is read through `readGuardedText`
+ * too. The bound is generous — a real `inventory.json` for a large repository is a few megabytes — and
+ * exists only to refuse an absurd regular file; the regular-file, no-follow, no-block checks are what
+ * stop a link to `/dev/zero`, a FIFO or a device.
+ */
+const CACHE_MAX_BYTES = 256 * 1024 * 1024;
 
 export interface DigestManifest {
   schemaVersion: number;
@@ -112,9 +123,11 @@ export async function digest(rootInput: string, opts: DigestOptions = {}): Promi
   const outDirResolved = opts.outDir ?? path.join(root, CACHE_DIR);
   let plan: IncrementalPlan | null = null;
   try {
-    const priorRaw = fs.readFileSync(path.join(outDirResolved, 'inventory.json'), 'utf8');
-    const prior = JSON.parse(priorRaw) as PriorFile[];
-    plan = planIncremental(prior, inv.files, tiers);
+    const priorRaw = readGuardedText(path.join(outDirResolved, 'inventory.json'), CACHE_MAX_BYTES);
+    if (priorRaw !== null) {
+      const prior = JSON.parse(priorRaw) as PriorFile[];
+      plan = planIncremental(prior, inv.files, tiers);
+    }
   } catch {
     plan = null; // cold run — nothing to compare against, which is not an error
   }
