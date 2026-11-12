@@ -41,6 +41,7 @@ import {
   MAX_FETCH_HOPS, FETCH_BUDGET, SOURCE_BUDGET, type AskContext, type AskMessage, type AskFetched,
 } from './ask.js';
 import { serveFetch, resolveInRepo } from './fetchrepo.js';
+import { readGuardedText } from './safefile.js';
 import { findCitations } from './cite.js';
 import { listPrs, PrResolutionError, type PrListResult } from './pr.js';
 import { NoCheckpointError } from './checkpoint.js';
@@ -79,6 +80,23 @@ type RenderedMeta = Omit<Rendered, 'html'>;
  */
 function renderedDir(repoPath: string): string {
   return path.join(repoPath, CACHE_DIR, 'rendered');
+}
+
+/**
+ * The `.repo-tour/` cache lives inside the repository being toured, so a hostile one can ship its
+ * files as committed links — the same hole the walk's link rules close for ordinary content, and
+ * the `.gitattributes` fix closes for that file (T-63 AC5). So every cache file this server reads by
+ * content goes through `readGuardedText`, which opens nothing but a regular file and never follows a
+ * link out of those rules. The bound is generous (a rendered page is legitimately megabytes) and only
+ * refuses an absurd regular file; the regular-file, no-follow, no-block checks stop a link to
+ * `/dev/zero`, a FIFO or a device. A refusal throws, so each caller's existing `try/catch` treats it
+ * as an absent cache file, exactly as it treats a missing or corrupt one.
+ */
+const CACHE_MAX_BYTES = 256 * 1024 * 1024;
+function readCacheText(file: string): string {
+  const text = readGuardedText(file, CACHE_MAX_BYTES);
+  if (text === null) throw new Error(`refused to read a non-regular or oversized cache file: ${file}`);
+  return text;
 }
 
 /**
@@ -143,7 +161,7 @@ const CLOCK_SLACK_MS = 10 * 60 * 1000;
  */
 function wasBuilding(repoPath: string): { force: boolean } | null {
   try {
-    const m = JSON.parse(fs.readFileSync(markerPath(repoPath), 'utf8')) as { startedAt: string; force?: boolean };
+    const m = JSON.parse(readCacheText(markerPath(repoPath))) as { startedAt: string; force?: boolean };
     const age = Date.now() - Date.parse(m.startedAt);
     return age > -CLOCK_SLACK_MS && age < RESUME_WINDOW_MS ? { force: m.force === true } : null;
   } catch { return null; }
@@ -161,7 +179,7 @@ function newestRendered(repoPath: string): Rendered | null {
   const meta = newestRenderedMeta(repoPath);
   if (!meta) return null;
   try {
-    return { ...meta, html: fs.readFileSync(path.join(renderedDir(repoPath), `${meta.fingerprint}.html`), 'utf8') };
+    return { ...meta, html: readCacheText(path.join(renderedDir(repoPath), `${meta.fingerprint}.html`)) };
   } catch { return null; }
 }
 
@@ -178,7 +196,7 @@ function newestRenderedMeta(repoPath: string): RenderedMeta | null {
   try {
     for (const f of fs.readdirSync(dir)) {
       if (!f.endsWith('.json')) continue;
-      const meta = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')) as RenderedMeta;
+      const meta = JSON.parse(readCacheText(path.join(dir, f))) as RenderedMeta;
       if (!best || meta.builtAt > best.builtAt) best = meta;
     }
   } catch { return null; }
@@ -188,9 +206,9 @@ function newestRenderedMeta(repoPath: string): RenderedMeta | null {
 function readRendered(repoPath: string, fp: string): Rendered | null {
   const dir = renderedDir(repoPath);
   try {
-    const meta = JSON.parse(fs.readFileSync(path.join(dir, `${fp}.json`), 'utf8')) as RenderedMeta;
+    const meta = JSON.parse(readCacheText(path.join(dir, `${fp}.json`))) as RenderedMeta;
     if (meta.presentation !== presentationVersion()) return null;
-    const html = fs.readFileSync(path.join(dir, `${fp}.html`), 'utf8');
+    const html = readCacheText(path.join(dir, `${fp}.html`));
     return { ...meta, html };
   } catch {
     return null;
@@ -210,7 +228,7 @@ function writeRendered(repoPath: string, r: Rendered, keep = 4): void {
     const dated = metas
       .map((f) => {
         try {
-          const m = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')) as RenderedMeta;
+          const m = JSON.parse(readCacheText(path.join(dir, f))) as RenderedMeta;
           return { f, at: m.builtAt };
         } catch { return { f, at: '' }; }
       })

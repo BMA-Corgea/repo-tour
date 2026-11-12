@@ -11,6 +11,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Classification, FileRecord, Inventory, RepoRef } from './types.js';
+import { readGuardedText } from './safefile.js';
 
 /**
  * Directories never worth descending into. Their *presence* is still recorded as a signal.
@@ -125,11 +126,22 @@ function globToRegExp(glob: string): RegExp {
 
 interface AttrRule { re: RegExp; generated: boolean; vendored: boolean }
 
-/** The linguist markers the spec names explicitly — the repo telling us about itself. */
+/** A real `.gitattributes` is a few hundred bytes; past this it is not read at all. */
+const GITATTRIBUTES_MAX_BYTES = 1024 * 1024;
+
+/**
+ * The linguist markers the spec names explicitly — the repo telling us about itself.
+ *
+ * Read through `readGuardedText` (see `safefile.ts`), never a plain `readFileSync`: this file is read
+ * by name, outside the walk's link rules, and the repository chooses its contents. A committed link to
+ * `/dev/zero` read by a plain `readFileSync` ran until the process died (Build Tutorials T-72); a link
+ * to a FIFO would block for ever. The guard opens nothing but a regular file within the bound, and a
+ * refusal gives no rules, exactly as a missing file does today.
+ */
 function readGitAttributes(repoAbs: string): AttrRule[] {
   const file = path.join(repoAbs, '.gitattributes');
-  let text: string;
-  try { text = fs.readFileSync(file, 'utf8'); } catch { return []; }
+  const text = readGuardedText(file, GITATTRIBUTES_MAX_BYTES);
+  if (text === null) return [];
   const rules: AttrRule[] = [];
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trim();
