@@ -23,6 +23,7 @@ import { extract, isParseTarget } from './extract.js';
 import { inventory } from './inventory.js';
 import type { FileExtract, FileRecord, ImportGraph, RankedFile, UnparsedFile } from './types.js';
 import type { TierDigest } from './rollup.js';
+import { readGuardedText } from './safefile.js';
 
 export interface Checkpoint {
   manifest: DigestManifest;
@@ -48,7 +49,13 @@ export interface Checkpoint {
 export class NoCheckpointError extends Error {}
 
 function readJson<T>(file: string): T {
-  return JSON.parse(fs.readFileSync(file, 'utf8')) as T;
+  // T-63: the `.repo-tour/` cache sits inside the toured repository, so a hostile repo can ship a
+  // cache file as a committed link; read it as a regular file within a generous bound, never
+  // following a link out of the walk's rules (`readGuardedText`). A refusal throws, exactly as a
+  // corrupt cache file here already does, so `loadCheckpoint` fails instead of reading without end.
+  const text = readGuardedText(file, 256 * 1024 * 1024);
+  if (text === null) throw new Error(`refused to read a non-regular or oversized cache file: ${file}`);
+  return JSON.parse(text) as T;
 }
 
 function git(root: string, ...args: string[]): string {

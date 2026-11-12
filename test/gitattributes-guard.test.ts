@@ -22,6 +22,7 @@ import { readGuardedFile } from '../src/safefile.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const DIST_INVENTORY = path.join(here, '..', 'dist', 'inventory.js');
+const DIST_CLI = path.join(here, '..', 'dist', 'cli.js');
 
 const scratches: string[] = [];
 function repoFixture(): string {
@@ -169,6 +170,42 @@ describe('the server reads its .repo-tour/ cache through the same guard (T-63 AC
     const listed = server.listRepos();
     expect(listed).toHaveLength(1);
     expect(listed[0]!.built).toBeNull(); // link refused → the repo shows no build, and nothing hung
+  });
+});
+
+describe('the PR checkpoint read is guarded (T-63 AC5 — checkpoint.ts)', () => {
+  // `repo-tour pr` reads `.repo-tour/digest.json` first, through `loadCheckpoint` -> `readJson`. On main a
+  // committed link there is followed by a plain `readFileSync` and the read never ends; the guard refuses
+  // it and `pr` fails at once with a clear message. PATCHED CLI, CHILD process, under `timeout`.
+  it('a bare `repo-tour pr` on a tree whose .repo-tour/digest.json is a LINK to /dev/zero refuses, does not hang', () => {
+    const dir = repoFixture();
+    const git = (...a: string[]) => execFileSync('git', ['-C', dir, ...a], { stdio: ['ignore', 'pipe', 'ignore'] });
+    execFileSync('git', ['init', '-q', dir]);
+    git('config', 'user.email', 'a@b.c'); git('config', 'user.name', 't');
+    fs.writeFileSync(path.join(dir, 'a.ts'), 'export const a = 1;\n');
+    git('add', '-A'); git('commit', '-qm', 'base');
+    const base = git('rev-parse', 'HEAD').toString().trim();
+    fs.writeFileSync(path.join(dir, 'b.ts'), 'export const b = 2;\n');
+    git('add', '-A'); git('commit', '-qm', 'head');
+    const head = git('rev-parse', 'HEAD').toString().trim();
+    fs.mkdirSync(path.join(dir, '.repo-tour'));
+    fs.symlinkSync('/dev/zero', path.join(dir, '.repo-tour', 'digest.json'));
+
+    let code = -1;
+    let stderr = '';
+    try {
+      execFileSync('timeout', ['-k', '5', '30', process.execPath, DIST_CLI, 'pr', dir, '--base', base, '--head', head],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      code = 0;
+    } catch (e) {
+      const err = e as { status?: number | null; stderr?: string };
+      code = err.status ?? -1;
+      stderr = err.stderr ?? '';
+    }
+    expect(code).not.toBe(124); // 124 = `timeout` fired: it hung. It must refuse, not hang.
+    expect(code).not.toBe(137); // 137 = OOM.
+    expect(code).toBe(1); // a clean refusal
+    expect(stderr).toMatch(/refused to read a non-regular or oversized cache file/);
   });
 });
 
