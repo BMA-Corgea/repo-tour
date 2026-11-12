@@ -208,6 +208,12 @@ export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFl
     // The literal change, parsed once. The page renders it and the model reads it — both
     // from the same text, so what the reader sees is what the narrative was written about.
     const diffs = new Map<string, { raw: string; parsed: FileDiff }>();
+    // T-58: a file either side calls binary never hands its bytes to the model or to the page. Git says "Binary files
+    // … differ" of most; one it was told to diff as text (a `diff` attribute), or one whose first NUL falls between git's
+    // 8,000 bytes and the inventory's 8 KB, came back as hunks of its bytes.
+    const binary = new Set(
+      [...beforeSide.files, ...beforeSide.unfetched, ...afterSide.files, ...afterSide.unfetched].filter((f) => f.binary).map((f) => f.path),
+    );
     for (const p of paths) {
       const read = readDiff(root, diffFrom, refs.headSha, p, 6, renamedFrom.get(p));
       if (read.tooBig) {
@@ -221,7 +227,15 @@ export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFl
         });
         continue;
       }
-      diffs.set(p, { raw: read.text, parsed: parseUnified(p, read.text) });
+      const parsed = parseUnified(p, read.text);
+      if (binary.has(p) && parsed.hunks.length > 0) {
+        diffs.set(p, {
+          raw: '(This is a binary file: its content is not shown.)',
+          parsed: { path: p, hunks: [], added: parsed.added, removed: parsed.removed, empty: true },
+        });
+        continue;
+      }
+      diffs.set(p, { raw: read.text, parsed });
     }
 
     const stopsFor = (side: typeof beforeSide) =>
@@ -232,7 +246,8 @@ export async function runPrFlow(root: string, opts: PrFlowOptions): Promise<PrFl
         return {
           file: f.path,
           startLine: first ? Math.max(1, first.start - 3) : 1,
-          endLine: Math.min(f.loc || 1, last ? last.end + 3 : 60),
+          // past the inventory's read a file's line count is -1: its hunks bound the stop (T-58), not an end of -1
+          endLine: Math.min(f.loc < 0 ? Infinity : f.loc || 1, last ? last.end + 3 : 60),
           title: path.basename(f.path),
           text: '',
         };
