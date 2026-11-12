@@ -708,6 +708,21 @@ describe('T-58 AC26: a PR toured from a folder inside a repository shows every f
   it('the tour\'s hunks, from the package folder', () => {
     expect(hunks(path.join(repo.root, 'pkg'), repo.base, repo.head, 'pkg/src/catalog.ts').length, 'no hunks from the package folder').toBe(1);
   });
+
+  it('a reader\'s git setting diff.relative=true does not make the flow count paths from the folder', async () => {
+    git(repo.root, 'config', 'diff.relative', 'true');
+    try {
+      const pkg = path.join(repo.root, 'pkg');
+      expect(diffSet(pkg, repo.base, repo.head).map((c) => c.path).sort(), 'the diff set names files from the folder')
+        .toEqual(['pkg/src/catalog.ts', 'pkg/src/util.ts']);
+      expect(lineCounts(pkg, repo.base, repo.head).get('pkg/src/catalog.ts')).toBe(2);
+      const { r, error } = await flow(repo, { at: pkg });
+      expect(error).toBeUndefined();
+      expect(rowsOf(r!.html).get('pkg/src/catalog.ts'), 'the page lost the file under diff.relative').toEqual({ added: 1, removed: 1 });
+    } finally {
+      git(repo.root, 'config', '--unset', 'diff.relative');
+    }
+  }, 120_000);
 });
 
 // =========================================================================== AC27: the CLI table
