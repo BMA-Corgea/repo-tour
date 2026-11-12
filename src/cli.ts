@@ -208,12 +208,16 @@ async function runPrMode(args: Args): Promise<void> {
   fs.mkdirSync(path.dirname(out), { recursive: true });
   fs.writeFileSync(out, result.html);
 
-  console.log(`\n  ${pad('meaning', 9)}${pad('lines', 7)}${pad('band', 9)}${pad('basis', 13)}path`);
-  console.log(`  ${'-'.repeat(78)}`);
-  for (const d of deltas.slice(0, 20)) {
+  // The lines column is its longest count and one space wide, never narrower than it was: a seven-digit count ran into
+  // the band (`5679831moved`), and a table of counts up to six digits prints as it always has (T-58).
+  const shown = deltas.slice(0, 20);
+  const linesWidth = Math.max(7, ...shown.map((d) => String(d.linesChanged).length + 1));
+  console.log(`\n  ${pad('meaning', 9)}${pad('lines', linesWidth)}${pad('band', 9)}${pad('basis', 13)}path`);
+  console.log(`  ${'-'.repeat(78 + linesWidth - 7)}`);
+  for (const d of shown) {
     // A file that was not scored has no score or band to print (T-37).
     const scored = d.basis !== 'unread';
-    console.log(`  ${pad(scored ? d.meaningDelta.toFixed(2) : '—', 9)}${pad(String(d.linesChanged), 7)}${pad(scored ? band(d.meaningDelta) : 'not read', 9)}${pad(d.basis, 13)}${d.path}`);
+    console.log(`  ${pad(scored ? d.meaningDelta.toFixed(2) : '—', 9)}${pad(String(d.linesChanged), linesWidth)}${pad(scored ? band(d.meaningDelta) : 'not read', 9)}${pad(d.basis, 13)}${d.path}`);
   }
   console.log(`\n  ripple             ${rip.reinterpret.length} re-interpreted (one hop), ${rip.structuralOnly.length} reachable beyond and NOT re-interpreted`);
   console.log(`  tour               ${result.stops} stops`);
